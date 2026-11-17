@@ -30,6 +30,7 @@ import {
   LogOut,
   LayoutGrid,
   UserPlus,
+  ChevronDown,
 } from 'lucide-react';
 import { Dashboard2MatrixPanel, type MatrixActiveIdSummary } from './Dashboard2MatrixPanel';
 import { WalletIncomeNotifier } from './WalletIncomeNotifier';
@@ -45,6 +46,25 @@ async function safeReadJson(res: Response | null): Promise<any> {
   } catch {
     return null;
   }
+}
+
+function deriveSourceStatusInfo(fromNodeType?: string, fromNodeId?: number, fromMainId?: number, rank?: number) {
+  const raw = String(fromNodeType || '').trim();
+  const statusTh = raw.startsWith('โคลน')
+    ? 'Clone ID (โคลนนิ่ง)'
+    : raw.startsWith('Extra')
+    ? 'Extra ID'
+    : raw.startsWith('Auto ID')
+    ? 'Auto ID'
+    : 'Main ID';
+  const idLabel =
+    raw ||
+    (fromMainId && fromNodeId && fromMainId !== fromNodeId
+      ? `Main #${fromMainId} (R${rank || 1}-#${fromNodeId})`
+      : fromNodeId
+      ? `Main #${fromMainId || fromNodeId} (R${rank || 1}-#${fromNodeId})`
+      : '');
+  return { statusTh, idLabel };
 }
 
 interface Dashboard2ViewProps {
@@ -86,7 +106,8 @@ type DetailModalKey =
   | 'upgrade'
   | 'wallet'
   | 'vault'
-  | 'allsell';
+  | 'allsell'
+  | 'income';
 
 const ALLSELL_DIRECT_REQUIREMENTS: Record<
   number,
@@ -221,6 +242,9 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   const [historyFilter, setHistoryFilter] = useState<
     'all' | 'direct' | 'level' | 'vault' | 'upgrade' | 'auto_id' | 'extra_id' | 'registration'
   >('all');
+  const [historyRankFilter, setHistoryRankFilter] = useState<'all' | number>('all');
+  const [isHistoryRankDropdownOpen, setIsHistoryRankDropdownOpen] = useState<boolean>(false);
+  const historyRankDropdownRef = useRef<HTMLDivElement | null>(null);
   const [historySearch, setHistorySearch] = useState<string>('');
   const [historyStartDateTime, setHistoryStartDateTime] = useState<string>('');
   const [historyEndDateTime, setHistoryEndDateTime] = useState<string>('');
@@ -230,6 +254,8 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   }>({ mainId: 0, rows: [] });
   const [vaultPoolTab, setVaultPoolTab] = useState<'all' | 'upgrade' | 'auto_id' | 'extra_id'>('all');
   const [vaultDirectionFilter, setVaultDirectionFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
+  const [incomeModalFilter, setIncomeModalFilter] = useState<'all' | 'direct' | 'level'>('all');
+  const [incomeModalRankFilter, setIncomeModalRankFilter] = useState<'all' | number>('all');
   const [matrixTargetRank, setMatrixTargetRank] = useState<number | undefined>(undefined);
   const [matrixTargetRootNodeId, setMatrixTargetRootNodeId] = useState<number | null>(null);
   const [matrixFocusVersion, setMatrixFocusVersion] = useState<number>(0);
@@ -264,6 +290,24 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   useEffect(() => {
     setSelectedSubIdTarget(null);
   }, [account]);
+
+  useEffect(() => {
+    if (!isHistoryRankDropdownOpen) return;
+    const handleOutside = (event: MouseEvent | TouchEvent) => {
+      if (
+        historyRankDropdownRef.current &&
+        !historyRankDropdownRef.current.contains(event.target as Node)
+      ) {
+        setIsHistoryRankDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('touchstart', handleOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('touchstart', handleOutside);
+    };
+  }, [isHistoryRankDropdownOpen]);
 
   const openVaultModal = useCallback(
     (tab: 'all' | 'upgrade' | 'auto_id' | 'extra_id' = 'all') => {
@@ -476,23 +520,38 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
             directHistory.reduce((s: number, h: any) => s + Number(h.amountUsdt || 0), 0)
         );
 
-        const extraVaultLedger = vaultHistory.map((h: any, idx: number) => ({
-          id: `extra-v-${subRank}-${subNodeId}-${idx}`,
-          timestamp: String(h.timestamp || ''),
-          direction: 'IN',
-          actionType: 'RECEIVE_VAULT',
-          actionLabelTh: `รับ 35% Vault (Rank ${h.rank || subRank})`,
-          rank: Number(h.rank || subRank),
-          amountUsdt: Number(h.amountUsdt || 0),
-          poolType: 'EXTRA_ID_POOL',
-          poolLabelTh: `เข้า Extra Pool Main #${subMainId}`,
-          descriptionTh: String(
-            h.note || `35% Vault ใต้ Extra R${subRank}-#${subNodeId} เข้า Main #${subMainId}`
-          ),
-          note: String(h.note || ''),
-          poolBalanceAfterUsdt: 0,
-          balanceAfterUsdt: 0,
-        }));
+        const extraVaultLedger = vaultHistory.map((h: any, idx: number) => {
+          const srcInfo = deriveSourceStatusInfo(
+            h.fromNodeType,
+            Number(h.fromNodeId || 0),
+            Number(h.fromMainId || 0),
+            Number(h.rank || subRank)
+          );
+          return {
+            id: `extra-v-${subRank}-${subNodeId}-${idx}`,
+            timestamp: String(h.timestamp || ''),
+            direction: 'IN',
+            actionType: 'RECEIVE_VAULT',
+            actionLabelTh: `รับ 35% Vault (Rank ${h.rank || subRank})`,
+            rank: Number(h.rank || subRank),
+            amountUsdt: Number(h.amountUsdt || 0),
+            poolType: 'EXTRA_ID_POOL',
+            poolLabelTh: `เข้า Extra Pool Main #${subMainId}`,
+            fromNodeId: Number(h.fromNodeId || 0),
+            fromMainId: Number(h.fromMainId || 0),
+            fromNodeType: srcInfo.idLabel,
+            sourceStatusTh: srcInfo.statusTh,
+            toNodeId: Number(h.toNodeId || subNodeId),
+            toMainId: Number(h.toMainId || subMainId),
+            targetStatusTh: `เข้า Extra Pool Main #${subMainId}`,
+            descriptionTh: String(
+              h.note || `35% Vault ใต้ Extra R${subRank}-#${subNodeId} เข้า Main #${subMainId}`
+            ),
+            note: String(h.note || ''),
+            poolBalanceAfterUsdt: 0,
+            balanceAfterUsdt: 0,
+          };
+        });
 
         return {
           id: subNodeId,
@@ -577,23 +636,38 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           directHistory.reduce((s: number, h: any) => s + Number(h.amountUsdt || 0), 0)
       );
 
-      const cloneVaultLedger = vaultHistory.map((h: any, idx: number) => ({
-        id: `clone-v-${subRank}-${subNodeId}-${idx}`,
-        timestamp: String(h.timestamp || ''),
-        direction: 'IN',
-        actionType: 'RECEIVE_VAULT',
-        actionLabelTh: `รับ 35% Vault (Rank ${h.rank || subRank})`,
-        rank: Number(h.rank || subRank),
-        amountUsdt: Number(h.amountUsdt || 0),
-        poolType: 'UPGRADE_POOL',
-        poolLabelTh: `เข้าถัง Main #${subMainId}`,
-        descriptionTh: String(
-          h.note || `35% Vault ใต้โคลน R${subRank}-#${subNodeId} เข้า Main #${subMainId}`
-        ),
-        note: String(h.note || ''),
-        poolBalanceAfterUsdt: 0,
-        balanceAfterUsdt: 0,
-      }));
+      const cloneVaultLedger = vaultHistory.map((h: any, idx: number) => {
+        const srcInfo = deriveSourceStatusInfo(
+          h.fromNodeType,
+          Number(h.fromNodeId || 0),
+          Number(h.fromMainId || 0),
+          Number(h.rank || subRank)
+        );
+        return {
+          id: `clone-v-${subRank}-${subNodeId}-${idx}`,
+          timestamp: String(h.timestamp || ''),
+          direction: 'IN',
+          actionType: 'RECEIVE_VAULT',
+          actionLabelTh: `รับ 35% Vault (Rank ${h.rank || subRank})`,
+          rank: Number(h.rank || subRank),
+          amountUsdt: Number(h.amountUsdt || 0),
+          poolType: 'UPGRADE_POOL',
+          poolLabelTh: `เข้าถัง Main #${subMainId}`,
+          fromNodeId: Number(h.fromNodeId || 0),
+          fromMainId: Number(h.fromMainId || 0),
+          fromNodeType: srcInfo.idLabel,
+          sourceStatusTh: srcInfo.statusTh,
+          toNodeId: Number(h.toNodeId || subNodeId),
+          toMainId: Number(h.toMainId || subMainId),
+          targetStatusTh: `เข้าถัง Main #${subMainId}`,
+          descriptionTh: String(
+            h.note || `35% Vault ใต้โคลน R${subRank}-#${subNodeId} เข้า Main #${subMainId}`
+          ),
+          note: String(h.note || ''),
+          poolBalanceAfterUsdt: 0,
+          balanceAfterUsdt: 0,
+        };
+      });
 
       return {
         id: subNodeId,
@@ -1066,6 +1140,50 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
     for (const [rKey, rGroup] of idMembersByRank.entries()) {
       idMembersCountByRank[rKey] = Number(rGroup?.totalMembersInRank ?? 0);
     }
+
+    const incomeByRank: Record<number, { directUsdt: number; levelUsdt: number; totalUsdt: number }> = {};
+    for (let r = 1; r <= 18; r++) {
+      incomeByRank[r] = { directUsdt: 0, levelUsdt: 0, totalUsdt: 0 };
+    }
+    for (const h of activeReport?.direct30History || []) {
+      const rNum = Math.max(1, Math.min(18, Number(h.rank || 1)));
+      incomeByRank[rNum].directUsdt = Number(
+        (incomeByRank[rNum].directUsdt + Number(h.amountUsdt || 0)).toFixed(2)
+      );
+    }
+    for (const h of activeReport?.level30History || []) {
+      const rNum = Math.max(1, Math.min(18, Number(h.rank || 1)));
+      incomeByRank[rNum].levelUsdt = Number(
+        (incomeByRank[rNum].levelUsdt + Number(h.amountUsdt || 0)).toFixed(2)
+      );
+    }
+    for (let r = 1; r <= 18; r++) {
+      incomeByRank[r].totalUsdt = Number(
+        (incomeByRank[r].directUsdt + incomeByRank[r].levelUsdt).toFixed(2)
+      );
+    }
+
+    const vaultRemainingByRank: Record<number, number> = {};
+    for (let r = 1; r <= 18; r++) {
+      vaultRemainingByRank[r] = 0;
+    }
+    if (isViewingSubId) {
+      const subR = Math.max(1, Math.min(18, Number(selectedSubIdTarget?.rank || currentRank || 1)));
+      vaultRemainingByRank[subR] = Number((vaultPools.grossTotal || 0).toFixed(2));
+    } else {
+      const rankNodes = Array.isArray(activeReport?.rankNodesList)
+        ? activeReport.rankNodesList
+        : [];
+      for (const rn of rankNodes) {
+        const rNum = Number(rn.rank || 0);
+        if (rNum >= 1 && rNum <= 18) {
+          vaultRemainingByRank[rNum] = Number(
+            (vaultRemainingByRank[rNum] + Number(rn.nodeVault || 0)).toFixed(2)
+          );
+        }
+      }
+    }
+
     const typeBadge: MatrixActiveIdSummary['typeBadge'] = isViewingClone
       ? 'CLONE ID'
       : isViewingExtra
@@ -1100,6 +1218,8 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       level30TotalUsdt: level30Total,
       totalIncomeUsdt,
       vaultRemainingUsdt: isViewingSubId ? vaultPools.grossTotal : vaultPools.totalRemaining,
+      incomeByRank,
+      vaultRemainingByRank,
       totalClonesCount: totalClones,
       totalAutoIdCount: totalAutoIds,
       totalExtraIdCount: totalExtraIds,
@@ -1427,6 +1547,10 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
     fromRank?: number;
     toRank?: number;
     fromNodeId: number;
+    fromMainId?: number;
+    fromNodeType?: string;
+    sourceStatusTh?: string;
+    toNodeId?: number;
     parentId?: number;
     side?: string;
     amount: number;
@@ -1504,12 +1628,18 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       const ts = String(h.timestamp || '');
       const rank = Number(h.rank || 1);
       const fromId = Number(h.fromNodeId || 0);
+      const fromMain = Number(h.fromMainId || 0);
+      const srcInfo = deriveSourceStatusInfo(h.fromNodeType, fromId, fromMain, rank);
       rows.push({
         id: `d-${i}-${fromId}-${rank}`,
         kind: 'direct',
         label: '30% แนะนำตรง',
         rank,
         fromNodeId: fromId,
+        fromMainId: fromMain,
+        fromNodeType: srcInfo.idLabel,
+        sourceStatusTh: srcInfo.statusTh,
+        toNodeId: Number(h.toNodeId || 0),
         amount: Number(h.amountUsdt || 0),
         note: String(h.note || ''),
         timestamp: ts,
@@ -1524,12 +1654,18 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       const ts = String(h.timestamp || '');
       const rank = Number(h.rank || 1);
       const fromId = Number(h.fromNodeId || 0);
+      const fromMain = Number(h.fromMainId || 0);
+      const srcInfo = deriveSourceStatusInfo(h.fromNodeType, fromId, fromMain, rank);
       rows.push({
         id: `l-${i}-${fromId}-${rank}`,
         kind: 'level',
         label: h.tier ? `ค่าชั้น Lv.${h.tier}` : '30% ค่าชั้น',
         rank,
         fromNodeId: fromId,
+        fromMainId: fromMain,
+        fromNodeType: srcInfo.idLabel,
+        sourceStatusTh: srcInfo.statusTh,
+        toNodeId: Number(h.toNodeId || 0),
         amount: Number(h.amountUsdt || 0),
         note: String(h.note || ''),
         timestamp: ts,
@@ -1544,6 +1680,8 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       const ts = String(h.timestamp || '');
       const rank = Number(h.rank || 1);
       const fromId = Number(h.fromNodeId || 0);
+      const fromMain = Number(h.fromMainId || 0);
+      const srcInfo = deriveSourceStatusInfo(h.fromNodeType, fromId, fromMain, rank);
       const amt = Number(h.amountUsdt || 0);
       const ledgerMatchIdx = vaultInLedger.findIndex(
         (lv, idx) =>
@@ -1561,6 +1699,10 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
         label: '35% เข้า Vault',
         rank,
         fromNodeId: fromId,
+        fromMainId: fromMain,
+        fromNodeType: srcInfo.idLabel,
+        sourceStatusTh: srcInfo.statusTh,
+        toNodeId: Number(h.toNodeId || 0),
         amount: amt,
         poolLabel: poolLabel || undefined,
         note: String(h.note || ''),
@@ -1741,9 +1883,40 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
     });
   }, [activeReport, idSpecificUpgradesState, recentUpgrades, recentTransactions, displayId, idCloneNodeIds]);
 
+  const historyRankStats = useMemo(() => {
+    const byRank: Record<number, { count: number; incomeUsdt: number }> = {};
+    for (let r = 1; r <= 18; r++) {
+      byRank[r] = { count: 0, incomeUsdt: 0 };
+    }
+    let totalIncomeUsdt = 0;
+    for (const row of combinedHistoryRows) {
+      const rNum = Number(row.kind === 'upgrade' && row.toRank ? row.toRank : row.rank || 0);
+      if (rNum >= 1 && rNum <= 18) {
+        byRank[rNum].count += 1;
+        if (row.kind === 'direct' || row.kind === 'level' || row.kind === 'vault') {
+          byRank[rNum].incomeUsdt += Number(row.amount || 0);
+          totalIncomeUsdt += Number(row.amount || 0);
+        }
+      }
+    }
+    return {
+      byRank,
+      totalCount: combinedHistoryRows.length,
+      totalIncomeUsdt,
+    };
+  }, [combinedHistoryRows]);
+
+  const rankScopedHistoryRows = useMemo(() => {
+    if (historyRankFilter === 'all') return combinedHistoryRows;
+    return combinedHistoryRows.filter((r) => {
+      const targetRank = Number(r.kind === 'upgrade' && r.toRank ? r.toRank : r.rank || 0);
+      return targetRank === historyRankFilter || Number(r.rank) === historyRankFilter;
+    });
+  }, [combinedHistoryRows, historyRankFilter]);
+
   const historyCounts = useMemo(() => {
     const counts = {
-      all: combinedHistoryRows.length,
+      all: rankScopedHistoryRows.length,
       direct: 0,
       level: 0,
       vault: 0,
@@ -1757,14 +1930,14 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       level: 0,
       vault: 0,
     };
-    for (const r of combinedHistoryRows) {
+    for (const r of rankScopedHistoryRows) {
       counts[r.kind] += 1;
       if (r.kind === 'direct') totals.direct += r.amount;
       if (r.kind === 'level') totals.level += r.amount;
       if (r.kind === 'vault') totals.vault += r.amount;
     }
     return { counts, totals };
-  }, [combinedHistoryRows]);
+  }, [rankScopedHistoryRows]);
 
   const filteredHistoryRows = useMemo(() => {
     const q = historySearch.trim().toLowerCase();
@@ -1777,7 +1950,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           : rawEndMs
         : null;
 
-    return combinedHistoryRows.filter((r) => {
+    return rankScopedHistoryRows.filter((r) => {
       if (historyFilter !== 'all' && r.kind !== historyFilter) return false;
 
       if (startMs !== null && Number.isFinite(startMs)) {
@@ -1797,6 +1970,9 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           `r${r.rank}`,
           `rank ${r.rank}`,
           `#${r.fromNodeId}`,
+          r.fromMainId ? `#${r.fromMainId}` : '',
+          r.fromNodeType || '',
+          r.sourceStatusTh || '',
           r.parentId ? `#${r.parentId}` : '',
           r.txHash || '',
           r.formattedDateTime,
@@ -1809,7 +1985,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       return true;
     });
   }, [
-    combinedHistoryRows,
+    rankScopedHistoryRows,
     historyFilter,
     historySearch,
     historyStartDateTime,
@@ -2103,7 +2279,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               onClick={() => setActiveModal('switch_id')}
               className="border-0 rounded-[14px] px-3 py-2.5 sm:py-2 text-white font-bold text-xs sm:text-sm bg-gradient-to-br from-[#23caff] to-[#0755d7] shadow-[0_5px_15px_rgba(8,124,244,0.47)] hover:brightness-105 transition whitespace-nowrap cursor-pointer"
             >
-              ⇄ {language === 'th' ? 'สลับบัญชี' : 'Switch ID'}
+              ⇄ {language === 'th' ? 'สลับไอดี' : 'Switch ID'}
             </button>
           </div>
         </section>
@@ -2164,13 +2340,17 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
             {/* 3. 3 SUMMARY STATS CARDS (2-COL + FULL-WIDTH TOP ON MOBILE, 3-COL ON SM+/PC) */}
             <section className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3.5 mx-0.5 sm:mx-1">
               <article
-                onClick={() => setBottomTab('history')}
+                onClick={() => {
+                  setIncomeModalFilter('all');
+                  setIncomeModalRankFilter('all');
+                  setActiveModal('income');
+                }}
                 className="col-span-2 sm:col-span-1 min-w-0 p-3.5 sm:p-4 rounded-[21px] bg-gradient-to-br from-white to-[#d8f0ff] border-[1.5px] border-[#a8dfff] shadow-[0_8px_22px_rgba(0,72,190,0.23)] cursor-pointer hover:border-[#087cf4] hover:-translate-y-0.5 transition-transform duration-150 flex flex-col justify-between"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[22px] sm:text-[26px] text-[#087cf4] leading-none">▰</span>
                   <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-[#e3f4ff] text-[#0754b9] border border-[#b4e0ff]">
-                    ดูประวัติ ›
+                    รายละเอียด ›
                   </span>
                 </div>
                 <div className="mt-2">
@@ -2787,6 +2967,116 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               })}
             </div>
 
+            {/* Rank 1–18 Drop Down Filter */}
+            <div ref={historyRankDropdownRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setIsHistoryRankDropdownOpen((prev) => !prev)}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-left cursor-pointer transition ${
+                  historyRankFilter !== 'all'
+                    ? 'bg-gradient-to-r from-[#eff8ff] to-[#ddf0ff] border-[#5fb8ff] text-[#09265f]'
+                    : 'bg-white/95 border-[#a9ddff] text-[#09265f] hover:bg-[#f4faff]'
+                }`}
+                aria-expanded={isHistoryRankDropdownOpen}
+              >
+                <div className="flex items-center gap-2 min-w-0 flex-wrap text-xs">
+                  <span className="px-2 py-0.5 rounded-lg bg-[#087cf4] text-white text-[11px] font-black">
+                    {historyRankFilter === 'all' ? 'ทุก Rank (1–18)' : `Rank ${historyRankFilter}`}
+                  </span>
+                  <span className="font-bold text-[#0754b9] truncate">
+                    {historyRankFilter === 'all'
+                      ? `แสดงรายได้ทุก Rank (${historyRankStats.totalCount} รายการ · +${historyRankStats.totalIncomeUsdt.toFixed(2)} U)`
+                      : `กรองเฉพาะ Rank ${historyRankFilter} (${historyRankStats.byRank[historyRankFilter]?.count || 0} รายการ · +${(historyRankStats.byRank[historyRankFilter]?.incomeUsdt || 0).toFixed(2)} U)`}
+                  </span>
+                </div>
+                <ChevronDown
+                  className={`w-4 h-4 text-[#0754b9] shrink-0 transition-transform duration-150 ${
+                    isHistoryRankDropdownOpen ? 'rotate-180' : ''
+                  }`}
+                />
+              </button>
+
+              {isHistoryRankDropdownOpen && (
+                <div className="absolute left-0 right-0 top-full mt-1 z-30 rounded-2xl bg-white border-2 border-[#8ecbff] shadow-[0_14px_34px_rgba(7,85,181,0.25)] overflow-hidden">
+                  <div className="px-3 py-2 bg-[#eff8ff] border-b border-[#cbe7ff] flex items-center justify-between text-[10.5px] font-bold text-[#0754b9]">
+                    <span>เลือกกรองประวัติรายได้ตาม Rank (1–18)</span>
+                    <span>แตะเพื่อเลือก</span>
+                  </div>
+                  <div className="max-h-64 overflow-y-auto p-1.5 space-y-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHistoryRankFilter('all');
+                        setIsHistoryRankDropdownOpen(false);
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-left text-xs cursor-pointer ${
+                        historyRankFilter === 'all'
+                          ? 'bg-gradient-to-r from-[#087cf4] to-[#0648b2] text-white font-bold'
+                          : 'bg-[#f5fbff] hover:bg-[#e2f2ff] text-[#09265f] font-semibold'
+                      }`}
+                    >
+                      <span>ทั้งหมด (ทุก Rank 1–18)</span>
+                      <span
+                        className={`font-mono text-[11px] font-bold ${
+                          historyRankFilter === 'all' ? 'text-cyan-100' : 'text-[#0754b9]'
+                        }`}
+                      >
+                        {historyRankStats.totalCount} รายการ · +{historyRankStats.totalIncomeUsdt.toFixed(2)} U
+                      </span>
+                    </button>
+
+                    {Array.from({ length: 18 }, (_, i) => i + 1).map((r) => {
+                      const active = historyRankFilter === r;
+                      const stat = historyRankStats.byRank[r] || { count: 0, incomeUsdt: 0 };
+                      return (
+                        <button
+                          key={`hist-rank-dd-${r}`}
+                          type="button"
+                          onClick={() => {
+                            setHistoryRankFilter(r);
+                            setIsHistoryRankDropdownOpen(false);
+                          }}
+                          className={`w-full px-3 py-2 rounded-xl flex items-center justify-between gap-2 text-left text-xs cursor-pointer ${
+                            active
+                              ? 'bg-gradient-to-r from-[#087cf4] to-[#0648b2] text-white font-bold'
+                              : stat.count > 0
+                              ? 'bg-[#f5fbff] hover:bg-[#e2f2ff] text-[#09265f]'
+                              : 'bg-slate-50 hover:bg-slate-100 text-slate-400'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <strong className="font-mono font-black">Rank {r}</strong>
+                            {stat.count > 0 && (
+                              <span
+                                className={`px-1.5 py-0.5 rounded-full text-[9.5px] font-extrabold ${
+                                  active
+                                    ? 'bg-white/20 text-white'
+                                    : 'bg-emerald-100 text-emerald-700'
+                                }`}
+                              >
+                                {stat.count} รายการ
+                              </span>
+                            )}
+                          </div>
+                          <span
+                            className={`font-mono text-[11px] font-bold ${
+                              active
+                                ? 'text-cyan-100'
+                                : stat.incomeUsdt > 0
+                                ? 'text-emerald-700'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            +{stat.incomeUsdt.toFixed(2)} U
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Search & Date/Time Filter Box */}
             <div className="p-3 rounded-2xl bg-white/85 border border-[#b8e5ff] space-y-2.5">
               <div className="relative">
@@ -2860,7 +3150,8 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                   {(historySearch ||
                     historyStartDateTime ||
                     historyEndDateTime ||
-                    historyFilter !== 'all') && (
+                    historyFilter !== 'all' ||
+                    historyRankFilter !== 'all') && (
                     <button
                       type="button"
                       onClick={() => {
@@ -2868,6 +3159,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                         setHistoryStartDateTime('');
                         setHistoryEndDateTime('');
                         setHistoryFilter('all');
+                        setHistoryRankFilter('all');
                       }}
                       className="px-2.5 py-1 rounded-lg bg-rose-50 border border-rose-200 text-[11px] font-bold text-rose-600 hover:bg-rose-100 cursor-pointer"
                     >
@@ -2931,12 +3223,31 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                             </span>
                           ) : (
                             <span className="font-mono font-bold text-[#0754b9]">
-                              Rank {row.rank} · จาก #{row.fromNodeId}
+                              Rank {row.rank} · มาจาก {row.fromNodeType || `#${row.fromNodeId}`}
                             </span>
                           )}
-                          {row.poolLabel && (
+                          {row.sourceStatusTh && (row.kind === 'direct' || row.kind === 'level' || row.kind === 'vault') && (
+                            <span
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                row.sourceStatusTh.includes('Clone')
+                                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                  : row.sourceStatusTh.includes('Extra')
+                                  ? 'bg-rose-50 border-rose-200 text-rose-700'
+                                  : row.sourceStatusTh.includes('Auto')
+                                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                  : 'bg-sky-50 border-sky-200 text-[#0754b9]'
+                              }`}
+                            >
+                              สถานะ: {row.sourceStatusTh}
+                            </span>
+                          )}
+                          {row.poolLabel ? (
                             <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-bold">
                               เข้า {row.poolLabel}
+                            </span>
+                          ) : (row.kind === 'direct' || row.kind === 'level') && (
+                            <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
+                              รับเข้ากระเป๋าแล้ว
                             </span>
                           )}
                           {row.isClone && (
@@ -3275,7 +3586,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
             className={`w-full ${
               activeModal === 'members'
                 ? 'max-w-3xl'
-                : activeModal === 'vault'
+                : activeModal === 'vault' || activeModal === 'income'
                 ? 'max-w-2xl'
                 : 'max-w-xl'
             } max-h-[88vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3`}
@@ -3283,12 +3594,13 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           >
             <div className="flex items-center justify-between border-b border-[#b8e5ff] pb-2.5">
               <h3 className="text-base sm:text-lg font-black">
-                {activeModal === 'switch_id' && '⇄ สลับบัญชี / เลือกรหัสที่ต้องการดู'}
+                {activeModal === 'switch_id' && '⇄ สลับไอดี / เลือกรหัสที่ต้องการดู'}
                 {activeModal === 'members' && `👥 สมาชิก & ลูกตรงทั้งหมดของ ID #${displayId} (แยกตาม Rank)`}
                 {activeModal === 'upgrade' && `📈 อัปเกรด Rank สำหรับ ID #${displayId}`}
                 {activeModal === 'wallet' && `▰ กระเป๋าเงินและรายได้ ID #${displayId}`}
                 {activeModal === 'vault' && `▣ รายละเอียดถังสะสมเงิน (Vault) ID #${displayId}`}
                 {activeModal === 'allsell' && `🎁 สิทธิ์กองทุน AllSell Pool 4% (ID #${displayId})`}
+                {activeModal === 'income' && `▰ รายได้ทั้งหมดของ ${matrixActiveIdSummary.label}`}
               </h3>
               <button
                 type="button"
@@ -4087,7 +4399,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                       </button>
                     ) : !isOwnedByConnectedWallet ? (
                       <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 font-semibold">
-                        กระเป๋าที่เชื่อมต่อปัจจุบันไม่ใช่เจ้าของ ID #{displayId} กรุณาสลับบัญชีหรือสลับกระเป๋า
+                        กระเป๋าที่เชื่อมต่อปัจจุบันไม่ใช่เจ้าของ ID #{displayId} กรุณาสลับไอดีหรือสลับกระเป๋า
                       </div>
                     ) : (
                       <div className="flex items-center gap-2">
@@ -4161,6 +4473,260 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                 </button>
               </div>
             )}
+
+            {/* MODAL: TOTAL INCOME BREAKDOWN & LEDGER */}
+            {activeModal === 'income' && (() => {
+              const allIncomeRows = combinedHistoryRows.filter(
+                (r) => r.kind === 'direct' || r.kind === 'level'
+              );
+              const directCount = allIncomeRows.filter((r) => r.kind === 'direct').length;
+              const levelCount = allIncomeRows.filter((r) => r.kind === 'level').length;
+              const rankIncomeList = Array.from({ length: 18 }, (_, i) => i + 1)
+                .map((r) => {
+                  const info = matrixActiveIdSummary.incomeByRank?.[r] || {
+                    directUsdt: 0,
+                    levelUsdt: 0,
+                    totalUsdt: 0,
+                  };
+                  const count = allIncomeRows.filter((row) => Number(row.rank || 1) === r).length;
+                  return { rank: r, ...info, count };
+                })
+                .filter(
+                  (item) =>
+                    item.totalUsdt > 0 ||
+                    item.count > 0 ||
+                    (!isViewingSubId && item.rank <= currentRank) ||
+                    (isViewingSubId && item.rank === Number(selectedSubIdTarget?.rank || currentRank))
+                );
+
+              const filteredIncomeRows = allIncomeRows.filter((row) => {
+                if (incomeModalFilter !== 'all' && row.kind !== incomeModalFilter) return false;
+                if (incomeModalRankFilter !== 'all' && Number(row.rank || 1) !== incomeModalRankFilter) {
+                  return false;
+                }
+                return true;
+              });
+
+              return (
+                <div className="space-y-3 text-xs">
+                  {/* Top 3 Summary Boxes */}
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                      <div className="text-[10px] text-[#55769b]">รายได้รวมทั้งหมด</div>
+                      <strong className="text-base font-black text-emerald-700 font-mono">
+                        +{totalIncomeUsdt.toFixed(2)} U
+                      </strong>
+                      <div className="text-[10px] text-[#4f7097] font-semibold">
+                        {allIncomeRows.length} รายการ
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                      <div className="text-[10px] text-[#55769b]">30% ค่าแนะนำตรง</div>
+                      <strong className="text-base font-black text-[#0754b9] font-mono">
+                        +{direct30Total.toFixed(2)} U
+                      </strong>
+                      <div className="text-[10px] text-[#4f7097] font-semibold">
+                        {directCount} รายการ
+                      </div>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                      <div className="text-[10px] text-[#55769b]">30% ค่าบริหารชั้น</div>
+                      <strong className="text-base font-black text-cyan-700 font-mono">
+                        +{level30Total.toFixed(2)} U
+                      </strong>
+                      <div className="text-[10px] text-[#4f7097] font-semibold">
+                        {levelCount} รายการ
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Per-Rank Income Breakdown */}
+                  {rankIncomeList.length > 0 && (
+                    <div className="p-2.5 rounded-2xl bg-white/90 border border-[#b8e5ff] space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-black text-[#09265f]">
+                          📊 รายได้แยกตาม Rank (แตะเพื่อกรอง)
+                        </span>
+                        {incomeModalRankFilter !== 'all' && (
+                          <button
+                            type="button"
+                            onClick={() => setIncomeModalRankFilter('all')}
+                            className="text-[10px] font-bold text-[#0754b9] hover:underline cursor-pointer"
+                          >
+                            แสดงทุก Rank
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                        {rankIncomeList.map((item) => {
+                          const active = incomeModalRankFilter === item.rank;
+                          return (
+                            <button
+                              key={`inc-modal-r-${item.rank}`}
+                              type="button"
+                              onClick={() =>
+                                setIncomeModalRankFilter(active ? 'all' : item.rank)
+                              }
+                              className={`p-2 rounded-xl border text-left cursor-pointer transition ${
+                                active
+                                  ? 'bg-[#087cf4] text-white border-[#0754b9] shadow-sm'
+                                  : 'bg-[#f5fbff] text-[#09265f] border-[#cde7ff] hover:bg-[#e5f3ff]'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-1">
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-black ${
+                                    active
+                                      ? 'bg-white/20 text-white'
+                                      : 'bg-[#dff0ff] text-[#0754b9]'
+                                  }`}
+                                >
+                                  R{item.rank}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-mono ${
+                                    active ? 'text-cyan-100' : 'text-[#5a78a1]'
+                                  }`}
+                                >
+                                  {item.count} รายการ
+                                </span>
+                              </div>
+                              <div
+                                className={`mt-1 text-sm font-black font-mono ${
+                                  active ? 'text-white' : 'text-emerald-700'
+                                }`}
+                              >
+                                +{item.totalUsdt.toFixed(2)} U
+                              </div>
+                              <div
+                                className={`text-[9.5px] font-semibold truncate ${
+                                  active ? 'text-blue-100' : 'text-[#4f7097]'
+                                }`}
+                              >
+                                แนะนำ {item.directUsdt.toFixed(1)} · ชั้น {item.levelUsdt.toFixed(1)}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Type Filter Chips */}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {(
+                        [
+                          { key: 'all', label: `ทั้งหมด (${allIncomeRows.length})` },
+                          { key: 'direct', label: `30% แนะนำ (${directCount})` },
+                          { key: 'level', label: `30% ค่าชั้น (${levelCount})` },
+                        ] as const
+                      ).map((chip) => {
+                        const active = incomeModalFilter === chip.key;
+                        return (
+                          <button
+                            key={`inc-chip-${chip.key}`}
+                            type="button"
+                            onClick={() => setIncomeModalFilter(chip.key)}
+                            className={`px-2.5 py-1 rounded-full text-[11px] font-bold cursor-pointer transition ${
+                              active
+                                ? 'bg-[#087cf4] text-white shadow-xs'
+                                : 'bg-white text-[#0756bc] border border-[#b4e0ff] hover:bg-[#eef8ff]'
+                            }`}
+                          >
+                            {chip.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <span className="text-[10.5px] font-bold text-[#4f7097]">
+                      แสดง {filteredIncomeRows.length} รายการ
+                    </span>
+                  </div>
+
+                  {/* Income Rows */}
+                  {filteredIncomeRows.length === 0 ? (
+                    <div className="p-5 text-center rounded-2xl bg-white border border-[#b8e5ff] text-[#55769b] font-semibold">
+                      ยังไม่มีรายการรายได้ตามเงื่อนไขที่เลือก
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                      {filteredIncomeRows.map((row) => (
+                        <div
+                          key={`inc-modal-row-${row.id}`}
+                          className="p-2.5 rounded-xl bg-white border border-[#b8e5ff] flex items-start justify-between gap-2"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`px-2 py-0.5 rounded-md font-bold text-[10px] ${
+                                  row.kind === 'direct'
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : 'bg-cyan-100 text-cyan-700'
+                                }`}
+                              >
+                                {row.label}
+                              </span>
+                              <span className="font-mono font-bold text-[#0754b9]">
+                                Rank {row.rank} · มาจาก {row.fromNodeType || `#${row.fromNodeId}`}
+                              </span>
+                              {row.sourceStatusTh && (
+                                <span
+                                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                    row.sourceStatusTh.includes('Clone')
+                                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                                      : row.sourceStatusTh.includes('Extra')
+                                      ? 'bg-rose-50 border-rose-200 text-rose-700'
+                                      : row.sourceStatusTh.includes('Auto')
+                                      ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                      : 'bg-sky-50 border-sky-200 text-[#0754b9]'
+                                  }`}
+                                >
+                                  สถานะ: {row.sourceStatusTh}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-[#35567e] leading-snug break-words">
+                              {row.note}
+                            </p>
+                            <div className="text-[10px] font-mono text-[#6283aa] flex items-center gap-1">
+                              <Clock className="w-3 h-3 shrink-0" />
+                              <span>{row.formattedDateTime}</span>
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0 font-mono space-y-0.5">
+                            <strong className="text-sm font-black text-emerald-600 block">
+                              +{row.amount.toFixed(2)} U
+                            </strong>
+                            {isRealChainTxHash(row.txHash) && (
+                              <a
+                                href={`https://testnet.bscscan.com/tx/${row.txHash}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="px-2 py-0.5 rounded-lg bg-[#eff8ff] border border-[#a9d7ff] text-[10px] font-bold text-[#0756bc] hover:underline inline-flex items-center gap-0.5"
+                              >
+                                BscScan <ArrowUpRight className="w-2.5 h-2.5" />
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModal(null);
+                      setBottomTab('history');
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-gradient-to-br from-[#23caff] to-[#0755d7] text-white font-bold cursor-pointer hover:brightness-105"
+                  >
+                    เปิดหน้าประวัติรายได้ฉบับเต็ม →
+                  </button>
+                </div>
+              );
+            })()}
 
             {/* MODAL: VAULT LEDGER & POOL DETAILS */}
             {activeModal === 'vault' && (
@@ -4521,58 +5087,102 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                       ไม่มีรายการเคลื่อนไหวในหมวดที่เลือกสำหรับ ID #{displayId}
                     </div>
                   ) : (
-                    filteredVaultLedger.map((item: any, idx: number) => (
-                      <div
-                        key={`vl-${item.id || idx}`}
-                        className="p-2.5 rounded-xl bg-white border border-[#b8e5ff] flex items-start justify-between gap-2"
-                      >
-                        <div className="min-w-0 space-y-0.5">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[9.5px] font-black ${
-                                item.direction === 'OUT'
-                                  ? 'bg-rose-100 text-rose-700'
-                                  : 'bg-emerald-100 text-emerald-700'
+                    filteredVaultLedger.map((item: any, idx: number) => {
+                      const fallbackSrc = deriveSourceStatusInfo(
+                        item.fromNodeType,
+                        Number(item.fromNodeId || 0),
+                        Number(item.fromMainId || 0),
+                        Number(item.rank || 1)
+                      );
+                      const srcIdLabel = String(item.fromNodeType || fallbackSrc.idLabel || '').trim();
+                      const srcStatusLabel = String(
+                        item.sourceStatusTh ||
+                          (item.direction === 'OUT' ? 'หักจาก Vault' : fallbackSrc.statusTh)
+                      ).trim();
+                      const statusTone =
+                        item.direction === 'OUT'
+                          ? 'bg-rose-50 border-rose-200 text-rose-700'
+                          : srcStatusLabel.includes('Clone')
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                          : srcStatusLabel.includes('Extra')
+                          ? 'bg-fuchsia-50 border-fuchsia-200 text-fuchsia-700'
+                          : srcStatusLabel.includes('Auto')
+                          ? 'bg-amber-50 border-amber-200 text-amber-800'
+                          : 'bg-sky-50 border-sky-200 text-[#0754b9]';
+
+                      return (
+                        <div
+                          key={`vl-${item.id || idx}`}
+                          className="p-2.5 rounded-xl bg-white border border-[#b8e5ff] flex items-start justify-between gap-2"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span
+                                className={`px-1.5 py-0.5 rounded text-[9.5px] font-black ${
+                                  item.direction === 'OUT'
+                                    ? 'bg-rose-100 text-rose-700'
+                                    : 'bg-emerald-100 text-emerald-700'
+                                }`}
+                              >
+                                {item.direction === 'OUT' ? 'OUT' : 'IN'}
+                              </span>
+                              <span className="font-bold text-[#09265f]">
+                                {item.actionLabelTh || item.poolLabelTh || item.poolType} · R
+                                {item.rank}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap text-[10px]">
+                              {srcIdLabel && (
+                                <span className="px-1.5 py-0.5 rounded bg-[#eff7ff] border border-[#b8e5ff] font-mono font-bold text-[#0754b9]">
+                                  {item.direction === 'OUT' ? 'รายการ:' : 'มาจากไอดี:'} {srcIdLabel}
+                                </span>
+                              )}
+                              <span className={`px-1.5 py-0.5 rounded border font-bold ${statusTone}`}>
+                                สถานะ: {srcStatusLabel}
+                              </span>
+                              {item.direction === 'IN' && Number(item.toNodeId || 0) > 0 && (
+                                <span className="px-1.5 py-0.5 rounded bg-slate-50 border border-slate-200 font-mono font-semibold text-slate-700">
+                                  ใต้โหนด #{item.toNodeId}
+                                </span>
+                              )}
+                              {item.targetStatusTh && (
+                                <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-200 font-bold text-indigo-700">
+                                  {item.targetStatusTh}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10.5px] text-[#45668f] leading-snug break-words">
+                              {item.descriptionTh || item.note}
+                            </div>
+                            <div className="text-[9.5px] font-mono text-[#6b8cb3]">
+                              🕒 {formatThaiDateTime(item.timestamp)}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0 font-mono">
+                            <strong
+                              className={`font-black block ${
+                                item.direction === 'OUT' ? 'text-rose-600' : 'text-emerald-700'
                               }`}
                             >
-                              {item.direction === 'OUT' ? 'OUT' : 'IN'}
-                            </span>
-                            <span className="font-bold text-[#09265f]">
-                              {item.actionLabelTh || item.poolLabelTh || item.poolType} · R
-                              {item.rank}
-                            </span>
-                          </div>
-                          <div className="text-[10.5px] text-[#45668f] leading-snug break-words">
-                            {item.descriptionTh || item.note}
-                          </div>
-                          <div className="text-[9.5px] font-mono text-[#6b8cb3]">
-                            🕒 {formatThaiDateTime(item.timestamp)}
+                              {item.direction === 'OUT' ? '-' : '+'}
+                              {Number(item.amountUsdt || 0).toFixed(2)} U
+                            </strong>
+                            {vaultPoolTab !== 'all' && typeof item.poolBalanceAfterUsdt === 'number' ? (
+                              <span className="text-[9.5px] text-[#55769b] block">
+                                คงเหลือถังนี้ {Number(item.poolBalanceAfterUsdt).toFixed(2)} U
+                              </span>
+                            ) : typeof item.balanceAfterUsdt === 'number' ? (
+                              <span className="text-[9.5px] text-[#55769b] block">
+                                คงเหลือรวม {Number(item.balanceAfterUsdt).toFixed(2)} U
+                                {typeof item.poolBalanceAfterUsdt === 'number'
+                                  ? ` · ถังนี้ ${Number(item.poolBalanceAfterUsdt).toFixed(2)} U`
+                                  : ''}
+                              </span>
+                            ) : null}
                           </div>
                         </div>
-                        <div className="text-right shrink-0 font-mono">
-                          <strong
-                            className={`font-black block ${
-                              item.direction === 'OUT' ? 'text-rose-600' : 'text-emerald-700'
-                            }`}
-                          >
-                            {item.direction === 'OUT' ? '-' : '+'}
-                            {Number(item.amountUsdt || 0).toFixed(2)} U
-                          </strong>
-                          {vaultPoolTab !== 'all' && typeof item.poolBalanceAfterUsdt === 'number' ? (
-                            <span className="text-[9.5px] text-[#55769b] block">
-                              คงเหลือถังนี้ {Number(item.poolBalanceAfterUsdt).toFixed(2)} U
-                            </span>
-                          ) : typeof item.balanceAfterUsdt === 'number' ? (
-                            <span className="text-[9.5px] text-[#55769b] block">
-                              คงเหลือรวม {Number(item.balanceAfterUsdt).toFixed(2)} U
-                              {typeof item.poolBalanceAfterUsdt === 'number'
-                                ? ` · ถังนี้ ${Number(item.poolBalanceAfterUsdt).toFixed(2)} U`
-                                : ''}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>

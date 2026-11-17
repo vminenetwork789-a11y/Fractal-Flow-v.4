@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { RefreshCw, Search, ArrowLeft, ExternalLink, ArrowUp, X, Users, ChevronDown } from 'lucide-react';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
+import { RANK_PRICES_USDT } from '../contracts/config';
 
 async function safeReadJson(res: Response | null): Promise<any> {
   if (!res || !res.ok) return null;
@@ -62,6 +63,8 @@ export interface MatrixActiveIdSummary {
   level30TotalUsdt: number;
   totalIncomeUsdt: number;
   vaultRemainingUsdt: number;
+  incomeByRank?: Record<number, { directUsdt: number; levelUsdt: number; totalUsdt: number }>;
+  vaultRemainingByRank?: Record<number, number>;
   totalClonesCount: number;
   totalAutoIdCount: number;
   totalExtraIdCount: number;
@@ -1271,7 +1274,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 onClick={onOpenSwitchId}
                 className="px-2.5 py-1.5 rounded-xl bg-gradient-to-br from-[#23caff] to-[#0755d7] hover:brightness-110 border border-[#7ce5ff]/70 text-white text-[11px] font-black inline-flex items-center gap-1 whitespace-nowrap cursor-pointer shadow-sm transition-transform duration-150"
               >
-                ⇄ สลับบัญชี
+                ⇄ สลับไอดี
               </button>
             )}
             <button
@@ -1511,6 +1514,13 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <div className="text-[10px] font-bold text-[#4f7097] truncate">
                 แนะนำ {activeIdSummary.direct30TotalUsdt.toFixed(1)} + ชั้น {activeIdSummary.level30TotalUsdt.toFixed(1)}
               </div>
+              {activeIdSummary.incomeByRank?.[matrixRank] && (
+                <div className="mt-1 pt-1 border-t border-[#e3f1ff] text-[10px] font-bold text-[#0758d4] truncate">
+                  เฉพาะ R{matrixRank}: {activeIdSummary.incomeByRank[matrixRank].totalUsdt.toFixed(2)} U (แนะนำ{' '}
+                  {activeIdSummary.incomeByRank[matrixRank].directUsdt.toFixed(1)} + ชั้น{' '}
+                  {activeIdSummary.incomeByRank[matrixRank].levelUsdt.toFixed(1)})
+                </div>
+              )}
             </div>
 
             <div className="p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
@@ -1529,8 +1539,97 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                   ? `โอนเข้าถัง Main #${activeIdSummary.mainId}`
                   : 'รวม Upgrade + Auto + Extra'}
               </div>
+              {activeIdSummary.vaultRemainingByRank && (
+                <div className="mt-1 pt-1 border-t border-[#e3f1ff] text-[10px] font-bold text-[#0758d4] truncate">
+                  เฉพาะ R{matrixRank}: {(activeIdSummary.vaultRemainingByRank[matrixRank] ?? 0).toFixed(2)} U
+                </div>
+              )}
             </div>
           </div>
+
+          {/* Per-Rank Breakdown: Total Income & Remaining Vault per Rank */}
+          {(() => {
+            const visibleRanks = Array.from({ length: 18 }, (_, i) => i + 1).filter((r) => {
+              const inc = activeIdSummary.incomeByRank?.[r]?.totalUsdt || 0;
+              const vRem = activeIdSummary.vaultRemainingByRank?.[r] || 0;
+              if (activeIdSummary.isSubId) {
+                return r === idEffectiveRank || inc > 0 || vRem > 0;
+              }
+              return r <= idEffectiveRank || inc > 0 || vRem > 0;
+            });
+            if (visibleRanks.length === 0) return null;
+            return (
+              <div className="p-2.5 rounded-[14px] bg-white/90 border border-[#bde2ff] space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-[11px] font-black text-[#09265f]">
+                    📊 รายได้รวม & Vault คงเหลือของ ID นี้ แยกแต่ละ Rank
+                  </span>
+                  <span className="text-[10px] font-semibold text-[#5a78a1]">
+                    แตะ Rank เพื่อสลับดูผัง
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5">
+                  {visibleRanks.map((r) => {
+                    const incInfo = activeIdSummary.incomeByRank?.[r] || {
+                      directUsdt: 0,
+                      levelUsdt: 0,
+                      totalUsdt: 0,
+                    };
+                    const vRem = activeIdSummary.vaultRemainingByRank?.[r] ?? 0;
+                    const isViewingThisRank = r === matrixRank;
+                    return (
+                      <button
+                        key={`id-rank-stat-${r}`}
+                        type="button"
+                        onClick={() => {
+                          setMatrixRank(r);
+                          setFocusedRootId(null);
+                          setSelectedLayer(0);
+                          setSearchResult(null);
+                        }}
+                        className={`p-2 rounded-xl border text-left cursor-pointer transition ${
+                          isViewingThisRank
+                            ? 'bg-gradient-to-br from-[#eff8ff] to-[#d9eeff] border-[#087cf4] ring-1 ring-[#087cf4]/40'
+                            : 'bg-[#f8fcff] border-[#cde7ff] hover:bg-[#eef7ff]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-black ${
+                              r === idEffectiveRank
+                                ? 'bg-emerald-600 text-white'
+                                : isViewingThisRank
+                                ? 'bg-[#087cf4] text-white'
+                                : 'bg-[#e3f1ff] text-[#0758d4]'
+                            }`}
+                          >
+                            {r === idEffectiveRank ? `★ R${r}` : `R${r}`}
+                          </span>
+                          <span className="text-[9.5px] font-mono text-[#5a78a1]">
+                            สมาชิก {fmtNum(activeIdSummary.idMembersCountByRank?.[r] ?? 0)}
+                          </span>
+                        </div>
+                        <div className="mt-1 space-y-0.5 text-[10.5px] font-mono">
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-sans text-[#4f7097]">รายได้รวม</span>
+                            <strong className="text-emerald-700 font-black">
+                              +{incInfo.totalUsdt.toFixed(2)} U
+                            </strong>
+                          </div>
+                          <div className="flex items-center justify-between gap-1">
+                            <span className="font-sans text-[#4f7097]">Vault คงเหลือ</span>
+                            <strong className="text-[#09265f] font-black">
+                              {vRem.toFixed(2)} U
+                            </strong>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
         </section>
       )}
 
@@ -1539,37 +1638,6 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           ID #{displayId} ยังไม่ได้ปลดล็อก Rank {matrixRank} — แสดงผังเริ่มต้นจาก ROOT #{effectiveRootId}
         </div>
       )}
-
-      {/* 1. SUMMARY METRICS STRIP */}
-      <section className="mx-1 p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)]">
-        <div className="grid grid-cols-3 gap-2">
-          <div className="p-2.5 sm:p-3 rounded-[15px] bg-gradient-to-br from-white to-[#d9f1ff] border border-[#b5ddff]">
-            <small className="block text-[10px] font-bold text-[#5a78a1]">ชั้นที่เลือก</small>
-            <b className="text-[17px] sm:text-[20px] font-black font-mono tabular-nums text-[#09275f] block mt-0.5">
-              {selectedLayer} / 15
-            </b>
-          </div>
-          <div className="p-2.5 sm:p-3 rounded-[15px] bg-gradient-to-br from-white to-[#d9f1ff] border border-[#b5ddff]">
-            <small className="block text-[10px] font-bold text-[#5a78a1]">
-              ตำแหน่งสูงสุดในชั้น*
-            </small>
-            <b className="text-[17px] sm:text-[20px] font-black font-mono tabular-nums text-[#09275f] block mt-0.5">
-              {fmtNum(theoreticalCapacity)}
-            </b>
-          </div>
-          <div className="p-2.5 sm:p-3 rounded-[15px] bg-gradient-to-br from-white to-[#d9f1ff] border border-[#b5ddff]">
-            <small className="block text-[10px] font-bold text-[#5a78a1]">สมาชิกที่พบจริง</small>
-            <b className="text-[17px] sm:text-[20px] font-black font-mono tabular-nums text-[#0758d4] block mt-0.5">
-              {fmtNum(currentLayerEntries.length)}
-            </b>
-          </div>
-        </div>
-        <p className="text-[11px] text-[#58769d] leading-relaxed mt-2.5">
-          *จำนวนตำแหน่งเป็นการคำนวณตามโครงสร้าง Binary Tree ทางทฤษฎี (ชั้นที่ n มี 2^n ตำแหน่ง โดยชั้น 0 คือ Root) · ใต้{' '}
-          <strong className="text-[#0754b9]">ID #{effectiveRootId}</strong> ใน Rank {matrixRank}{' '}
-          พบสมาชิกสะสมชั้น 0–15 รวม <strong className="font-mono">{totalSubtreeCount}</strong> รหัส
-        </p>
-      </section>
 
       {/* 2. COMPACT SEARCH POPUP TRIGGER BAR */}
       <section className="mx-1 p-3 sm:p-3.5 rounded-[20px] bg-white/95 border border-[#b8e1ff] shadow-[0_6px_18px_rgba(7,85,181,0.14)]">
@@ -1616,7 +1684,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 onClick={onOpenSwitchId}
                 className="px-2.5 py-1 rounded-xl bg-gradient-to-br from-[#23caff] to-[#0755d7] text-white text-[11px] font-black shadow-xs hover:brightness-105 transition-transform duration-150 cursor-pointer whitespace-nowrap"
               >
-                ⇄ สลับบัญชี
+                ⇄ สลับไอดี
               </button>
             )}
           </div>
@@ -1787,7 +1855,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                     : 'bg-[#f7fbff] text-[#6d8aad] border-[#d3e9ff] hover:bg-[#eff9ff]'
                 }`}
               >
-                ชั้น {n}
+                {n === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${n}`}
                 {cnt > 0 && <span className="ml-1 font-mono opacity-85">({cnt})</span>}
               </button>
             );
@@ -2147,7 +2215,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         {/* Layer caption & Root full detail strip */}
         <div className="mt-3 px-3 py-2 rounded-xl bg-[#edf8ff] border border-[#c6e6ff] text-center text-[10.5px] text-[#35567e]">
           <span className="font-bold text-[#0754b9]">
-            แสดงผัง 5 ชั้น (ชั้น 0 = 1 · ชั้น 1 = 2 · ชั้น 2 = 4 · ชั้น 3 = 8 · ชั้น 4 = 16 · รวม 31 ตำแหน่ง)
+            แสดงผัง 5 ชั้น (ชั้นเริ่มต้น = 1 · ชั้น 1 = 2 · ชั้น 2 = 4 · ชั้น 3 = 8 · ชั้น 4 = 16 · รวม 31 ตำแหน่ง)
           </span>
           {rootNode && (
             <div className="mt-0.5 text-[10px] text-[#4c6f97]">
@@ -2171,11 +2239,11 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         {/* Selected Layer Detail Panel */}
         <div className="flex items-center justify-between gap-2 mt-5 mb-2 flex-wrap">
           <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
-            ชั้นที่ {selectedLayer}
+            {selectedLayer === 0 ? 'ชั้นเริ่มต้น' : `ชั้นที่ ${selectedLayer}`}
           </h3>
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[10.5px] font-bold px-2.5 py-1 rounded-full bg-[#e4f4ff] text-[#0757b8] font-mono tabular-nums">
-              {fmtNum(theoreticalCapacity)} ตำแหน่ง · พบ {currentLayerEntries.length} รหัส
+              {fmtNum(theoreticalCapacity)} จำนวนไอดี · พบ {currentLayerEntries.length} รหัส
             </span>
             {currentLayerEntries.length > 0 && (
               <button
@@ -2187,7 +2255,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 }}
                 className="px-2.5 py-1 rounded-full bg-[#087cf4] hover:bg-[#0568d0] text-white text-[10.5px] font-bold inline-flex items-center gap-1 cursor-pointer shadow-xs"
               >
-                <Users className="w-3 h-3" /> ดูรายชื่อชั้น {selectedLayer}
+                <Users className="w-3 h-3" /> ดูรายชื่อ{selectedLayer === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${selectedLayer}`}
               </button>
             )}
           </div>
@@ -2195,16 +2263,16 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
 
         <div className="p-3 rounded-[16px] bg-[#f4fbff] border border-[#c6e6ff]">
           <b className="text-xs font-black text-[#09275f]">
-            รายละเอียดตำแหน่ง (ชั้นที่ {selectedLayer})
+            รายละเอียดตำแหน่ง ({selectedLayer === 0 ? 'ชั้นเริ่มต้น' : `ชั้นที่ ${selectedLayer}`})
           </b>
           <p className="text-[11px] text-[#58769d] leading-relaxed mt-1">
             {selectedLayer === 0
-              ? `ชั้นที่ 0 เป็นตำแหน่ง Root ของผัง (ID #${effectiveRootId}) · มีตำแหน่งลูกชั้นที่ 1 ซ้าย ${
+              ? `ชั้นเริ่มต้นเป็นตำแหน่ง Root ของผัง (ID #${effectiveRootId}) · มีตำแหน่งลูกชั้นที่ 1 ซ้าย ${
                   leftChildNode ? `#${leftChildNode.id}` : 'ว่าง'
                 } / ขวา ${rightChildNode ? `#${rightChildNode.id}` : 'ว่าง'}`
-              : `ชั้นที่ ${selectedLayer} มีตำแหน่งตามทฤษฎี ${fmtNum(
+              : `ชั้นที่ ${selectedLayer} มีจำนวนไอดีตามทฤษฎี ${fmtNum(
                   theoreticalCapacity
-                )} ตำแหน่ง โดยแต่ละตำแหน่งมีลูกได้สูงสุด 2 ตำแหน่ง · ปัจจุบันพบสมาชิกจริง ${
+                )} รหัส โดยแต่ละตำแหน่งมีลูกได้สูงสุด 2 ตำแหน่ง · ปัจจุบันพบสมาชิกจริง ${
                   currentLayerEntries.length
                 } รหัส`}
           </p>
@@ -2335,7 +2403,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       <section className="mx-1 p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)]">
         <div className="flex items-center justify-between gap-2 mb-3">
           <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
-            📚 เลือกดูชั้น 0–15 (Root → ชั้น 15)
+            📚 เลือกดูชั้นเริ่มต้น–15 (Root → ชั้น 15)
           </h3>
           <small className="text-[10.5px] font-semibold text-[#5a78a1]">
             แตะชั้นที่ต้องการ
@@ -2358,14 +2426,14 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 }`}
               >
                 <b className="block text-[13px] font-black">
-                  ชั้นที่ {n}{n === 0 ? ' (Root)' : ''}
+                  {n === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${n}`}
                 </b>
                 <small
                   className={`block text-[10px] mt-0.5 font-mono tabular-nums ${
                     selected ? 'text-[#e2f8ff]' : 'text-[#5a78a1]'
                   }`}
                 >
-                  {fmtNum(2 ** n)} ตำแหน่งสูงสุด*
+                  {fmtNum(2 ** n)} จำนวนไอดี
                 </small>
                 <small
                   className={`block text-[10px] font-bold mt-0.5 font-mono ${
@@ -2416,14 +2484,19 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
             <thead>
               <tr className="text-left text-[#54749b]">
                 <th className="px-2 py-1.5">ชั้น</th>
-                <th className="px-2 py-1.5">ตำแหน่งสูงสุด*</th>
-                <th className="px-2 py-1.5">ตำแหน่งลูกชั้นถัดไป</th>
+                <th className="px-2 py-1.5">จำนวนไอดี</th>
+                <th className="px-2 py-1.5">รายได้ค่าชั้น</th>
                 <th className="px-2 py-1.5">ข้อมูลสมาชิกจริง (ใต้ #{effectiveRootId})</th>
               </tr>
             </thead>
             <tbody>
               {Array.from({ length: 16 }, (_, idx) => idx).map((n) => {
                 const realEntries = layersMap[n] || [];
+                const rankUnitPrice = RANK_PRICES_USDT[matrixRank - 1] || 5;
+                const levelRateUsdt = Number((rankUnitPrice * 0.02).toFixed(2));
+                const leftPayingCount = realEntries.filter((e) => e.side === 'LEFT').length;
+                const earnedTierUsdt = Number((leftPayingCount * levelRateUsdt).toFixed(2));
+                const maxTierUsdt = n >= 1 ? Number((2 ** (n - 1) * levelRateUsdt).toFixed(2)) : 0;
                 const previewIds = realEntries
                   .slice(0, 3)
                   .map((e) => `#${getMainId(e.node)}${isCloneNode(e.node) ? '(โคลน)' : ''}`)
@@ -2445,7 +2518,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                           : 'bg-[#edf7ff] text-[#0757b8]'
                       }`}
                     >
-                      ชั้น {n}
+                      {n === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${n}`}
                     </td>
                     <td
                       className={`px-2.5 py-2.5 font-mono tabular-nums ${
@@ -2459,7 +2532,22 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                         isRowSelected ? 'bg-[#dff2ff]' : 'bg-[#edf7ff]'
                       }`}
                     >
-                      {n === 15 ? '—' : fmtNum(2 ** (n + 1))}
+                      {n === 0 ? (
+                        <span className="text-[#6d8aad]">—</span>
+                      ) : (
+                        <div className="leading-tight">
+                          <span
+                            className={`font-bold block ${
+                              earnedTierUsdt > 0 ? 'text-emerald-700' : 'text-[#5a78a1]'
+                            }`}
+                          >
+                            {earnedTierUsdt > 0 ? `+${earnedTierUsdt.toFixed(2)} U` : '0.00 U'}
+                          </span>
+                          <span className="text-[9.5px] text-[#6d8aad] block">
+                            เต็ม +{fmtNum(maxTierUsdt)} U
+                          </span>
+                        </div>
+                      )}
                     </td>
                     <td
                       className={`px-2.5 py-2.5 rounded-r-[10px] ${
@@ -2563,8 +2651,8 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-[#09265f]">
                     {layerPopupModal === 'all'
-                      ? `👥 ข้อมูลสมาชิกจริง (ชั้น 0–15 · Rank ${matrixRank} · ใต้ #${effectiveRootId})`
-                      : `👥 ข้อมูลสมาชิกจริง — ชั้นที่ ${layerPopupModal} (Rank ${matrixRank} · ใต้ #${effectiveRootId})`}
+                      ? `👥 ข้อมูลสมาชิกจริง (ชั้นเริ่มต้น–15 · Rank ${matrixRank} · ใต้ #${effectiveRootId})`
+                      : `👥 ข้อมูลสมาชิกจริง — ${layerPopupModal === 0 ? 'ชั้นเริ่มต้น' : `ชั้นที่ ${layerPopupModal}`} (Rank ${matrixRank} · ใต้ #${effectiveRootId})`}
                   </h3>
                   <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
                     แสดง ID · สถานะไอดี (Main / Auto / Clone / Extra) · ผู้แนะนำตรง

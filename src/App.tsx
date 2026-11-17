@@ -19,7 +19,8 @@ export default function App() {
   const [language, setLanguage] = useState<'th' | 'en'>('th');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
-      const saved = window.localStorage.getItem('f27_theme_mode');
+      window.localStorage.removeItem('f27_theme_mode');
+      const saved = window.localStorage.getItem('f27_theme_pref_v2');
       if (saved === 'dark' || saved === 'light') return saved;
     }
     return 'light';
@@ -61,12 +62,17 @@ export default function App() {
       } else {
         root.classList.remove('dark');
       }
-      window.localStorage.setItem('f27_theme_mode', theme);
     }
   }, [theme]);
 
   const toggleTheme = () => {
-    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
+    setTheme((prev) => {
+      const next = prev === 'light' ? 'dark' : 'light';
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem('f27_theme_pref_v2', next);
+      }
+      return next;
+    });
   };
 
   const {

@@ -8305,6 +8305,13 @@ async function startApp() {
         amountUsdt: number;
         poolType: 'UPGRADE_POOL' | 'AUTO_ID_POOL' | 'EXTRA_ID_POOL';
         poolLabelTh: string;
+        fromNodeId?: number;
+        fromMainId?: number;
+        fromNodeType?: string;
+        sourceStatusTh?: string;
+        toNodeId?: number;
+        toMainId?: number;
+        targetStatusTh?: string;
         descriptionTh: string;
         note: string;
         poolBalanceAfterUsdt: number;
@@ -9510,6 +9517,22 @@ async function startApp() {
           }
 
           const rawMs = new Date(inf.timestamp).getTime() || 0;
+          const srcTypeText = String(inf.fromNodeType || '').trim();
+          const sourceStatusTh = srcTypeText.startsWith('โคลน')
+            ? 'Clone ID (โคลนนิ่ง)'
+            : srcTypeText.startsWith('Extra')
+            ? 'Extra ID'
+            : srcTypeText.startsWith('Auto ID')
+            ? 'Auto ID'
+            : 'Main ID';
+          const sourceIdDisplay =
+            srcTypeText ||
+            (inf.fromMainId && inf.fromNodeId && inf.fromMainId !== inf.fromNodeId
+              ? `Main #${inf.fromMainId} (R${inf.rank}-#${inf.fromNodeId})`
+              : inf.fromNodeId
+              ? `Main #${inf.fromMainId || inf.fromNodeId} (R${inf.rank}-#${inf.fromNodeId})`
+              : `Rank ${inf.rank}`);
+          const targetNodeTxt = inf.toNodeId ? `ใต้ #${inf.toNodeId}` : '';
           inflowItems.push({
             id: `v-in-${rep.id}-${inflowItems.length + 1}`,
             timestamp: inf.timestamp,
@@ -9520,7 +9543,14 @@ async function startApp() {
             amountUsdt: inf.amountUsdt,
             poolType: pType,
             poolLabelTh: pLabel,
-            descriptionTh: `รับ 35% Vault (+${inf.amountUsdt.toFixed(2)} USDT) จากเม็ดซ้ายใน Rank ${inf.rank} สะสมเข้า ${pLabel}`,
+            fromNodeId: Number(inf.fromNodeId || 0),
+            fromMainId: Number(inf.fromMainId || 0),
+            fromNodeType: sourceIdDisplay,
+            sourceStatusTh,
+            toNodeId: Number(inf.toNodeId || 0),
+            toMainId: Number(inf.toMainId || rep.id),
+            targetStatusTh: `สะสมเข้า ${pLabel}`,
+            descriptionTh: `รับ 35% Vault (+${inf.amountUsdt.toFixed(2)} USDT) จาก ${sourceIdDisplay} [${sourceStatusTh}] · วางเม็ดซ้าย${targetNodeTxt ? ` ${targetNodeTxt}` : ''} ใน Rank ${inf.rank} · สะสมเข้า ${pLabel}`,
             note: inf.note,
             poolBalanceAfterUsdt: 0,
             balanceAfterUsdt: 0,
@@ -9569,6 +9599,13 @@ async function startApp() {
             amountUsdt: autoIdCost,
             poolType: 'AUTO_ID_POOL',
             poolLabelTh: 'Auto ID Pool',
+            fromNodeId: rep.id,
+            fromMainId: rep.id,
+            fromNodeType: `Auto ID #${sp.id}`,
+            sourceStatusTh: 'หักจาก Auto ID Pool',
+            toNodeId: sp.id,
+            toMainId: sp.id,
+            targetStatusTh: `สร้าง Auto ID #${sp.id} สำเร็จ`,
             descriptionTh: `หัก ${autoIdCost.toFixed(2)} USDT จาก Auto ID Pool สร้าง ${sp.label} วางผัง Rank 1`,
             note: `สร้าง Auto ID สำเร็จ (ID #${sp.id})`,
             poolBalanceAfterUsdt: 0,
@@ -9597,6 +9634,13 @@ async function startApp() {
             amountUsdt: cost,
             poolType: 'EXTRA_ID_POOL',
             poolLabelTh: 'Extra ID Pool',
+            fromNodeId: rep.id,
+            fromMainId: rep.id,
+            fromNodeType: sp.label,
+            sourceStatusTh: 'หักจาก Extra ID Pool',
+            toNodeId: sp.id,
+            toMainId: rep.id,
+            targetStatusTh: `สร้าง ${sp.label} สำเร็จ`,
             descriptionTh: `หัก ${cost.toFixed(2)} USDT จาก Extra ID Pool สร้าง ${sp.label} ในผัง Rank ${sp.rank}`,
             note: `สร้าง Extra ID สำเร็จ (ID #${sp.id})`,
             poolBalanceAfterUsdt: 0,
@@ -9642,6 +9686,13 @@ async function startApp() {
               amountUsdt: amtToDeduct,
               poolType: 'UPGRADE_POOL',
               poolLabelTh: 'Upgrade Pool',
+              fromNodeId: rep.id,
+              fromMainId: rep.id,
+              fromNodeType: `Main #${rep.id} (R${rn.rank}-#${rn.nodeId})`,
+              sourceStatusTh: 'หักจาก Upgrade Pool',
+              toNodeId: rn.nodeId,
+              toMainId: rep.id,
+              targetStatusTh: `อัปเกรด R${prevR} → R${rn.rank} สำเร็จ`,
               descriptionTh: `หัก ${amtToDeduct.toFixed(2)} USDT จาก Upgrade Pool เพื่ออัปเกรด Main #${rep.id} จาก Rank ${prevR} สู่ Rank ${rn.rank}`,
               note: `อัปเกรดสู่ Rank ${rn.rank} สำเร็จ`,
               poolBalanceAfterUsdt: 0,
@@ -9665,6 +9716,13 @@ async function startApp() {
               amountUsdt: remUpToAllocate,
               poolType: 'UPGRADE_POOL',
               poolLabelTh: 'Upgrade Pool',
+              fromNodeId: rep.id,
+              fromMainId: rep.id,
+              fromNodeType: `Main #${rep.id}`,
+              sourceStatusTh: 'หักจาก Upgrade Pool',
+              toNodeId: rep.id,
+              toMainId: rep.id,
+              targetStatusTh: 'อัปเกรดแรงค์สำเร็จ',
               descriptionTh: `หัก ${remUpToAllocate.toFixed(2)} USDT จาก Upgrade Pool เพื่อสะสมอัปเกรดแรงค์`,
               note: 'อัปเกรดแรงค์สำเร็จ',
               poolBalanceAfterUsdt: 0,
