@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { RefreshCw, Search, ArrowLeft, ExternalLink, ArrowUp, X, Users, ChevronDown } from 'lucide-react';
+import { RefreshCw, Search, ArrowLeft, ExternalLink, ArrowUp, X, Users, ChevronDown, Coins } from 'lucide-react';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
 import { RANK_PRICES_USDT } from '../contracts/config';
 
@@ -93,6 +93,64 @@ interface Dashboard2MatrixPanelProps {
 }
 
 const fmtNum = (n: number): string => n.toLocaleString('en-US');
+
+const MATRIX_ORB_LEGEND_ITEMS = [
+  {
+    key: 'owner',
+    label: 'เจ้าของผัง / สายเลือดใต้เจ้าของผัง',
+    desc: 'รหัสหลักเจ้าของผังและสมาชิกในสายเลือดใต้เจ้าของผัง',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border border-[#9cbcd6]/80 shadow-[0_0_5px_rgba(115,175,230,0.28)]',
+  },
+  {
+    key: 'clone_owner',
+    label: 'Clone ID (เจ้าของผัง)',
+    desc: 'รหัสโคลนนิ่งของเจ้าของผังที่เกิดจากเม็ดขวา 100%',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_28%,#c1e2d0_58%,#55866d_100%)] border border-[#8fc4a9]/80 shadow-[0_0_5px_rgba(80,210,145,0.28)]',
+  },
+  {
+    key: 'auto_owner',
+    label: 'Auto ID (เจ้าของผัง)',
+    desc: 'รหัสอัตโนมัติของเจ้าของผังที่แตกจาก Auto ID Pool',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#f8f5ea_28%,#e3dec3_58%,#8d8356_100%)] border border-[#cfc698]/80 shadow-[0_0_5px_rgba(220,200,115,0.28)]',
+  },
+  {
+    key: 'extra_owner',
+    label: 'Extra ID (เจ้าของผัง)',
+    desc: 'รหัสพิเศษของเจ้าของผังที่แตกจาก Extra ID Pool',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_28%,#e2c1c7_58%,#8f5661_100%)] border border-[#d4a5ae]/80 shadow-[0_0_5px_rgba(220,125,145,0.28)]',
+  },
+  {
+    key: 'root_one',
+    label: 'เฉพาะรหัส #1 / โคลน #1',
+    desc: 'รหัส #1 และโคลนนิ่งของรหัส #1 ในระบบ',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#ebd6ff_26%,#c58aff_56%,#7022c4_100%)] border border-[#d8b4fe]/85 shadow-[0_0_5px_rgba(168,85,247,0.28)]',
+  },
+  {
+    key: 'upline_clone',
+    label: 'โคลนนิ่งอัพไลน์ในสายเลือด',
+    desc: 'โคลนนิ่งจากอัพไลน์ในสายเลือดเดียวกันที่ตกลงมาในผัง',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#eef8ff_0%,#8ad0ff_26%,#3da3f5_56%,#0f4e99_100%)] border border-[#8ad0ff]/80 shadow-[0_0_5px_rgba(56,178,255,0.28)]',
+  },
+  {
+    key: 'other_line',
+    label: 'รหัสที่ไม่ได้อยู่ในสายเลือด',
+    desc: 'รหัสที่มาจากสายงานอื่นนอกสายเลือดเจ้าของผัง',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#fff8c2_0%,#fbd966_28%,#e3ab25_58%,#8d5905_100%)] border border-[#f2c95c]/80 shadow-[0_0_5px_rgba(245,180,35,0.28)]',
+  },
+  {
+    key: 'empty',
+    label: 'ว่าง / รอสมาชิก',
+    desc: 'ตำแหน่งว่างที่พร้อมรับสมาชิกใหม่หรือโคลนนิ่งถัดไป',
+    orbClass: 'bg-[#f4f8fd] border-2 border-dashed border-[#8fb6db]',
+  },
+] as const;
 
 const shortAddr = (addr?: string): string => {
   if (!addr || addr === '0x0000000000000000000000000000000000000000') return '—';
@@ -200,6 +258,8 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   const [searchTab, setSearchTab] = useState<'all' | 'main' | 'clone' | 'extra' | 'auto' | 'tree'>('all');
   const [pendingFocusOriginMainId, setPendingFocusOriginMainId] = useState<number | null>(null);
   const [layerPopupModal, setLayerPopupModal] = useState<number | 'all' | null>(null);
+  const [incomeSourceModalLayer, setIncomeSourceModalLayer] = useState<number | null>(null);
+  const [isLegendModalOpen, setIsLegendModalOpen] = useState<boolean>(false);
   const [popupTypeFilter, setPopupTypeFilter] = useState<'ALL' | 'MAIN' | 'AUTO' | 'CLONE' | 'EXTRA'>('ALL');
   const [popupSearch, setPopupSearch] = useState<string>('');
   const treeScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -1837,75 +1897,14 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           )}
         </div>
 
-        {/* Quick 0..15 Layer Chips */}
-        <div className="flex gap-1.5 flex-wrap">
-          {Array.from({ length: 16 }, (_, idx) => idx).map((n) => {
-            const active = selectedLayer === n;
-            const cnt = (layersMap[n] || []).length;
-            return (
-              <button
-                key={`ql-${n}`}
-                type="button"
-                onClick={() => chooseLayer(n)}
-                className={`px-2.5 py-1.5 rounded-[12px] text-[11px] font-bold border transition cursor-pointer whitespace-nowrap ${
-                  active
-                    ? 'bg-gradient-to-r from-[#22caff] to-[#0758d4] text-white border-[#25caff] shadow-sm'
-                    : cnt > 0
-                    ? 'bg-[#eff9ff] text-[#0753ae] border-[#9fcfff] hover:bg-[#dff3ff]'
-                    : 'bg-[#f7fbff] text-[#6d8aad] border-[#d3e9ff] hover:bg-[#eff9ff]'
-                }`}
-              >
-                {n === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${n}`}
-                {cnt > 0 && <span className="ml-1 font-mono opacity-85">({cnt})</span>}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Legend (7 Spherical Orb Categories + Empty) */}
-        <div className="flex gap-2 flex-wrap text-[10px] font-bold text-[#35567e] mt-3">
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border border-[#9cbcd6]/80 shadow-[0_0_5px_rgba(115,175,230,0.28)]" />
-            เจ้าของผัง / สายเลือดใต้เจ้าของผัง
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_28%,#c1e2d0_58%,#55866d_100%)] border border-[#8fc4a9]/80 shadow-[0_0_5px_rgba(80,210,145,0.28)]" />
-            Clone ID (เจ้าของผัง)
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#f8f5ea_28%,#e3dec3_58%,#8d8356_100%)] border border-[#cfc698]/80 shadow-[0_0_5px_rgba(220,200,115,0.28)]" />
-            Auto ID (เจ้าของผัง)
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_28%,#e2c1c7_58%,#8f5661_100%)] border border-[#d4a5ae]/80 shadow-[0_0_5px_rgba(220,125,145,0.28)]" />
-            Extra ID (เจ้าของผัง)
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#ebd6ff_26%,#c58aff_56%,#7022c4_100%)] border border-[#d8b4fe]/85 shadow-[0_0_5px_rgba(168,85,247,0.28)]" />
-            เฉพาะรหัส #1 / โคลน #1
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#eef8ff_0%,#8ad0ff_26%,#3da3f5_56%,#0f4e99_100%)] border border-[#8ad0ff]/80 shadow-[0_0_5px_rgba(56,178,255,0.28)]" />
-            โคลนนิ่งอัพไลน์ในสายเลือด
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[radial-gradient(circle_at_30%_24%,#fff8c2_0%,#fbd966_28%,#e3ab25_58%,#8d5905_100%)] border border-[#f2c95c]/80 shadow-[0_0_5px_rgba(245,180,35,0.28)]" />
-            รหัสที่ไม่ได้อยู่ในสายเลือด
-          </span>
-          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-[#f5f9fe] border border-[#cde3f8]">
-            <i className="inline-block w-4 h-4 rounded-full bg-[#f4f8fd] border-2 border-dashed border-[#8fb6db]" />
-            ว่าง / รอสมาชิก
-          </span>
-        </div>
-
-        {/* Up/Reset & Auto-Size Navigation */}
-        <div className="mt-3 flex items-center justify-between gap-2 flex-wrap">
+        {/* Unified Up/Reset, Consolidated Legend Button & Auto-Size Navigation */}
+        <div className="mt-2.5 flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
             {rootNode && rootNode.parentId > 0 && nodeMap.has(Number(rootNode.parentId)) && (
               <button
                 type="button"
                 onClick={() => focusNodeAsRoot(Number(rootNode.parentId))}
-                className="px-2.5 py-1 rounded-lg bg-[#eff8ff] border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] inline-flex items-center gap-1 cursor-pointer"
+                className="px-2.5 py-1.5 rounded-lg bg-[#eff8ff] border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
               >
                 <ArrowUp className="w-3 h-3" /> ขึ้นไปอัพไลน์ #{rootNode.parentId}
               </button>
@@ -1914,17 +1913,31 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <button
                 type="button"
                 onClick={() => focusNodeAsRoot(defaultRootId)}
-                className="px-2.5 py-1 rounded-lg bg-white border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] cursor-pointer"
+                className="px-2.5 py-1.5 rounded-lg bg-white border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] cursor-pointer whitespace-nowrap shrink-0"
               >
                 ↺ กลับไป ROOT #{defaultRootId}
               </button>
             )}
           </div>
-          <div className="flex items-center gap-1.5 ml-auto">
+          <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+            <button
+              type="button"
+              onClick={() => setIsLegendModalOpen(true)}
+              className="px-2.5 py-1.5 rounded-lg bg-[#f4faff] hover:bg-[#e5f3ff] border border-[#a5d6ff] text-[10.5px] font-bold text-[#0754b9] cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition"
+              title="เปิดดูความหมายสีลูกแก้วทั้ง 8 ประเภท"
+            >
+              <span className="inline-flex items-center -space-x-1" aria-hidden="true">
+                {MATRIX_ORB_LEGEND_ITEMS.slice(0, 7).map((item) => (
+                  <i key={`mini-orb-${item.key}`} className={`inline-block w-2.5 h-2.5 rounded-full ${item.orbClass}`} />
+                ))}
+                <i className="inline-block w-2.5 h-2.5 rounded-full bg-[#f4f8fd] border border-dashed border-[#6d98c4]" />
+              </span>
+              <span>คำอธิบายสี (8)</span>
+            </button>
             <button
               type="button"
               onClick={() => setAutoFitSize((prev) => !prev)}
-              className={`px-2.5 py-1 rounded-lg border text-[10.5px] font-bold cursor-pointer transition ${
+              className={`px-2.5 py-1.5 rounded-lg border text-[10.5px] font-bold cursor-pointer transition whitespace-nowrap shrink-0 ${
                 autoFitSize
                   ? 'bg-[#087cf4] text-white border-[#087cf4] shadow-xs'
                   : 'bg-[#eff8ff] hover:bg-[#dff1ff] text-[#0754b9] border-[#a5d6ff]'
@@ -1936,7 +1949,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <button
                 type="button"
                 onClick={centerTreeViewport}
-                className="px-2.5 py-1 rounded-lg bg-[#eff8ff] hover:bg-[#dff1ff] border border-[#a5d6ff] text-[10.5px] font-bold text-[#0754b9] cursor-pointer"
+                className="px-2.5 py-1.5 rounded-lg bg-[#eff8ff] hover:bg-[#dff1ff] border border-[#a5d6ff] text-[10.5px] font-bold text-[#0754b9] cursor-pointer whitespace-nowrap shrink-0"
               >
                 🎯 จัดกึ่งกลางผัง
               </button>
@@ -2485,7 +2498,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <tr className="text-left text-[#54749b]">
                 <th className="px-2 py-1.5">ชั้น</th>
                 <th className="px-2 py-1.5">จำนวนไอดี</th>
-                <th className="px-2 py-1.5">รายได้ค่าชั้น</th>
+                <th className="px-2 py-1.5">รายได้ค่าชั้นฝั่งซ้าย</th>
                 <th className="px-2 py-1.5">ข้อมูลสมาชิกจริง (ใต้ #{effectiveRootId})</th>
               </tr>
             </thead>
@@ -2535,18 +2548,44 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                       {n === 0 ? (
                         <span className="text-[#6d8aad]">—</span>
                       ) : (
-                        <div className="leading-tight">
-                          <span
-                            className={`font-bold block ${
-                              earnedTierUsdt > 0 ? 'text-emerald-700' : 'text-[#5a78a1]'
-                            }`}
-                          >
-                            {earnedTierUsdt > 0 ? `+${earnedTierUsdt.toFixed(2)} U` : '0.00 U'}
-                          </span>
-                          <span className="text-[9.5px] text-[#6d8aad] block">
-                            เต็ม +{fmtNum(maxTierUsdt)} U
-                          </span>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            chooseLayer(n);
+                            setIncomeSourceModalLayer(n);
+                          }}
+                          title={`กดเพื่อดูที่มารายได้ค่าชั้นฝั่งซ้าย ชั้น ${n}`}
+                          className={`w-full text-left px-2 py-1 -mx-1 rounded-lg border transition cursor-pointer group ${
+                            earnedTierUsdt > 0
+                              ? 'bg-emerald-50/90 hover:bg-emerald-100 border-emerald-200'
+                              : 'bg-white/75 hover:bg-white border-[#c6e3ff]'
+                          }`}
+                        >
+                          <div className="leading-tight flex items-center justify-between gap-1">
+                            <div>
+                              <span
+                                className={`font-bold block ${
+                                  earnedTierUsdt > 0 ? 'text-emerald-700' : 'text-[#5a78a1]'
+                                }`}
+                              >
+                                {earnedTierUsdt > 0 ? `+${earnedTierUsdt.toFixed(2)} U` : '0.00 U'}
+                              </span>
+                              <span className="text-[9.5px] text-[#6d8aad] block">
+                                เต็ม +{fmtNum(maxTierUsdt)} U
+                              </span>
+                            </div>
+                            <span
+                              className={`text-[9.5px] font-sans font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                                earnedTierUsdt > 0
+                                  ? 'bg-emerald-600 text-white group-hover:bg-emerald-700'
+                                  : 'bg-[#e3f2ff] text-[#0754b9] group-hover:bg-[#cde8ff]'
+                              }`}
+                            >
+                              ที่มา ›
+                            </span>
+                          </div>
+                        </button>
                       )}
                     </td>
                     <td
@@ -2590,7 +2629,8 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         </div>
 
         <p className="text-[11px] text-[#58769d] leading-relaxed mt-2">
-          กดปุ่ม <strong className="text-[#0754b9]">ดูข้อมูลสมาชิก</strong> ในคอลัมน์ข้อมูลสมาชิกจริง เพื่อเปิดป๊อปอัพแสดง ID, สถานะไอดี และผู้แนะนำของแต่ละรหัส
+          กดที่ช่อง <strong className="text-emerald-700">รายได้ค่าชั้นฝั่งซ้าย</strong> เพื่อดูป๊อปอัพที่มารายได้ หรือกดปุ่ม{' '}
+          <strong className="text-[#0754b9]">ดูข้อมูลสมาชิก</strong> เพื่อเปิดดูรายละเอียด ID, สถานะไอดี และผู้แนะนำของแต่ละรหัส
         </p>
       </section>
 
@@ -2881,6 +2921,336 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           </div>
         );
       })()}
+
+      {/* POPUP MODAL: LEFT-SIDE LEVEL INCOME SOURCES BY LAYER */}
+      {incomeSourceModalLayer !== null && (() => {
+        const layerNum = incomeSourceModalLayer;
+        const layerEntries: LayerNodeEntry[] = layersMap[layerNum] || [];
+        const leftEntries = layerEntries.filter((e) => e.side === 'LEFT');
+        const rightEntries = layerEntries.filter((e) => e.side === 'RIGHT');
+        const rankUnitPrice = RANK_PRICES_USDT[matrixRank - 1] || 5;
+        const levelRateUsdt = Number((rankUnitPrice * 0.02).toFixed(2));
+        const earnedTierUsdt = Number((leftEntries.length * levelRateUsdt).toFixed(2));
+        const maxTierUsdt =
+          layerNum >= 1 ? Number((2 ** (layerNum - 1) * levelRateUsdt).toFixed(2)) : 0;
+
+        const rootNodeObj = nodeMap.get(effectiveRootId);
+        const rootMainId = getMainId(rootNodeObj, effectiveRootId);
+        const rootReport = allReports.find((r) => Number(r.id) === rootMainId);
+        const rootLevelHistory: any[] = Array.isArray(rootReport?.level30History)
+          ? rootReport.level30History
+          : [];
+
+        const findLevelHistoryRecord = (fromNodeId: number) =>
+          rootLevelHistory.find(
+            (h: any) =>
+              Number(h.rank || 1) === matrixRank &&
+              Number(h.fromNodeId || 0) === fromNodeId &&
+              (Number(h.toNodeId || 0) === 0 || Number(h.toNodeId) === effectiveRootId)
+          ) ||
+          rootLevelHistory.find(
+            (h: any) => Number(h.rank || 1) === matrixRank && Number(h.fromNodeId || 0) === fromNodeId
+          );
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+            onClick={() => setIncomeSourceModalLayer(null)}
+          >
+            <div
+              className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Modal Header */}
+              <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
+                <div>
+                  <h3 className="text-base sm:text-lg font-black text-[#09265f] flex items-center gap-1.5">
+                    <Coins className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <span>
+                      ที่มารายได้ค่าชั้นฝั่งซ้าย — ชั้นที่ {layerNum} (Rank {matrixRank})
+                    </span>
+                  </h3>
+                  <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
+                    ใต้ ID #{effectiveRootId} · ค่าชั้น 2% ของราคา Rank {matrixRank} ({fmtNum(rankUnitPrice)} U) = +{levelRateUsdt.toFixed(2)} U / รหัสฝั่งซ้าย
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIncomeSourceModalLayer(null)}
+                  className="p-1.5 rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
+                  aria-label="ปิดหน้าต่าง"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Quick Layer Switcher (Layers 1–15) */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                {Array.from({ length: 15 }, (_, idx) => idx + 1).map((lNum) => {
+                  const lEntries = layersMap[lNum] || [];
+                  const lLeftCount = lEntries.filter((e) => e.side === 'LEFT').length;
+                  if (lEntries.length === 0 && lNum !== layerNum) return null;
+                  const active = lNum === layerNum;
+                  return (
+                    <button
+                      key={`inc-src-layer-${lNum}`}
+                      type="button"
+                      onClick={() => {
+                        chooseLayer(lNum);
+                        setIncomeSourceModalLayer(lNum);
+                      }}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer ${
+                        active
+                          ? 'bg-emerald-600 text-white border-emerald-600'
+                          : 'bg-white text-[#0756bc] border-[#b8e5ff] hover:bg-[#eef8ff]'
+                      }`}
+                    >
+                      ชั้น {lNum} (+{(lLeftCount * levelRateUsdt).toFixed(2)} U)
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Summary Strip */}
+              <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                  <div className="text-[10px] text-[#55769b]">รายได้ชั้นที่ {layerNum}</div>
+                  <strong className="text-base font-black text-emerald-700 font-mono">
+                    +{earnedTierUsdt.toFixed(2)} U
+                  </strong>
+                  <div className="text-[10px] text-[#5a78a1]">เต็ม +{fmtNum(maxTierUsdt)} U</div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                  <div className="text-[10px] text-[#55769b]">ฝั่งซ้าย (จ่าย 2%)</div>
+                  <strong className="text-base font-black text-[#0754b9] font-mono">
+                    {leftEntries.length} รหัส
+                  </strong>
+                  <div className="text-[10px] text-[#5a78a1]">+{levelRateUsdt.toFixed(2)} U/รหัส</div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                  <div className="text-[10px] text-[#55769b]">ฝั่งขวา (Rebirth/ระบบ)</div>
+                  <strong className="text-base font-black text-[#35567e] font-mono">
+                    {rightEntries.length} รหัส
+                  </strong>
+                  <div className="text-[10px] text-[#5a78a1]">ไม่คิดเป็นค่าชั้น 2%</div>
+                </div>
+              </div>
+
+              {/* Paying Left-Side Entries List */}
+              {leftEntries.length === 0 ? (
+                <div className="p-5 text-center rounded-2xl bg-white border border-[#b8e5ff] text-xs font-semibold text-[#54759c] space-y-1">
+                  <div>ยังไม่มีสมาชิกฝั่งซ้ายในชั้นที่ {layerNum} (รายได้ปัจจุบัน 0.00 U)</div>
+                  <div className="text-[11px] text-[#6d8aad]">
+                    รายได้ค่าชั้นจะเกิดจากรหัสที่วางในตำแหน่งฝั่งซ้าย (2% ของราคา Rank {matrixRank})
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+                  <div className="text-[11px] font-black text-[#09265f] px-0.5">
+                    รายการไอดีที่สร้างรายได้ค่าชั้นฝั่งซ้าย ({leftEntries.length} รหัส)
+                  </div>
+                  {leftEntries.map((entry) => {
+                    const n = entry.node;
+                    const tag = getShortTypeTag(n);
+                    const mainIdNum = getMainId(n);
+                    const isClone = isCloneNode(n);
+                    const totalClonesForMain = isClone
+                      ? (cloneIdsByMainId.get(mainIdNum) || []).length
+                      : 0;
+                    const cloneSeq = isClone ? cloneSeqByNodeId.get(Number(n.id)) || 0 : 0;
+                    const statusLabel = isClone
+                      ? cloneSeq > 0
+                        ? `โคลนนิ่ง · ครั้งที่ ${cloneSeq}`
+                        : 'โคลนนิ่ง'
+                      : getNodeTypeLabel(n);
+                    const detailStatusLabel = isClone
+                      ? `โคลนนิ่ง${cloneSeq > 0 ? ` ครั้งที่ ${cloneSeq}` : ''} ของ #${mainIdNum} (ทั้งหมด ${totalClonesForMain} ครั้ง · โหนด #${n.id})`
+                      : n.id !== mainIdNum
+                      ? `${statusLabel} (โหนด #${n.id})`
+                      : statusLabel;
+                    const originNode = n.originMainId
+                      ? nodeMap.get(Number(n.originMainId))
+                      : undefined;
+                    const sponsorId =
+                      Number(n.directSponsorNodeId || 0) > 0
+                        ? Number(n.directSponsorNodeId)
+                        : Number(originNode?.directSponsorNodeId || 0);
+                    const sponsorNode = sponsorId > 0 ? nodeMap.get(sponsorId) : undefined;
+                    const sponsorStatus = sponsorNode ? getShortTypeTag(sponsorNode) : '';
+                    const matchedHistory = findLevelHistoryRecord(Number(n.id));
+                    const badgeClass =
+                      tag === 'AUTO'
+                        ? 'bg-amber-100 text-amber-800 border-amber-300'
+                        : tag === 'EXTRA'
+                        ? 'bg-fuchsia-100 text-fuchsia-800 border-fuchsia-300'
+                        : tag === 'CLONE'
+                        ? 'bg-sky-100 text-sky-800 border-sky-300'
+                        : 'bg-emerald-100 text-emerald-800 border-emerald-300';
+
+                    return (
+                      <div
+                        key={`inc-src-left-${layerNum}-${n.id}`}
+                        className="p-3 rounded-xl bg-white border border-[#b8e5ff] flex items-start justify-between gap-2.5 text-xs shadow-2xs"
+                      >
+                        <div className="min-w-0 space-y-1 flex-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-mono font-black text-sm text-[#0754b9]">
+                              ID #{mainIdNum}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold border ${badgeClass}`}
+                            >
+                              {statusLabel}
+                            </span>
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono text-[10px] font-bold">
+                              ซ้ายใต้ #{entry.parentId}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] bg-[#f5fbff] px-2.5 py-1.5 rounded-lg border border-[#d7edff]">
+                            <div>
+                              <span className="text-[#5a78a1] font-semibold">สถานะไอดี: </span>
+                              <strong className="text-[#09265f]">{detailStatusLabel}</strong>
+                            </div>
+                            <div>
+                              <span className="text-[#5a78a1] font-semibold">ผู้แนะนำ: </span>
+                              <strong className="font-mono text-[#0754b9]">
+                                {sponsorId > 0 ? `#${sponsorId}` : '—'}
+                              </strong>
+                              {sponsorStatus && (
+                                <span className="ml-1 text-[10px] text-[#54759c]">
+                                  ({sponsorStatus})
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-[10px] font-mono text-[#6283aa] flex items-center gap-2 flex-wrap">
+                            <span>Wallet: {shortAddr(n.owner)}</span>
+                            <span>· ชั้นที่ {layerNum} (Rank {matrixRank})</span>
+                            {matchedHistory?.timestamp && (
+                              <span>
+                                · {new Date(matchedHistory.timestamp).toLocaleString('th-TH')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col items-end gap-1.5 shrink-0">
+                          <strong className="text-sm font-black font-mono text-emerald-700">
+                            +{Number(matchedHistory?.amountUsdt || levelRateUsdt).toFixed(2)} U
+                          </strong>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              focusNodeAsRoot(Number(n.id));
+                              setIncomeSourceModalLayer(null);
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-[#087cf4] hover:bg-[#0568d0] text-white text-[10.5px] font-bold cursor-pointer whitespace-nowrap"
+                          >
+                            เปิดผัง #{n.id}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Right-side info note if present in this layer */}
+              {rightEntries.length > 0 && (
+                <div className="p-2.5 rounded-xl bg-white/80 border border-[#cde7ff] text-[11px] text-[#45668f] space-y-1">
+                  <div className="font-bold text-[#09265f]">
+                    สมาชิกฝั่งขวาในชั้นที่ {layerNum} ({rightEntries.length} รหัส — ไม่คิดเป็นค่าชั้น 2%):
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {rightEntries.map((entry) => {
+                      const n = entry.node;
+                      const mId = getMainId(n);
+                      const tag = getShortTypeTag(n);
+                      return (
+                        <button
+                          key={`inc-src-right-${layerNum}-${n.id}`}
+                          type="button"
+                          onClick={() => {
+                            focusNodeAsRoot(Number(n.id));
+                            setIncomeSourceModalLayer(null);
+                          }}
+                          className="px-2 py-0.5 rounded-lg bg-[#edf7ff] hover:bg-[#dceeff] border border-[#b8e0ff] text-[10.5px] font-mono font-bold text-[#0754b9] cursor-pointer"
+                        >
+                          #{mId} ({tag}) · ขวาใต้ #{entry.parentId}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* POPUP MODAL: MATRIX SPHERICAL ORB COLOR LEGEND */}
+      {isLegendModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={() => setIsLegendModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg max-h-[86vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e8f5ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
+              <div>
+                <h3 className="text-base font-black text-[#09265f]">
+                  ความหมายสีลูกแก้วในผัง Matrix (8 ประเภท)
+                </h3>
+                <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
+                  ใช้แยกสถานะของแต่ละรหัสและสายเลือดบนโครงสร้าง Matrix
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLegendModalOpen(false)}
+                className="p-1.5 rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
+                aria-label="ปิดหน้าต่างคำอธิบายสี"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {MATRIX_ORB_LEGEND_ITEMS.map((item) => (
+                <div
+                  key={`legend-modal-${item.key}`}
+                  className="p-2.5 rounded-xl bg-white border border-[#cde7ff] flex items-start gap-2.5"
+                >
+                  <i
+                    className={`inline-block w-6 h-6 rounded-full shrink-0 mt-0.5 ${item.orbClass}`}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-extrabold text-[#09265f] leading-snug">
+                      {item.label}
+                    </div>
+                    <p className="text-[11px] text-[#4f7097] leading-snug mt-0.5">
+                      {item.desc}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsLegendModalOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#22caff] to-[#0758d4] text-white text-xs font-bold cursor-pointer hover:brightness-105"
+            >
+              ปิดหน้าต่าง
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* SEARCH POPUP MODAL (MAIN / CLONE / EXTRA / AUTO / MATRIX NODES) */}
       {isSearchModalOpen && (
