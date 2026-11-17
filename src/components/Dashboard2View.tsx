@@ -103,6 +103,7 @@ type DetailModalKey =
   | null
   | 'switch_id'
   | 'members'
+  | 'ranks_18'
   | 'upgrade'
   | 'wallet'
   | 'vault'
@@ -1531,6 +1532,115 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
 
   const allSellPools: any[] = activeReport?.allSellQualification?.pools || [];
 
+  const renderRankCard = (n: number, keyPrefix: 'inline' | 'modal' = 'inline') => {
+    const isCurrent = n === currentRank;
+    const isUnlocked = n < currentRank;
+    const priceUsdt = RANK_PRICES_USDT[n - 1] || 5;
+    const membersInRankSystem = Number(rankCounts[n] ?? 0);
+    const idRankObj = idMembersByRank.get(n);
+    const idMembersInRank = idRankObj ? Number(idRankObj.totalMembersInRank ?? 0) : null;
+    const req = ALLSELL_DIRECT_REQUIREMENTS[n];
+    const matchingPool = allSellPools.find((p) => Number(p.targetRank) === n);
+
+    return (
+      <article
+        key={`d2-${keyPrefix}-rank-${n}`}
+        onClick={() => openDashboard2Matrix(n)}
+        className={`rounded-[16px] p-2.5 sm:p-3 min-w-0 cursor-pointer transition-transform duration-150 hover:-translate-y-0.5 active:scale-[0.98] ${
+          isCurrent
+            ? 'bg-gradient-to-br from-[#087cf4] to-[#0646b3] border border-[#5ddcff] text-white shadow-[0_5px_14px_rgba(8,101,215,0.47)]'
+            : isUnlocked
+            ? 'bg-gradient-to-br from-[#f2fbff] to-[#cdeaff] border border-[#6ec8ff] text-[#09265f] shadow-[0_4px_11px_rgba(7,86,165,0.16)]'
+            : 'bg-gradient-to-br from-white to-[#d9efff] border border-[#a6d8ff] text-[#09265f] shadow-[0_4px_11px_rgba(7,86,165,0.16)]'
+        }`}
+      >
+        <div className="flex items-center justify-between gap-1 mb-1.5">
+          <b
+            className={`text-[13px] sm:text-[15px] font-black tabular-nums ${
+              isCurrent ? 'text-white' : 'text-[#0754b9]'
+            }`}
+          >
+            RANK {n}
+          </b>
+          <span
+            className={`text-[9px] font-bold px-1.5 py-0.5 rounded-[10px] whitespace-nowrap tabular-nums ${
+              isCurrent
+                ? 'bg-[#ffdf6d] text-[#173b77]'
+                : isUnlocked
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-[#d7efff] text-[#0754b9]'
+            }`}
+          >
+            {isCurrent
+              ? 'CURRENT'
+              : isUnlocked
+              ? 'UNLOCKED'
+              : n === 1
+              ? 'START'
+              : `${priceUsdt.toLocaleString()}U`}
+          </span>
+        </div>
+
+        <div
+          className={`text-[10.5px] sm:text-[11px] leading-relaxed tabular-nums ${
+            isCurrent ? 'text-[#e3f6ff]' : 'text-[#45668f]'
+          }`}
+        >
+          <div>
+            ราคา:{' '}
+            <strong className={isCurrent ? 'text-white' : 'text-[#082d73]'}>
+              {priceUsdt.toLocaleString()} U
+            </strong>
+          </div>
+          <div className="flex items-center justify-between gap-1">
+            <span>
+              สมาชิก ID นี้:{' '}
+              <strong className={isCurrent ? 'text-[#ffdf6d]' : 'text-[#0754b9]'}>
+                {idMembersInRank !== null ? idMembersInRank : membersInRankSystem}
+              </strong>
+            </span>
+            {idMembersInRank !== null && idMembersInRank > 0 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMembersSelectedRank(n);
+                  setActiveModal('members');
+                }}
+                className={`px-1.5 py-0.5 rounded text-[9.5px] font-bold underline cursor-pointer ${
+                  isCurrent ? 'text-cyan-100' : 'text-[#087cf4]'
+                }`}
+              >
+                ดูรายชื่อ
+              </button>
+            )}
+          </div>
+          <div className="text-[9.5px] opacity-80">
+            ทั้งระบบ: {membersInRankSystem} โหนด
+          </div>
+          <div>
+            Direct Sponsor:{' '}
+            <strong
+              className={
+                isCurrent
+                  ? 'text-[#ffdf6d]'
+                  : req
+                  ? 'text-[#b45309]'
+                  : 'text-[#082d73]'
+              }
+            >
+              {req
+                ? matchingPool
+                  ? `${matchingPool.qualifiedDirectCount}/${req.count} IDs*`
+                  : req.label
+                : 'ไม่กำหนด'}
+            </strong>
+          </div>
+        </div>
+      </article>
+    );
+  };
+
   type HistoryKind =
     | 'direct'
     | 'level'
@@ -2026,7 +2136,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                 onClick={() =>
                   isViewingSubId
                     ? openDashboard2Matrix(selectedSubIdTarget!.rank, selectedSubIdTarget!.nodeId)
-                    : openDashboard2Matrix(currentRank)
+                    : openDashboard2Matrix(1)
                 }
                 className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-white/15 hover:bg-white/25 border border-cyan-300/45 text-white font-bold text-[11px] sm:text-xs flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
                 title={language === 'th' ? 'เปิดหน้าผัง Matrix 15 ชั้น' : 'Open Matrix 15 Layers'}
@@ -2089,7 +2199,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               <button
                 type="button"
                 onClick={() =>
-                  onOpenMatrixTree(isViewingSubId ? selectedSubIdTarget!.rank : currentRank)
+                  onOpenMatrixTree(isViewingSubId ? selectedSubIdTarget!.rank : 1)
                 }
                 className="px-2.5 py-1 rounded-xl bg-[#0ea5e9] hover:bg-[#0284c7] border border-cyan-200/50 text-white text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer shadow-xs transition"
                 title={language === 'th' ? 'เปิดหน้าผัง Matrix เต็มจอ' : 'Open Matrix Tree'}
@@ -2292,7 +2402,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
             displayId={effectiveMainId}
             currentRank={currentRank}
             initialRank={
-              matrixTargetRank ?? (isViewingSubId ? selectedSubIdTarget!.rank : currentRank)
+              matrixTargetRank ?? (isViewingSubId ? selectedSubIdTarget!.rank : 1)
             }
             initialRootNodeId={
               matrixTargetRootNodeId ?? (isViewingSubId ? selectedSubIdTarget!.nodeId : null)
@@ -2459,7 +2569,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                   onClick={() =>
                     isViewingSubId
                       ? openDashboard2Matrix(selectedSubIdTarget!.rank, selectedSubIdTarget!.nodeId)
-                      : openDashboard2Matrix(currentRank)
+                      : openDashboard2Matrix(1)
                   }
                   className="p-2.5 sm:p-3 text-center rounded-[16px] sm:rounded-[18px] bg-gradient-to-br from-white to-[#d5edff] border border-[#a7d8ff] shadow-[0_4px_12px_rgba(7,86,165,0.14)] text-[11px] sm:text-xs font-black text-[#09265f] hover:border-[#087cf4] hover:-translate-y-0.5 transition-transform duration-150 cursor-pointer"
                 >
@@ -2698,140 +2808,129 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               </div>
             </section>
 
-            {/* 7. 18-RANK MEMBER TABLE (2-COL MOBILE / 3-COL TABLET / 6-COL PC) */}
-            <section className="mx-0.5 sm:mx-1 p-3.5 sm:p-4 rounded-[24px] bg-gradient-to-br from-white/95 to-[#dff4ff]/95 border-[1.5px] border-[#a9ddff] shadow-[0_8px_22px_rgba(0,72,190,0.23)]">
-              <h2 className="flex items-center justify-between gap-2 mb-3 px-0.5 text-[15px] sm:text-[18px] font-black text-[#09265f] flex-wrap">
-                <span>👑 ตารางสมาชิกครบ 18 RANK (ID #{displayId})</span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setMembersSelectedRank('all');
-                      setActiveModal('members');
-                    }}
-                    className="px-2.5 py-1 rounded-xl bg-white border border-[#9fd4ff] text-[11px] font-bold text-[#0756bc] hover:bg-[#eef8ff] cursor-pointer"
-                  >
-                    👥 ดูสมาชิกแยก Rank ›
-                  </button>
-                  <span className="text-xs font-bold text-[#0756bc]">RANK 1–18</span>
-                </div>
-              </h2>
+            {/* 7. 18-RANK MEMBER TABLE (MOBILE SUMMARY + POPUP / TABLET 3-COL / PC 6-COL) */}
+            {(() => {
+              const currentPriceUsdt = RANK_PRICES_USDT[currentRank - 1] || 5;
+              const currentSystemNodes = Number(rankCounts[currentRank] ?? 0);
+              const currentIdRankObj = idMembersByRank.get(currentRank);
+              const currentIdMembers = currentIdRankObj
+                ? Number(currentIdRankObj.totalMembersInRank ?? 0)
+                : null;
+              const currentReq = ALLSELL_DIRECT_REQUIREMENTS[currentRank];
+              const currentMatchingPool = allSellPools.find(
+                (p) => Number(p.targetRank) === currentRank
+              );
 
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5">
-                {Array.from({ length: 18 }, (_, i) => i + 1).map((n) => {
-                  const isCurrent = n === currentRank;
-                  const isUnlocked = n < currentRank;
-                  const priceUsdt = RANK_PRICES_USDT[n - 1] || 5;
-                  const membersInRankSystem = Number(rankCounts[n] ?? 0);
-                  const idRankObj = idMembersByRank.get(n);
-                  const idMembersInRank = idRankObj ? Number(idRankObj.totalMembersInRank ?? 0) : null;
-                  const req = ALLSELL_DIRECT_REQUIREMENTS[n];
-                  const matchingPool = allSellPools.find((p) => Number(p.targetRank) === n);
+              return (
+                <section className="mx-0.5 sm:mx-1 p-3.5 sm:p-4 rounded-[24px] bg-gradient-to-br from-white/95 to-[#dff4ff]/95 border-[1.5px] border-[#a9ddff] shadow-[0_8px_22px_rgba(0,72,190,0.23)]">
+                  <h2 className="flex items-center justify-between gap-2 mb-3 px-0.5 text-[15px] sm:text-[18px] font-black text-[#09265f] flex-wrap">
+                    <span>👑 ตารางสมาชิกครบ 18 RANK (ID #{displayId})</span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMembersSelectedRank('all');
+                          setActiveModal('members');
+                        }}
+                        className="px-2.5 py-1 rounded-xl bg-white border border-[#9fd4ff] text-[11px] font-bold text-[#0756bc] hover:bg-[#eef8ff] cursor-pointer"
+                      >
+                        👥 ดูสมาชิกแยก Rank ›
+                      </button>
+                      <span className="text-xs font-bold text-[#0756bc]">RANK 1–18</span>
+                    </div>
+                  </h2>
 
-                  return (
+                  {/* MOBILE (< 640px): COMPACT CURRENT RANK SUMMARY + POPUP TRIGGER */}
+                  <div className="sm:hidden space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 text-[11px] font-semibold text-[#3f6493] px-0.5 tabular-nums">
+                      <span>ปลดล็อกแล้ว {currentRank} / 18 Rank</span>
+                      <span>Rank ปัจจุบัน: R{currentRank}</span>
+                    </div>
+
                     <article
-                      key={`d2-rank-${n}`}
-                      onClick={() => openDashboard2Matrix(n)}
-                      className={`rounded-[16px] p-2.5 sm:p-3 min-w-0 cursor-pointer transition-transform duration-150 hover:-translate-y-0.5 ${
-                        isCurrent
-                          ? 'bg-gradient-to-br from-[#087cf4] to-[#0646b3] border border-[#5ddcff] text-white shadow-[0_5px_14px_rgba(8,101,215,0.47)]'
-                          : isUnlocked
-                          ? 'bg-gradient-to-br from-[#f2fbff] to-[#cdeaff] border border-[#6ec8ff] text-[#09265f] shadow-[0_4px_11px_rgba(7,86,165,0.16)]'
-                          : 'bg-gradient-to-br from-white to-[#d9efff] border border-[#a6d8ff] text-[#09265f] shadow-[0_4px_11px_rgba(7,86,165,0.16)]'
-                      }`}
+                      onClick={() => openDashboard2Matrix(currentRank)}
+                      className="rounded-[18px] p-3.5 bg-gradient-to-br from-[#087cf4] to-[#0646b3] border border-[#5ddcff] text-white shadow-[0_5px_14px_rgba(8,101,215,0.42)] cursor-pointer active:scale-[0.99] transition-transform"
                     >
-                      <div className="flex items-center justify-between gap-1 mb-1.5">
-                        <b
-                          className={`text-[13px] sm:text-[15px] font-black ${
-                            isCurrent ? 'text-white' : 'text-[#0754b9]'
-                          }`}
-                        >
-                          RANK {n}
-                        </b>
-                        <span
-                          className={`text-[9px] font-bold px-1.5 py-0.5 rounded-[10px] whitespace-nowrap ${
-                            isCurrent
-                              ? 'bg-[#ffdf6d] text-[#173b77]'
-                              : isUnlocked
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-[#d7efff] text-[#0754b9]'
-                          }`}
-                        >
-                          {isCurrent
-                            ? 'CURRENT'
-                            : isUnlocked
-                            ? 'UNLOCKED'
-                            : n === 1
-                            ? 'START'
-                            : `${priceUsdt.toLocaleString()}U`}
+                      <div className="flex items-center justify-between gap-2 mb-2">
+                        <div className="flex items-center gap-2">
+                          <b className="text-[16px] font-black tabular-nums">RANK {currentRank}</b>
+                          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-[10px] bg-[#ffdf6d] text-[#173b77]">
+                            CURRENT
+                          </span>
+                        </div>
+                        <span className="text-xs font-bold text-cyan-100 underline">
+                          เปิดผัง R{currentRank} ›
                         </span>
                       </div>
 
-                      <div
-                        className={`text-[10.5px] sm:text-[11px] leading-relaxed ${
-                          isCurrent ? 'text-[#e3f6ff]' : 'text-[#45668f]'
-                        }`}
-                      >
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px] text-[#e3f6ff] tabular-nums">
                         <div>
                           ราคา:{' '}
-                          <strong className={isCurrent ? 'text-white' : 'text-[#082d73]'}>
-                            {priceUsdt.toLocaleString()} U
+                          <strong className="text-white">
+                            {currentPriceUsdt.toLocaleString()} U
                           </strong>
                         </div>
                         <div className="flex items-center justify-between gap-1">
                           <span>
                             สมาชิก ID นี้:{' '}
-                            <strong className={isCurrent ? 'text-[#ffdf6d]' : 'text-[#0754b9]'}>
-                              {idMembersInRank !== null ? idMembersInRank : membersInRankSystem}
+                            <strong className="text-[#ffdf6d]">
+                              {currentIdMembers !== null ? currentIdMembers : currentSystemNodes}
                             </strong>
                           </span>
-                          {idMembersInRank !== null && idMembersInRank > 0 && (
+                          {currentIdMembers !== null && currentIdMembers > 0 && (
                             <button
                               type="button"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setMembersSelectedRank(n);
+                                setMembersSelectedRank(currentRank);
                                 setActiveModal('members');
                               }}
-                              className={`px-1 py-0.2 rounded text-[9px] font-bold underline cursor-pointer ${
-                                isCurrent ? 'text-cyan-100' : 'text-[#087cf4]'
-                              }`}
+                              className="px-1.5 py-0.5 rounded text-[10px] font-bold underline text-cyan-100 cursor-pointer"
                             >
                               ดูรายชื่อ
                             </button>
                           )}
                         </div>
-                        <div className="text-[9.5px] opacity-80">
-                          ทั้งระบบ: {membersInRankSystem} โหนด
+                        <div>
+                          ทั้งระบบ:{' '}
+                          <strong className="text-white">{currentSystemNodes} โหนด</strong>
                         </div>
                         <div>
                           Direct Sponsor:{' '}
-                          <strong
-                            className={
-                              isCurrent
-                                ? 'text-[#ffdf6d]'
-                                : req
-                                ? 'text-[#b45309]'
-                                : 'text-[#082d73]'
-                            }
-                          >
-                            {req
-                              ? matchingPool
-                                ? `${matchingPool.qualifiedDirectCount}/${req.count} IDs*`
-                                : req.label
+                          <strong className="text-[#ffdf6d]">
+                            {currentReq
+                              ? currentMatchingPool
+                                ? `${currentMatchingPool.qualifiedDirectCount}/${currentReq.count} IDs*`
+                                : currentReq.label
                               : 'ไม่กำหนด'}
                           </strong>
                         </div>
                       </div>
                     </article>
-                  );
-                })}
-              </div>
 
-              <p className="text-[10px] text-[#54759c] leading-relaxed mt-2.5">
-                สมาชิกใน Rank = จำนวนโหนดจริงใน Rank นั้นจากระบบ · Direct Sponsor (*) = เกณฑ์ผู้แนะนำตรงสำหรับสิทธิ์รับกองทุน AllSell (R11: 5 IDs ใน R8-11 · R14: 2 IDs ใน R12-14 · R16: 2 IDs ใน R14-16 · R18: 5 IDs ใน R16-18 โดยต้องผ่านเกณฑ์กองที่ 1 ก่อน) · กดที่การ์ด Rank เพื่อเปิดดูผัง Matrix ของ Rank นั้น
-              </p>
-            </section>
+                    <button
+                      type="button"
+                      onClick={() => setActiveModal('ranks_18')}
+                      className="w-full min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#23caff] via-[#087cf4] to-[#0755d7] text-white text-[13px] font-black shadow-[0_6px_16px_rgba(7,85,215,0.32)] hover:brightness-105 active:scale-[0.99] transition flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <span>เปิดดูตารางครบ 18 Rank (R1–R18)</span>
+                      <span className="text-base leading-none">›</span>
+                    </button>
+                  </div>
+
+                  {/* TABLET & DESKTOP (>= 640px): FULL INLINE 18-RANK GRID */}
+                  <div className="hidden sm:grid sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                    {Array.from({ length: 18 }, (_, i) => i + 1).map((n) =>
+                      renderRankCard(n, 'inline')
+                    )}
+                  </div>
+
+                  <p className="hidden sm:block text-[10px] text-[#54759c] leading-relaxed mt-2.5">
+                    สมาชิกใน Rank = จำนวนโหนดจริงใน Rank นั้นจากระบบ · Direct Sponsor (*) = เกณฑ์ผู้แนะนำตรงสำหรับสิทธิ์รับกองทุน AllSell (R11: 5 IDs ใน R8-11 · R14: 2 IDs ใน R12-14 · R16: 2 IDs ใน R14-16 · R18: 5 IDs ใน R16-18 โดยต้องผ่านเกณฑ์กองที่ 1 ก่อน) · กดที่การ์ด Rank เพื่อเปิดดูผัง Matrix ของ Rank นั้น
+                  </p>
+                </section>
+              );
+            })()}
 
             {/* 8. FOOTER BANNER */}
             <div className="mx-0.5 sm:mx-1 p-4 text-center text-white rounded-[20px] bg-[radial-gradient(circle_at_20%_50%,#168be9,#041b61_70%)] shadow-[0_8px_22px_rgba(0,72,190,0.23)] font-bold">
@@ -3558,7 +3657,11 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               type="button"
               onClick={() => {
                 if (tab.key === 'matrix') {
-                  openDashboard2Matrix(matrixTargetRank ?? currentRank, matrixTargetRootNodeId);
+                  if (isViewingSubId) {
+                    openDashboard2Matrix(selectedSubIdTarget!.rank, selectedSubIdTarget!.nodeId);
+                  } else {
+                    openDashboard2Matrix(1);
+                  }
                 } else {
                   setBottomTab(tab.key);
                 }
@@ -3584,7 +3687,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
         >
           <div
             className={`w-full ${
-              activeModal === 'members'
+              activeModal === 'members' || activeModal === 'ranks_18'
                 ? 'max-w-3xl'
                 : activeModal === 'vault' || activeModal === 'income'
                 ? 'max-w-2xl'
@@ -3596,6 +3699,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               <h3 className="text-base sm:text-lg font-black">
                 {activeModal === 'switch_id' && '⇄ สลับไอดี / เลือกรหัสที่ต้องการดู'}
                 {activeModal === 'members' && `👥 สมาชิก & ลูกตรงทั้งหมดของ ID #${displayId} (แยกตาม Rank)`}
+                {activeModal === 'ranks_18' && `👑 ตารางสมาชิกครบ 18 RANK (ID #${displayId})`}
                 {activeModal === 'upgrade' && `📈 อัปเกรด Rank สำหรับ ID #${displayId}`}
                 {activeModal === 'wallet' && `▰ กระเป๋าเงินและรายได้ ID #${displayId}`}
                 {activeModal === 'vault' && `▣ รายละเอียดถังสะสมเงิน (Vault) ID #${displayId}`}
@@ -3605,7 +3709,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveModal(null)}
-                className="p-1.5 rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer"
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -5261,6 +5365,44 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                     });
                   })()}
                 </div>
+              </div>
+            )}
+            {/* MODAL: 18-RANK MEMBER TABLE POPUP */}
+            {activeModal === 'ranks_18' && (
+              <div className="space-y-3 text-xs">
+                <div className="flex items-center justify-between gap-2 flex-wrap px-0.5 text-[11px] font-semibold text-[#3f6493] tabular-nums">
+                  <span>
+                    ปลดล็อกแล้ว {currentRank} / 18 Rank · Rank ปัจจุบัน R{currentRank} · แตะการ์ดเพื่อเปิดผัง Matrix
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMembersSelectedRank('all');
+                      setActiveModal('members');
+                    }}
+                    className="min-h-[36px] px-2.5 py-1 rounded-xl bg-white border border-[#9fd4ff] text-[11px] font-bold text-[#0756bc] hover:bg-[#eef8ff] cursor-pointer"
+                  >
+                    👥 ดูสมาชิกแยก Rank ›
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {Array.from({ length: 18 }, (_, i) => i + 1).map((n) =>
+                    renderRankCard(n, 'modal')
+                  )}
+                </div>
+
+                <p className="text-[10px] text-[#54759c] leading-relaxed">
+                  สมาชิกใน Rank = จำนวนโหนดจริงใน Rank นั้นจากระบบ · Direct Sponsor (*) = เกณฑ์ผู้แนะนำตรงสำหรับสิทธิ์รับกองทุน AllSell (R11: 5 IDs ใน R8-11 · R14: 2 IDs ใน R12-14 · R16: 2 IDs ใน R14-16 · R18: 5 IDs ใน R16-18 โดยต้องผ่านเกณฑ์กองที่ 1 ก่อน)
+                </p>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveModal(null)}
+                  className="w-full min-h-[44px] rounded-xl bg-white hover:bg-blue-50 border border-[#9fd4ff] text-[#0756bc] font-bold text-xs cursor-pointer"
+                >
+                  ปิดหน้าต่าง
+                </button>
               </div>
             )}
           </div>

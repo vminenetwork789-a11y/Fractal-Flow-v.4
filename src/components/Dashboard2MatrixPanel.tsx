@@ -241,7 +241,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   onOpenSwitchId,
 }) => {
   const [matrixRank, setMatrixRank] = useState<number>(() =>
-    Math.max(1, Math.min(18, Number(initialRank || currentRank || 1)))
+    Math.max(1, Math.min(18, Number(initialRank || 1)))
   );
   const [selectedLayer, setSelectedLayer] = useState<number>(0);
   const [focusedRootId, setFocusedRootId] = useState<number | null>(
@@ -258,6 +258,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   const [searchTab, setSearchTab] = useState<'all' | 'main' | 'clone' | 'extra' | 'auto' | 'tree'>('all');
   const [pendingFocusOriginMainId, setPendingFocusOriginMainId] = useState<number | null>(null);
   const [layerPopupModal, setLayerPopupModal] = useState<number | 'all' | null>(null);
+  const [isLayerSelectorModalOpen, setIsLayerSelectorModalOpen] = useState<boolean>(false);
   const [incomeSourceModalLayer, setIncomeSourceModalLayer] = useState<number | null>(null);
   const [isLegendModalOpen, setIsLegendModalOpen] = useState<boolean>(false);
   const [popupTypeFilter, setPopupTypeFilter] = useState<'ALL' | 'MAIN' | 'AUTO' | 'CLONE' | 'EXTRA'>('ALL');
@@ -839,6 +840,48 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   const chooseLayer = (n: number) => {
     const clamped = Math.max(0, Math.min(15, n));
     setSelectedLayer(clamped);
+  };
+
+  const renderLayerCard = (n: number, keyPrefix: 'inline' | 'modal' = 'inline') => {
+    const selected = selectedLayer === n;
+    const realCount = (layersMap[n] || []).length;
+    return (
+      <button
+        key={`layer-card-${keyPrefix}-${n}`}
+        type="button"
+        onClick={() => {
+          chooseLayer(n);
+          setIsLayerSelectorModalOpen(false);
+        }}
+        className={`p-2.5 rounded-[14px] border text-left transition active:scale-[0.98] cursor-pointer ${
+          selected
+            ? 'bg-gradient-to-br from-[#087cf4] to-[#0648b2] text-white border-[#57d8ff] shadow-md'
+            : 'bg-gradient-to-br from-white to-[#e3f4ff] text-[#09275f] border-[#b2dafa] hover:border-[#087cf4]'
+        }`}
+      >
+        <b className="block text-[13px] font-black">
+          {n === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${n}`}
+        </b>
+        <small
+          className={`block text-[10px] mt-0.5 font-mono tabular-nums ${
+            selected ? 'text-[#e2f8ff]' : 'text-[#5a78a1]'
+          }`}
+        >
+          {fmtNum(2 ** n)} จำนวนไอดี
+        </small>
+        <small
+          className={`block text-[10px] font-bold mt-0.5 font-mono tabular-nums ${
+            selected
+              ? 'text-[#ffdf6d]'
+              : realCount > 0
+              ? 'text-emerald-700'
+              : 'text-[#7c97b8]'
+          }`}
+        >
+          พบจริง {realCount} รหัส
+        </small>
+      </button>
+    );
   };
 
   const focusNodeAsRoot = (nodeId: number) => {
@@ -1607,85 +1650,74 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
             </div>
           </div>
 
-          {/* Per-Rank Breakdown: Total Income & Remaining Vault per Rank */}
+          {/* Active-Rank Breakdown: Total Income & Remaining Vault for Current Viewed Rank */}
           {(() => {
-            const visibleRanks = Array.from({ length: 18 }, (_, i) => i + 1).filter((r) => {
-              const inc = activeIdSummary.incomeByRank?.[r]?.totalUsdt || 0;
-              const vRem = activeIdSummary.vaultRemainingByRank?.[r] || 0;
-              if (activeIdSummary.isSubId) {
-                return r === idEffectiveRank || inc > 0 || vRem > 0;
-              }
-              return r <= idEffectiveRank || inc > 0 || vRem > 0;
-            });
-            if (visibleRanks.length === 0) return null;
+            const incInfo = activeIdSummary.incomeByRank?.[matrixRank] || {
+              directUsdt: 0,
+              levelUsdt: 0,
+              totalUsdt: 0,
+            };
+            const vRem = activeIdSummary.vaultRemainingByRank?.[matrixRank] ?? 0;
+            const memberCnt =
+              activeIdSummary.idMembersCountByRank?.[matrixRank] ??
+              (activeIdNodeInCurrentRank ? Math.max(0, totalSubtreeCount - 1) : 0);
+            const isCurrentHighest = matrixRank === idEffectiveRank;
+
             return (
-              <div className="p-2.5 rounded-[14px] bg-white/90 border border-[#bde2ff] space-y-2">
+              <div className="p-2.5 sm:p-3 rounded-[14px] bg-white/90 border border-[#bde2ff] space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="text-[11px] font-black text-[#09265f]">
-                    📊 รายได้รวม & Vault คงเหลือของ ID นี้ แยกแต่ละ Rank
+                    📊 รายได้รวม & Vault คงเหลือของ ID นี้ (เฉพาะ Rank {matrixRank})
                   </span>
                   <span className="text-[10px] font-semibold text-[#5a78a1]">
-                    แตะ Rank เพื่อสลับดูผัง
+                    {isCurrentHighest
+                      ? 'Rank ปัจจุบันของ ID นี้'
+                      : isSelectedRankUnlockedForId
+                      ? 'ปลดล็อกแล้ว'
+                      : 'ยังไม่ปลดล็อก'}
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-1.5">
-                  {visibleRanks.map((r) => {
-                    const incInfo = activeIdSummary.incomeByRank?.[r] || {
-                      directUsdt: 0,
-                      levelUsdt: 0,
-                      totalUsdt: 0,
-                    };
-                    const vRem = activeIdSummary.vaultRemainingByRank?.[r] ?? 0;
-                    const isViewingThisRank = r === matrixRank;
-                    return (
-                      <button
-                        key={`id-rank-stat-${r}`}
-                        type="button"
-                        onClick={() => {
-                          setMatrixRank(r);
-                          setFocusedRootId(null);
-                          setSelectedLayer(0);
-                          setSearchResult(null);
-                        }}
-                        className={`p-2 rounded-xl border text-left cursor-pointer transition ${
-                          isViewingThisRank
-                            ? 'bg-gradient-to-br from-[#eff8ff] to-[#d9eeff] border-[#087cf4] ring-1 ring-[#087cf4]/40'
-                            : 'bg-[#f8fcff] border-[#cde7ff] hover:bg-[#eef7ff]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-1">
-                          <span
-                            className={`px-1.5 py-0.5 rounded text-[10px] font-black ${
-                              r === idEffectiveRank
-                                ? 'bg-emerald-600 text-white'
-                                : isViewingThisRank
-                                ? 'bg-[#087cf4] text-white'
-                                : 'bg-[#e3f1ff] text-[#0758d4]'
-                            }`}
-                          >
-                            {r === idEffectiveRank ? `★ R${r}` : `R${r}`}
-                          </span>
-                          <span className="text-[9.5px] font-mono text-[#5a78a1]">
-                            สมาชิก {fmtNum(activeIdSummary.idMembersCountByRank?.[r] ?? 0)}
-                          </span>
-                        </div>
-                        <div className="mt-1 space-y-0.5 text-[10.5px] font-mono">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="font-sans text-[#4f7097]">รายได้รวม</span>
-                            <strong className="text-emerald-700 font-black">
-                              +{incInfo.totalUsdt.toFixed(2)} U
-                            </strong>
-                          </div>
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="font-sans text-[#4f7097]">Vault คงเหลือ</span>
-                            <strong className="text-[#09265f] font-black">
-                              {vRem.toFixed(2)} U
-                            </strong>
-                          </div>
-                        </div>
-                      </button>
-                    );
-                  })}
+
+                <div className="p-3 rounded-xl border border-[#087cf4]/50 bg-gradient-to-br from-[#eff8ff] to-[#d9eeff] grid grid-cols-1 sm:grid-cols-3 gap-2.5 items-center">
+                  <div className="flex items-center justify-between sm:justify-start gap-2">
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[11px] font-black tabular-nums ${
+                        isCurrentHighest
+                          ? 'bg-emerald-600 text-white'
+                          : isSelectedRankUnlockedForId
+                          ? 'bg-[#087cf4] text-white'
+                          : 'bg-slate-200 text-slate-700'
+                      }`}
+                    >
+                      {isCurrentHighest ? `★ R${matrixRank}` : `R${matrixRank}`}
+                    </span>
+                    <span className="text-[11px] font-mono font-bold text-[#45668f] tabular-nums">
+                      สมาชิก {isSelectedRankUnlockedForId ? fmtNum(memberCnt) : '0 (ล็อก)'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between sm:block border-t sm:border-t-0 sm:border-l border-[#bde2ff] pt-2 sm:pt-0 sm:pl-3">
+                    <div className="text-[10.5px] font-bold text-[#4f7097]">
+                      รายได้รวม R{matrixRank}
+                    </div>
+                    <div className="text-right sm:text-left">
+                      <strong className="text-[13px] font-black font-mono text-emerald-700 tabular-nums">
+                        +{incInfo.totalUsdt.toFixed(2)} U
+                      </strong>
+                      <div className="text-[9.5px] font-mono text-[#5a78a1] tabular-nums">
+                        แนะนำ {incInfo.directUsdt.toFixed(1)} + ชั้น {incInfo.levelUsdt.toFixed(1)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between sm:block border-t sm:border-t-0 sm:border-l border-[#bde2ff] pt-2 sm:pt-0 sm:pl-3">
+                    <div className="text-[10.5px] font-bold text-[#4f7097]">
+                      Vault คงเหลือ R{matrixRank}
+                    </div>
+                    <strong className="text-[13px] font-black font-mono text-[#09265f] tabular-nums">
+                      {vRem.toFixed(2)} U
+                    </strong>
+                  </div>
                 </div>
               </div>
             );
@@ -2225,30 +2257,6 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           </div>
         </div>
 
-        {/* Layer caption & Root full detail strip */}
-        <div className="mt-3 px-3 py-2 rounded-xl bg-[#edf8ff] border border-[#c6e6ff] text-center text-[10.5px] text-[#35567e]">
-          <span className="font-bold text-[#0754b9]">
-            แสดงผัง 5 ชั้น (ชั้นเริ่มต้น = 1 · ชั้น 1 = 2 · ชั้น 2 = 4 · ชั้น 3 = 8 · ชั้น 4 = 16 · รวม 31 ตำแหน่ง)
-          </span>
-          {rootNode && (
-            <div className="mt-0.5 text-[10px] text-[#4c6f97]">
-              ROOT ปัจจุบัน:{' '}
-              <strong className="font-mono text-[#09275f]">
-                #{getMainId(rootNode, effectiveRootId)}
-              </strong>{' '}
-              (
-              {getNodeTypeLabel(
-                rootNode,
-                cloneSeqByNodeId.get(Number(rootNode.id)) || 0,
-                (cloneIdsByMainId.get(getMainId(rootNode)) || []).length
-              )}
-              {rootNode.id !== getMainId(rootNode) ? ` · โหนด #${rootNode.id}` : ''}) · แนะนำโดย{' '}
-              <strong className="font-mono">#{rootNode.directSponsorNodeId || '-'}</strong> ·{' '}
-              <span className="font-mono">{shortAddr(rootNode.owner)}</span> · แตะวงกลมเพื่อเจาะดูสายนั้น
-            </div>
-          )}
-        </div>
-
         {/* Selected Layer Detail Panel */}
         <div className="flex items-center justify-between gap-2 mt-5 mb-2 flex-wrap">
           <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
@@ -2412,56 +2420,64 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         </div>
       </section>
 
-      {/* 4. 15-LAYER SELECTOR GRID */}
+      {/* 4. 15-LAYER SELECTOR GRID (MOBILE SUMMARY + POPUP / TABLET & PC INLINE GRID) */}
       <section className="mx-1 p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)]">
         <div className="flex items-center justify-between gap-2 mb-3">
           <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
             📚 เลือกดูชั้นเริ่มต้น–15 (Root → ชั้น 15)
           </h3>
           <small className="text-[10.5px] font-semibold text-[#5a78a1]">
-            แตะชั้นที่ต้องการ
+            <span className="sm:hidden">ชั้นที่เลือกอยู่</span>
+            <span className="hidden sm:inline">แตะชั้นที่ต้องการ</span>
           </small>
         </div>
 
-        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-          {Array.from({ length: 16 }, (_, idx) => idx).map((n) => {
-            const selected = selectedLayer === n;
-            const realCount = (layersMap[n] || []).length;
-            return (
-              <button
-                key={`layer-card-${n}`}
-                type="button"
-                onClick={() => chooseLayer(n)}
-                className={`p-2.5 rounded-[14px] border text-left transition cursor-pointer ${
-                  selected
-                    ? 'bg-gradient-to-br from-[#087cf4] to-[#0648b2] text-white border-[#57d8ff] shadow-md'
-                    : 'bg-gradient-to-br from-white to-[#e3f4ff] text-[#09275f] border-[#b2dafa] hover:border-[#087cf4]'
-                }`}
-              >
-                <b className="block text-[13px] font-black">
-                  {n === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${n}`}
+        {/* MOBILE (< 640px): ACTIVE LAYER SUMMARY CARD + POPUP TRIGGER */}
+        <div className="sm:hidden space-y-2.5">
+          <div className="p-3.5 rounded-[16px] bg-gradient-to-br from-[#087cf4] to-[#0648b2] border border-[#57d8ff] text-white shadow-md">
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <b className="text-[15px] font-black truncate">
+                  {selectedLayer === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${selectedLayer}`}
                 </b>
-                <small
-                  className={`block text-[10px] mt-0.5 font-mono tabular-nums ${
-                    selected ? 'text-[#e2f8ff]' : 'text-[#5a78a1]'
-                  }`}
+                <span className="px-2 py-0.5 rounded-[10px] bg-[#ffdf6d] text-[#173b77] text-[10px] font-extrabold shrink-0">
+                  กำลังดู
+                </span>
+              </div>
+              {currentLayerEntries.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPopupTypeFilter('ALL');
+                    setPopupSearch('');
+                    setLayerPopupModal(selectedLayer);
+                  }}
+                  className="px-2 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white text-[10.5px] font-bold inline-flex items-center gap-1 shrink-0 cursor-pointer"
                 >
-                  {fmtNum(2 ** n)} จำนวนไอดี
-                </small>
-                <small
-                  className={`block text-[10px] font-bold mt-0.5 font-mono ${
-                    selected
-                      ? 'text-[#ffdf6d]'
-                      : realCount > 0
-                      ? 'text-emerald-700'
-                      : 'text-[#7c97b8]'
-                  }`}
-                >
-                  พบจริง {realCount} รหัส
-                </small>
-              </button>
-            );
-          })}
+                  <Users className="w-3 h-3" />
+                  <span>ดูรายชื่อ</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center justify-between gap-2 text-[11.5px] font-mono tabular-nums text-[#e2f8ff]">
+              <span>ความจุ: {fmtNum(theoreticalCapacity)} จำนวนไอดี</span>
+              <strong className="text-[#ffdf6d]">พบจริง {currentLayerEntries.length} รหัส</strong>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsLayerSelectorModalOpen(true)}
+            className="w-full min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#23caff] via-[#087cf4] to-[#0755d7] text-white text-[13px] font-black shadow-[0_6px_16px_rgba(7,85,215,0.3)] hover:brightness-105 active:scale-[0.99] transition flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <span>เปิดดูและเลือกชั้นเริ่มต้น–15 (16 ชั้น)</span>
+            <span className="text-base leading-none">›</span>
+          </button>
+        </div>
+
+        {/* TABLET & DESKTOP (>= 640px): FULL INLINE 16-LAYER GRID */}
+        <div className="hidden sm:grid sm:grid-cols-4 gap-2">
+          {Array.from({ length: 16 }, (_, idx) => idx).map((n) => renderLayerCard(n, 'inline'))}
         </div>
       </section>
 
@@ -3810,6 +3826,50 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 </>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* POPUP MODAL: LAYER SELECTOR (ROOT -> 15) */}
+      {isLayerSelectorModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={() => setIsLayerSelectorModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
+              <div>
+                <h3 className="text-base sm:text-lg font-black text-[#09265f]">
+                  📚 เลือกดูชั้นเริ่มต้น–15 (Root → ชั้น 15)
+                </h3>
+                <p className="text-[11px] font-semibold text-[#45668f] mt-0.5 tabular-nums">
+                  กำลังเลือก: {selectedLayer === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${selectedLayer}`} · พบสมาชิกในสายงานรวม {totalSubtreeCount} รหัส · แตะชั้นที่ต้องการ
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsLayerSelectorModalOpen(false)}
+                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
+                aria-label="ปิดหน้าต่าง"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
+              {Array.from({ length: 16 }, (_, idx) => idx).map((n) => renderLayerCard(n, 'modal'))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setIsLayerSelectorModalOpen(false)}
+              className="w-full min-h-[44px] rounded-xl bg-white hover:bg-blue-50 border border-[#9fd4ff] text-[#0756bc] font-bold text-xs cursor-pointer"
+            >
+              ปิดหน้าต่าง
+            </button>
           </div>
         </div>
       )}
