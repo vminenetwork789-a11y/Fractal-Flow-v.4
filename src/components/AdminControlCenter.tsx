@@ -1,0 +1,3226 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { ethers } from 'ethers';
+import { MATRIX_ABI, RANK_PRICES_USDT, BSC_TESTNET_CHAIN_ID, BSC_TESTNET_PARAMS } from '../contracts/config';
+import {
+  Shield,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Copy,
+  Check,
+  Zap,
+  Database,
+  Wallet,
+  ArrowUpCircle,
+  Coins,
+  KeyRound,
+  Layers,
+  Play,
+  Trash2,
+  Save,
+  RotateCcw,
+  Search,
+  Sparkles,
+  Lock,
+  UserCheck,
+  Send,
+  X,
+  Bot,
+  Crown,
+  Dna,
+  History,
+  ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
+  Table2,
+} from 'lucide-react';
+
+interface AdminControlCenterProps {
+  account: string | null;
+  language: 'th' | 'en';
+  contractAddress: string;
+  usdtAddress: string;
+  isLoading: boolean;
+  onAdminUpgrade: (targetUserOrId: string, targetRank: number) => Promise<any>;
+  onUpdateContractAddress: (newContract: string, newUsdt?: string) => Promise<boolean>;
+  onResetContractAddress: () => Promise<boolean>;
+  onOpenDeployModal: () => void;
+  onRefreshOnChainData: () => void;
+  onInspectRank: (rank: number) => Promise<{
+    firstNodeId: string;
+    latestNodeId: string;
+    upgradeVaultBalance: string;
+    rankPrice?: string;
+    nextRankPrice: string;
+  }>;
+  onClose?: () => void;
+}
+
+export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
+  account,
+  language,
+  contractAddress,
+  usdtAddress,
+  isLoading,
+  onAdminUpgrade,
+  onUpdateContractAddress,
+  onResetContractAddress,
+  onOpenDeployModal,
+  onRefreshOnChainData,
+  onInspectRank,
+  onClose,
+}) => {
+  const [activeSection, setActiveSection] = useState<
+    'all' | 'owner' | 'autopools' | 'allsell' | 'database' | 'db_explorer' | 'members' | 'transactions'
+  >('all');
+  const [execMode, setExecMode] = useState<'server_key' | 'web3_wallet'>(
+    typeof window !== 'undefined' && (window as any).ethereum ? 'web3_wallet' : 'server_key'
+  );
+  const [customAdminPk, setCustomAdminPk] = useState<string>('');
+  const [overview, setOverview] = useState<any | null>(null);
+  const [loadingOverview, setLoadingOverview] = useState<boolean>(false);
+  const [actionStatus, setActionStatus] = useState<{
+    type: 'success' | 'error' | 'loading';
+    title: string;
+    message: string;
+    txHash?: string;
+  } | null>(null);
+  const [copiedText, setCopiedText] = useState<string | null>(null);
+
+  // 1. Admin Upgrade State
+  const [upgradeTarget, setUpgradeTarget] = useState<string>('2');
+  const [upgradeRank, setUpgradeRank] = useState<string>('5');
+  const [upgradeExecutionMode, setUpgradeExecutionMode] = useState<'both' | 'onchain' | 'db_only'>('both');
+  const [targetLookup, setTargetLookup] = useState<any | null>(null);
+
+  // 2. setSystemWallets State
+  const [sysAllSell, setSysAllSell] = useState<string>('');
+  const [sysBot, setSysBot] = useState<string>('');
+  const [sysFamily, setSysFamily] = useState<string>('');
+
+  // 3. emergencyWithdrawToken & Native State
+  const [withdrawTokenAddr, setWithdrawTokenAddr] = useState<string>(usdtAddress || '');
+  const [withdrawTokenAmount, setWithdrawTokenAmount] = useState<string>('');
+
+  // 4. Ownership State
+  const [newOwnerAddr, setNewOwnerAddr] = useState<string>('');
+  const [renounceConfirmText, setRenounceConfirmText] = useState<string>('');
+
+  // 5. Auto-Pool On-Chain Trigger State
+  const [autoMainNodeId, setAutoMainNodeId] = useState<string>('1');
+  const [autoMainUserAddr, setAutoMainUserAddr] = useState<string>('');
+  const [autoExtraUserAddr, setAutoExtraUserAddr] = useState<string>('');
+  const [autoExtraRank, setAutoExtraRank] = useState<string>('4');
+  const [autoExtraSponsorId, setAutoExtraSponsorId] = useState<string>('1');
+
+  // 6. Contract & DB Config State
+  const [editContractAddr, setEditContractAddr] = useState<string>(contractAddress || '');
+  const [editUsdtAddr, setEditUsdtAddr] = useState<string>(usdtAddress || '');
+  const [batchStatus, setBatchStatus] = useState<any | null>(null);
+  const [wsBotStatus, setWsBotStatus] = useState<any | null>(null);
+
+  // 7. Rank Inspector State
+  const [inspectRankNum, setInspectRankNum] = useState<number>(1);
+  const [inspectStats, setInspectStats] = useState<{
+    firstNodeId: string;
+    latestNodeId: string;
+    upgradeVaultBalance: string;
+    rankPrice?: string;
+    nextRankPrice: string;
+  }>({
+    firstNodeId: '-',
+    latestNodeId: '-',
+    upgradeVaultBalance: '0.00',
+    rankPrice: '5.00 USDT',
+    nextRankPrice: '10.00 USDT',
+  });
+  const [memberSearch, setMemberSearch] = useState<string>('');
+  const [memberStatusTab, setMemberStatusTab] = useState<'all' | 'main' | 'auto' | 'extra' | 'clone'>('all');
+  const [memberSortBy, setMemberSortBy] = useState<
+    'idNumber' | 'statusKey' | 'rank' | 'upgradeRankPool' | 'newAutoIdPool' | 'newExtraIdPool'
+  >('idNumber');
+  const [memberSortDir, setMemberSortDir] = useState<'asc' | 'desc'>('asc');
+  const [memberPage, setMemberPage] = useState<number>(1);
+
+  // 8. Transaction Hashes Directory State
+  const [txLogs, setTxLogs] = useState<any[]>([]);
+  const [txSyncing, setTxSyncing] = useState<boolean>(false);
+  const [txTypeFilter, setTxTypeFilter] = useState<
+    'all' | 'REGISTER' | 'UPGRADE' | 'AUTO_EXTRA' | 'CLONE_BOT' | 'ADMIN' | 'ALLSELL'
+  >('all');
+  const [txSearch, setTxSearch] = useState<string>('');
+  const [txSortBy, setTxSortBy] = useState<'timestamp' | 'actionType' | 'amountUsdt' | 'blockNumber'>('timestamp');
+  const [txSortDir, setTxSortDir] = useState<'asc' | 'desc'>('desc');
+  const [txPage, setTxPage] = useState<number>(1);
+
+  // 9. PostgreSQL Database Explorer State
+  const [dbTable, setDbTable] = useState<string>('matrix_nodes');
+  const [dbSearchInput, setDbSearchInput] = useState<string>('');
+  const [dbSearchQuery, setDbSearchQuery] = useState<string>('');
+  const [dbSortBy, setDbSortBy] = useState<string>('');
+  const [dbSortDir, setDbSortDir] = useState<'asc' | 'desc'>('asc');
+  const [dbPage, setDbPage] = useState<number>(1);
+  const [dbPageSize, setDbPageSize] = useState<number>(25);
+  const [dbLoading, setDbLoading] = useState<boolean>(false);
+  const [dbData, setDbData] = useState<any | null>(null);
+
+  const handleCopy = (text: string) => {
+    if (!text) return;
+    navigator.clipboard.writeText(text);
+    setCopiedText(text);
+    setTimeout(() => setCopiedText(null), 1800);
+  };
+
+  const fetchAdminOverview = useCallback(async () => {
+    setLoadingOverview(true);
+    try {
+      const [ovRes, bqRes, botRes, txRes] = await Promise.all([
+        fetch('/api/admin/overview').then((r) => r.json()).catch(() => null),
+        fetch('/api/batch-queue').then((r) => r.json()).catch(() => null),
+        fetch('/api/ws-bot/status').then((r) => r.json()).catch(() => null),
+        fetch('/api/admin/transactions').then((r) => r.json()).catch(() => null),
+      ]);
+      if (ovRes?.success) {
+        setOverview(ovRes);
+        setSysAllSell((prev) => prev || ovRes.wallets?.allSell?.address || '');
+        setSysBot((prev) => prev || ovRes.wallets?.bot?.address || '');
+        setSysFamily((prev) => prev || ovRes.wallets?.familyPool?.address || '');
+        if (!txRes?.success && Array.isArray(ovRes.transactionLogs)) {
+          setTxLogs(ovRes.transactionLogs);
+        }
+      }
+      if (txRes?.success && Array.isArray(txRes.data)) {
+        setTxLogs(txRes.data);
+      }
+      if (bqRes) {
+        setBatchStatus(bqRes);
+      }
+      if (botRes?.success) {
+        setWsBotStatus(botRes);
+      }
+    } finally {
+      setLoadingOverview(false);
+    }
+  }, []);
+
+  const handleSyncChainTransactions = async () => {
+    setTxSyncing(true);
+    try {
+      const res = await fetch('/api/admin/transactions?sync=1&lookback=50000');
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.data)) {
+        setTxLogs(data.data);
+        setActionStatus({
+          type: 'success',
+          title: 'ดึงรหัสธุรกรรมจากบล็อกเชนสำเร็จ!',
+          message: `พบและจัดเก็บรหัสธุรกรรมทั้งหมด ${data.total} รายการ (เพิ่มใหม่ในรอบนี้ +${data.newlyAdded || 0} รายการ)`,
+        });
+      }
+    } catch (err: any) {
+      setActionStatus({
+        type: 'error',
+        title: 'ดึงรหัสธุรกรรมจากเชนไม่สำเร็จ',
+        message: err?.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อ RPC',
+      });
+    } finally {
+      setTxSyncing(false);
+    }
+  };
+
+  const fetchDbRecords = useCallback(async () => {
+    setDbLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        table: dbTable,
+        page: String(dbPage),
+        pageSize: String(dbPageSize),
+      });
+      if (dbSearchQuery.trim()) qs.set('search', dbSearchQuery.trim());
+      if (dbSortBy) qs.set('sortBy', dbSortBy);
+      if (dbSortBy) qs.set('sortDir', dbSortDir);
+      const res = await fetch(`/api/admin/db-records?${qs.toString()}`);
+      const json = await res.json();
+      setDbData(json);
+    } catch (err: any) {
+      setDbData((prev: any) => ({
+        ...(prev || {}),
+        success: false,
+        error: err?.message || 'ไม่สามารถดึงข้อมูลจาก PostgreSQL ได้',
+      }));
+    } finally {
+      setDbLoading(false);
+    }
+  }, [dbTable, dbPage, dbPageSize, dbSearchQuery, dbSortBy, dbSortDir]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDbSearchQuery(dbSearchInput);
+      setDbPage(1);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [dbSearchInput]);
+
+  useEffect(() => {
+    fetchDbRecords();
+  }, [fetchDbRecords, contractAddress]);
+
+  useEffect(() => {
+    fetchAdminOverview();
+  }, [fetchAdminOverview, contractAddress]);
+
+  useEffect(() => {
+    setEditContractAddr(contractAddress || '');
+    setEditUsdtAddr(usdtAddress || '');
+    setWithdrawTokenAddr(usdtAddress || '');
+  }, [contractAddress, usdtAddress]);
+
+  const refreshTargetLookup = useCallback(async (queryStr?: string) => {
+    const q = (queryStr ?? upgradeTarget).trim().replace(/^(id\s*|#)+/i, '').trim();
+    if (!q) {
+      setTargetLookup(null);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/admin/lookup-target?query=${encodeURIComponent(q)}`);
+      const data = await res.json();
+      setTargetLookup(data);
+    } catch {
+      setTargetLookup(null);
+    }
+  }, [upgradeTarget]);
+
+  // Live lookup for Admin Upgrade target
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      refreshTargetLookup();
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [upgradeTarget, refreshTargetLookup]);
+
+  // Load Rank Inspector Data
+  useEffect(() => {
+    let active = true;
+    onInspectRank(inspectRankNum)
+      .then((info) => {
+        if (active) setInspectStats(info);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [inspectRankNum, onInspectRank]);
+
+  // Generic Executor for Smart Contract Admin Functions (supports both Server Private Key & Connected Web3 Wallet)
+  const executeContractAdminFunction = async (
+    actionName: string,
+    params: Record<string, any>,
+    labelTh: string
+  ) => {
+    setActionStatus({
+      type: 'loading',
+      title: `กำลังรันคำสั่ง ${actionName}...`,
+      message: labelTh,
+    });
+
+    try {
+      if (execMode === 'web3_wallet') {
+        const ethereum = (window as any).ethereum;
+        if (!ethereum) {
+          throw new Error('ไม่พบกระเป๋า Web3 (MetaMask / Bitget) กรุณาเชื่อมต่อกระเป๋าหรือเปลี่ยนเป็นโหมด Server Admin Key');
+        }
+
+        // ตรวจสอบและสลับเครือข่ายเป็น BSC Testnet (Chain ID 97) อัตโนมัติ
+        const chainHex = await ethereum.request({ method: 'eth_chainId' }).catch(() => null);
+        const currentChainId = chainHex ? parseInt(String(chainHex), 16) : 0;
+        if (currentChainId !== BSC_TESTNET_CHAIN_ID) {
+          try {
+            await ethereum.request({
+              method: 'wallet_switchEthereumChain',
+              params: [{ chainId: BSC_TESTNET_PARAMS.chainId }],
+            });
+          } catch (switchErr: any) {
+            if (switchErr?.code === 4902) {
+              await ethereum.request({
+                method: 'wallet_addEthereumChain',
+                params: [BSC_TESTNET_PARAMS],
+              });
+            } else {
+              throw new Error('กรุณาสลับเครือข่าย MetaMask เป็น BNB Smart Chain Testnet (Chain ID 97) ก่อนทำรายการ');
+            }
+          }
+        }
+
+        const provider = new ethers.BrowserProvider(ethereum);
+        let accounts = await provider.listAccounts();
+        if (!accounts || accounts.length === 0) {
+          await ethereum.request({ method: 'eth_requestAccounts' });
+          accounts = await provider.listAccounts();
+        }
+        const signer = await provider.getSigner();
+        const signerAddr = await signer.getAddress();
+        const contract = new ethers.Contract(contractAddress, MATRIX_ABI, signer);
+
+        const isOnlyOwnerMethod = [
+          'adminUpgradeRankForMainId',
+          'adminUpgradeRank',
+          'setSystemWallets',
+          'emergencyWithdrawToken',
+          'emergencyWithdrawNative',
+          'transferOwnership',
+          'renounceOwnership',
+        ].includes(actionName);
+
+        let onChainOwner = '';
+        if (isOnlyOwnerMethod) {
+          onChainOwner = await contract.owner().catch(() => '');
+          if (onChainOwner && signerAddr.toLowerCase() !== onChainOwner.toLowerCase()) {
+            throw new Error(
+              `กระเป๋า MetaMask ที่เชื่อมต่อ (${signerAddr}) ไม่ใช่ Contract Owner (${onChainOwner}) กรุณาสลับเป็นกระเป๋า Owner หรือใช้โหมด Server Admin Key พร้อม Private Key ของ Owner`
+            );
+          }
+        }
+
+        let tx: any;
+
+        if (actionName === 'adminUpgradeRankForMainId') {
+          await contract.adminUpgradeRankForMainId.staticCall(Number(params.mainId), Number(params.targetRank));
+          tx = await contract.adminUpgradeRankForMainId(Number(params.mainId), Number(params.targetRank));
+        } else if (actionName === 'adminUpgradeRank') {
+          await contract.adminUpgradeRank.staticCall(params.targetUser, Number(params.targetRank));
+          tx = await contract.adminUpgradeRank(params.targetUser, Number(params.targetRank));
+        } else if (actionName === 'setSystemWallets') {
+          const a = String(params.allSell || '').trim();
+          const b = String(params.bot || '').trim();
+          const f = String(params.familyPool || '').trim();
+          await contract.setSystemWallets.staticCall(a, b, f);
+          tx = await contract.setSystemWallets(a, b, f);
+        } else if (actionName === 'emergencyWithdrawToken') {
+          const wei = ethers.parseUnits(String(params.amount), 18);
+          await contract.emergencyWithdrawToken.staticCall(params.token, wei);
+          tx = await contract.emergencyWithdrawToken(params.token, wei);
+        } else if (actionName === 'emergencyWithdrawNative') {
+          await contract.emergencyWithdrawNative.staticCall();
+          tx = await contract.emergencyWithdrawNative();
+        } else if (actionName === 'transferOwnership') {
+          const rawNewOwner = String(params.newOwner || '').trim();
+          if (!ethers.isAddress(rawNewOwner) || rawNewOwner === ethers.ZeroAddress) {
+            throw new Error('กรุณาระบุ Wallet Address ของ Owner ใหม่ให้ถูกต้อง (ไม่ใช่ 0x000...)');
+          }
+          const checksumNewOwner = ethers.getAddress(rawNewOwner);
+          if (onChainOwner && checksumNewOwner.toLowerCase() === onChainOwner.toLowerCase()) {
+            throw new Error(`กระเป๋า ${checksumNewOwner} เป็น Contract Owner ปัจจุบันอยู่แล้ว`);
+          }
+          await contract.transferOwnership.staticCall(checksumNewOwner);
+          tx = await contract.transferOwnership(checksumNewOwner);
+        } else if (actionName === 'renounceOwnership') {
+          await contract.renounceOwnership.staticCall();
+          tx = await contract.renounceOwnership();
+        } else if (actionName === 'checkAndProcessAutoNewMainIdForNode') {
+          tx = await contract.checkAndProcessAutoNewMainIdForNode(Number(params.mainNodeId));
+        } else if (actionName === 'checkAndProcessAutoNewMainId') {
+          tx = await contract.checkAndProcessAutoNewMainId(params.user);
+        } else if (actionName === 'checkAndProcessAutoExtraIdForNode') {
+          tx = await contract.checkAndProcessAutoExtraIdForNode(
+            params.user,
+            Number(params.currentRank),
+            Number(params.sponsorNodeId)
+          );
+        } else if (actionName === 'checkAndProcessAutoExtraId') {
+          tx = await contract.checkAndProcessAutoExtraId(params.user, Number(params.currentRank));
+        } else if (actionName === 'processPendingExtraIdQueue') {
+          tx = await contract.processPendingExtraIdQueue(
+            Number(params.r1MainId || params.mainId || 1),
+            Number(params.maxBatch || 2)
+          );
+        } else {
+          throw new Error(`Unsupported Web3 action: ${actionName}`);
+        }
+
+        // กำหนด Timeout การรอตรวจสอบธุรกรรม 2.5 นาที (150,000 ms) ถ้าเกินเวลา ไม่สำเร็จทันที
+        const waitWith2_5MinTimeout = (txObj: any) =>
+          Promise.race([
+            txObj.wait(),
+            new Promise((_, reject) =>
+              setTimeout(
+                () => reject(new Error('⏱️ หมดเวลาการรอตรวจสอบธุรกรรม (เกิน 2.5 นาที) การทำรายการไม่สำเร็จทันที')),
+                150000
+              )
+            ),
+          ]);
+
+        const receipt: any = await waitWith2_5MinTimeout(tx);
+        const hash = receipt?.hash || tx.hash;
+        await fetch('/api/transactions/record', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            txHash: hash,
+            actionType: actionName.includes('Upgrade')
+              ? 'ADMIN_UPGRADE'
+              : actionName.includes('AutoNewMainId')
+              ? 'AUTO_ID'
+              : actionName.includes('ExtraId')
+              ? 'EXTRA_ID'
+              : 'ADMIN_ACTION',
+            title: `Admin Web3: ${labelTh}`,
+            userAddress: params.targetUser || params.user || params.newOwner || signerAddr,
+            mainNodeId: Number(params.mainId || params.mainNodeId || params.r1MainId || 0) || undefined,
+            rank: Number(params.targetRank || params.currentRank || 0) || undefined,
+            blockNumber: receipt?.blockNumber,
+            source: 'WEB3_CLIENT',
+            details: `Function: ${actionName}`,
+          }),
+        }).catch(() => {});
+        if (actionName === 'adminUpgradeRankForMainId' || actionName === 'adminUpgradeRank') {
+          await fetch('/api/admin/upgrade-rank', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              targetUser: params.targetUser,
+              mainId: params.mainId ? Number(params.mainId) : undefined,
+              targetRank: Number(params.targetRank),
+              onChainConfirmed: true,
+              txHash: hash,
+            }),
+          }).catch(() => {});
+        } else {
+          await fetch('/api/db/sync', { method: 'POST' }).catch(() => {});
+        }
+        if (actionName === 'transferOwnership') {
+          const nextOwner = ethers.getAddress(String(params.newOwner || '').trim());
+          setNewOwnerAddr('');
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('matrix:owner:updated', { detail: { newOwner: nextOwner } }));
+          }
+        } else if (actionName === 'renounceOwnership' && typeof window !== 'undefined') {
+          setRenounceConfirmText('');
+          window.dispatchEvent(new CustomEvent('matrix:owner:updated', { detail: { newOwner: ethers.ZeroAddress } }));
+        }
+        await fetchAdminOverview();
+        onRefreshOnChainData();
+        setActionStatus({
+          type: 'success',
+          title: `รันคำสั่ง ${actionName} สำเร็จ!`,
+          message: `${labelTh} ยืนยันบนบล็อกเชนเรียบร้อยแล้ว`,
+          txHash: hash,
+        });
+        return;
+      }
+
+      // Server-side Admin Key Execution (จำกัดเวลารอไม่เกิน 2.5 นาที)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 150000);
+
+      let res: Response;
+      try {
+        res = await fetch('/api/admin/contract-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            action: actionName,
+            params,
+            privateKey: customAdminPk.trim() || undefined,
+          }),
+        });
+      } catch (fetchErr: any) {
+        if (fetchErr?.name === 'AbortError') {
+          throw new Error('⏱️ หมดเวลาการรอตรวจสอบธุรกรรมของ Server (เกิน 2.5 นาที) การทำรายการไม่สำเร็จทันที');
+        }
+        throw fetchErr;
+      } finally {
+        clearTimeout(timeoutId);
+      }
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `รันคำสั่ง ${actionName} ไม่สำเร็จ`);
+      }
+
+      if (actionName === 'transferOwnership') {
+        const nextOwner = ethers.getAddress(String(data.newOwner || params.newOwner || '').trim());
+        setNewOwnerAddr('');
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('matrix:owner:updated', { detail: { newOwner: nextOwner } }));
+        }
+      } else if (actionName === 'renounceOwnership' && typeof window !== 'undefined') {
+        setRenounceConfirmText('');
+        window.dispatchEvent(new CustomEvent('matrix:owner:updated', { detail: { newOwner: ethers.ZeroAddress } }));
+      }
+      await fetchAdminOverview();
+      onRefreshOnChainData();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+      }
+      setActionStatus({
+        type: 'success',
+        title: `รันคำสั่ง ${actionName} สำเร็จ!`,
+        message: data.message || labelTh,
+        txHash: data.txHash,
+      });
+    } catch (err: any) {
+      setActionStatus({
+        type: 'error',
+        title: `คำสั่ง ${actionName} ล้มเหลว`,
+        message: err?.shortMessage || err?.reason || err?.message || 'เกิดข้อผิดพลาดในการส่งธุรกรรม',
+      });
+    }
+  };
+
+  const executeDirectAdminFreeUpgrade = async (rawTarget: string, targetRankNum: number) => {
+    const raw = rawTarget.trim().replace(/^(id\s*|#)+/i, '').trim();
+    if (!raw) return;
+
+    setActionStatus({
+      type: 'loading',
+      title: 'กำลังดำเนินการ Admin อัพ Rank ฟรี...',
+      message: `กำลังอัพเกรด ${/^\d+$/.test(raw) ? `รหัสหลัก #${raw}` : raw} สู่ Rank ${targetRankNum} ฟรี (ไม่จ่ายค่าคอมเมื่อวางซ้าย • โคลนนิ่งทำงานปกติเมื่อวางขวา)`,
+    });
+
+    try {
+      if (upgradeExecutionMode === 'db_only') {
+        const res = await fetch('/api/admin/upgrade-rank', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            targetUser: ethers.isAddress(raw) ? raw : undefined,
+            mainId: /^\d+$/.test(raw) ? Number(raw) : undefined,
+            targetRank: targetRankNum,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) throw new Error(data.error || 'อัปเกรดไม่สำเร็จ');
+        await fetchAdminOverview();
+        await refreshTargetLookup(raw);
+        onRefreshOnChainData();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        }
+        setUpgradeRank(String(Math.min(18, targetRankNum + 1)));
+        setActionStatus({
+          type: 'success',
+          title: '✅ Admin อัพ Rank ฟรี สำเร็จ!',
+          message: data.message,
+        });
+        return;
+      }
+
+      // Both or Onchain: call onAdminUpgrade (which attempts on-chain staticCall/tx and applies the Admin Free Rank Upgrade rule)
+      const result = await onAdminUpgrade(raw, targetRankNum);
+      if (result && result.success === false) {
+        throw new Error(result.error || 'Admin Upgrade ล้มเหลว');
+      }
+
+      await fetchAdminOverview();
+      await refreshTargetLookup(raw);
+      onRefreshOnChainData();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+      }
+      setUpgradeRank(String(Math.min(18, targetRankNum + 1)));
+      setActionStatus({
+        type: 'success',
+        title: '✅ Admin อัพ Rank ฟรี สำเร็จ!',
+        message:
+          result?.message ||
+          `อัปเกรด ${/^\d+$/.test(raw) ? `รหัสหลัก #${raw}` : raw} สู่ Rank ${targetRankNum} ฟรีเรียบร้อยแล้ว (ไม่จ่ายค่าคอมเมื่อวางซ้าย • ระบบโคลนนิ่งทำงานปกติเมื่อวางขวา)`,
+        txHash: result?.txHash,
+      });
+    } catch (err: any) {
+      setActionStatus({
+        type: 'error',
+        title: 'Admin Upgrade ล้มเหลว',
+        message: err?.message || 'เกิดข้อผิดพลาดในการอัพเกรดแรงค์',
+      });
+    }
+  };
+
+  const handleExecuteAdminUpgrade = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = upgradeTarget.trim().replace(/^(id\s*|#)+/i, '').trim();
+    const targetRankNum = Math.min(18, Math.max(2, parseInt(upgradeRank, 10) || 2));
+    if (!raw) return;
+    await executeDirectAdminFreeUpgrade(raw, targetRankNum);
+  };
+
+  const allAdminIdRows = (() => {
+    const mainAndAutoRows = (overview?.mainIds || []).map((m: any) => {
+      const isAuto =
+        Boolean(m.isAutoId) ||
+        m.originType === 'AUTO_NEW_MAIN' ||
+        m.originType === 'AUTO_MAIN';
+      return {
+        rowKey: `${isAuto ? 'auto' : 'main'}-${m.mainId}`,
+        statusKey: (isAuto ? 'auto' : 'main') as 'main' | 'auto',
+        idNumber: Number(m.mainId),
+        displayId: isAuto ? `Auto #${m.mainId}` : `Main #${m.mainId}`,
+        rank: Number(m.currentRank || 1),
+        rankLabel: `Rank ${m.currentRank || 1}`,
+        windowLabel: `กรอบ R${m.window5Start}–R${m.window5End}`,
+        owner: m.owner || '',
+        parentId: Number(m.parentId || 0),
+        side: m.parentId === 0 ? 'ROOT' : m.isLeft ? 'L' : 'R',
+        directSponsorNodeId: Number(m.directSponsorNodeId || 1),
+        spawnedByMainId: Number(m.spawnedByMainId || 0),
+        upgradeRankPool: Number(m.upgradeRankPool || 0),
+        newAutoIdPool: Number(m.newAutoIdPool || 0),
+        newExtraIdPool: Number(m.newExtraIdPool || 0),
+        canAdminUpgrade: true,
+        raw: m,
+      };
+    });
+
+    const extraRows = (overview?.extraIds || []).map((ex: any) => ({
+      rowKey: `extra-r${ex.rank}-${ex.nodeId}`,
+      statusKey: 'extra' as const,
+      idNumber: Number(ex.nodeId),
+      displayId: ex.label || `Extra R${ex.rank}-#${ex.nodeId}`,
+      rank: Number(ex.rank || 1),
+      rankLabel: `Rank ${ex.rank || 1}`,
+      windowLabel: `โหนด #${ex.nodeId}`,
+      owner: ex.owner || '',
+      parentId: Number(ex.parentId || 0),
+      side: ex.parentId === 0 ? 'ROOT' : ex.isLeft ? 'L' : 'R',
+      directSponsorNodeId: Number(ex.directSponsorNodeId || 1),
+      spawnedByMainId: Number(ex.originMainId || 0),
+      upgradeRankPool: Number(ex.nodeVault || 0),
+      newAutoIdPool: 0,
+      newExtraIdPool: 0,
+      canAdminUpgrade: false,
+      raw: ex,
+    }));
+
+    const cloneRows = (overview?.cloneIds || []).map((cl: any) => ({
+      rowKey: `clone-r${cl.rank}-${cl.nodeId}`,
+      statusKey: 'clone' as const,
+      idNumber: Number(cl.nodeId),
+      displayId: cl.label || `Main #${cl.originMainId} (โคลน R${cl.rank}-#${cl.nodeId})`,
+      rank: Number(cl.rank || 1),
+      rankLabel: `Rank ${cl.rank || 1}`,
+      windowLabel: `รอบที่ ${cl.cloneRound || 1}${cl.cloneSequence ? ` (ใบที่ #${cl.cloneSequence})` : ''}`,
+      owner: cl.owner || '',
+      parentId: Number(cl.parentId || 0),
+      side: cl.parentId === 0 ? 'ROOT' : cl.isLeft ? 'L' : 'R',
+      directSponsorNodeId: Number(cl.directSponsorNodeId || 1),
+      spawnedByMainId: Number(cl.originMainId || 0),
+      upgradeRankPool: Number(cl.nodeVault || 0),
+      newAutoIdPool: 0,
+      newExtraIdPool: 0,
+      canAdminUpgrade: false,
+      raw: cl,
+    }));
+
+    return [...mainAndAutoRows, ...extraRows, ...cloneRows];
+  })();
+
+  const idStatusCounts = overview?.stats?.idStatusCounts || {
+    main: allAdminIdRows.filter((r) => r.statusKey === 'main').length,
+    auto: allAdminIdRows.filter((r) => r.statusKey === 'auto').length,
+    extra: allAdminIdRows.filter((r) => r.statusKey === 'extra').length,
+    clone: allAdminIdRows.filter((r) => r.statusKey === 'clone').length,
+    total: allAdminIdRows.length,
+  };
+
+  const filteredAdminIdRows = allAdminIdRows
+    .filter((row) => {
+      if (memberStatusTab !== 'all' && row.statusKey !== memberStatusTab) return false;
+      if (!memberSearch.trim()) return true;
+      const q = memberSearch.trim().toLowerCase().replace(/^#/, '');
+      return (
+        String(row.idNumber) === q ||
+        row.displayId.toLowerCase().includes(q) ||
+        String(row.owner || '').toLowerCase().includes(q) ||
+        String(row.directSponsorNodeId) === q ||
+        String(row.spawnedByMainId) === q ||
+        `r${row.rank}` === q
+      );
+    })
+    .sort((a, b) => {
+      const dir = memberSortDir === 'asc' ? 1 : -1;
+      if (memberSortBy === 'statusKey') {
+        return a.statusKey.localeCompare(b.statusKey) * dir || (a.idNumber - b.idNumber);
+      }
+      if (memberSortBy === 'rank') {
+        return (a.rank - b.rank) * dir || (a.idNumber - b.idNumber);
+      }
+      if (memberSortBy === 'upgradeRankPool') {
+        return (a.upgradeRankPool - b.upgradeRankPool) * dir || (a.idNumber - b.idNumber);
+      }
+      if (memberSortBy === 'newAutoIdPool') {
+        return (a.newAutoIdPool - b.newAutoIdPool) * dir || (a.idNumber - b.idNumber);
+      }
+      if (memberSortBy === 'newExtraIdPool') {
+        return (a.newExtraIdPool - b.newExtraIdPool) * dir || (a.idNumber - b.idNumber);
+      }
+      return (a.idNumber - b.idNumber) * dir;
+    });
+
+  const toggleMemberSort = (col: typeof memberSortBy) => {
+    if (memberSortBy === col) {
+      setMemberSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setMemberSortBy(col);
+      setMemberSortDir(col === 'idNumber' || col === 'statusKey' ? 'asc' : 'desc');
+    }
+    setMemberPage(1);
+  };
+
+  const ADMIN_ID_PAGE_SIZE = 25;
+  const memberTotalPages = Math.max(1, Math.ceil(filteredAdminIdRows.length / ADMIN_ID_PAGE_SIZE));
+  const safeMemberPage = Math.min(memberPage, memberTotalPages);
+  const pagedAdminIdRows = filteredAdminIdRows.slice(
+    (safeMemberPage - 1) * ADMIN_ID_PAGE_SIZE,
+    safeMemberPage * ADMIN_ID_PAGE_SIZE
+  );
+
+  const showSection = (sec: typeof activeSection) => activeSection === 'all' || activeSection === sec;
+
+  return (
+    <div className="w-full max-w-7xl mx-auto space-y-5 pb-10 text-slate-100">
+      {/* Top Header Banner */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-6 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+              <Shield className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+                {language === 'th'
+                  ? 'ศูนย์ควบคุมผู้ดูแลระบบ (Admin Control Center — ครบทุกฟังก์ชัน)'
+                  : 'Admin Control Center (All Contract & System Functions)'}
+              </h1>
+              <p className="text-xs text-slate-400">
+                {language === 'th'
+                  ? 'รวมฟังก์ชัน onlyOwner บน Smart Contract, ระบบสั่งแตกรหัส Auto/Extra ID, ระบบโอนจ่าย AllSell 4% และจัดการฐานข้อมูล'
+                  : 'All Smart Contract onlyOwner methods, Auto/Extra ID triggers, AllSell 4% payout engine, and Database controls'}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              fetchAdminOverview();
+              fetchDbRecords();
+            }}
+            disabled={loadingOverview || dbLoading}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium text-slate-200 transition cursor-pointer whitespace-nowrap"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loadingOverview || dbLoading ? 'animate-spin text-emerald-400' : ''}`} />
+            <span>{language === 'th' ? 'รีเฟรชข้อมูล Admin' : 'Refresh Admin Data'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenDeployModal}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white transition cursor-pointer whitespace-nowrap"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            <span>{language === 'th' ? 'Deploy สัญญาใหม่' : 'Deploy Contract'}</span>
+          </button>
+
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-xs font-semibold text-rose-300 transition cursor-pointer whitespace-nowrap"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>{language === 'th' ? 'กลับหน้าผังหลัก' : 'Back to Matrix Tree'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Action Status Feedback Banner */}
+      {actionStatus && (
+        <div
+          className={`rounded-xl p-4 border flex items-start justify-between gap-3 ${
+            actionStatus.type === 'success'
+              ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
+              : actionStatus.type === 'error'
+              ? 'bg-rose-950/60 border-rose-500/40 text-rose-200'
+              : 'bg-indigo-950/60 border-indigo-500/40 text-indigo-200'
+          }`}
+        >
+          <div className="flex items-start gap-2.5 text-xs">
+            {actionStatus.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            ) : actionStatus.type === 'error' ? (
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            ) : (
+              <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin shrink-0 mt-0.5" />
+            )}
+            <div className="space-y-1">
+              <div className="font-bold text-sm">{actionStatus.title}</div>
+              <div>{actionStatus.message}</div>
+              {actionStatus.txHash && (
+                <div className="pt-1">
+                  <a
+                    href={`https://testnet.bscscan.com/tx/${actionStatus.txHash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-mono text-amber-300 hover:underline"
+                  >
+                    <span>Tx: {actionStatus.txHash}</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionStatus(null)}
+            className="text-slate-400 hover:text-white p-1"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* System Wallets & On-Chain Balances Grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        {[
+          {
+            label: 'Smart Contract (ตัวสัญญา)',
+            role: 'CONTRACT',
+            data: overview?.wallets?.contract,
+            accent: 'text-amber-400',
+          },
+          {
+            label: 'Contract Owner (onlyOwner)',
+            role: 'OWNER',
+            data: overview?.wallets?.owner,
+            accent: 'text-emerald-400',
+          },
+          {
+            label: 'AllSell Wallet (4%)',
+            role: 'ALLSELL 4%',
+            data: overview?.wallets?.allSell,
+            accent: 'text-cyan-400',
+          },
+          {
+            label: 'Bot Wallet (1%)',
+            role: 'BOT 1%',
+            data: overview?.wallets?.bot,
+            accent: 'text-indigo-400',
+          },
+          {
+            label: 'Family Pool (Unpaid 15 ชั้น)',
+            role: 'FAMILY POOL',
+            data: overview?.wallets?.familyPool,
+            accent: 'text-purple-400',
+          },
+        ].map((item) => {
+          const addr = item.data?.address || '-';
+          const shortAddr =
+            addr && addr.length > 12 ? `${addr.substring(0, 6)}...${addr.substring(addr.length - 4)}` : addr;
+          return (
+            <div
+              key={item.role}
+              className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col justify-between space-y-2.5"
+            >
+              <div>
+                <div className="text-[11px] text-slate-400 flex items-center justify-between">
+                  <span>{item.label}</span>
+                  <span className="font-mono text-[10px] text-slate-500">{item.role}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between gap-1">
+                  <span className={`font-mono text-xs font-semibold ${item.accent}`} title={addr}>
+                    {shortAddr}
+                  </span>
+                  {addr && addr !== '-' && (
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(addr)}
+                        className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                        title="คัดลอก Address"
+                      >
+                        {copiedText === addr ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                      </button>
+                      <a
+                        href={`https://testnet.bscscan.com/address/${addr}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+                        title="ดูบน BscScan"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-mono tabular-nums">
+                <div>
+                  <span className="text-slate-500 text-[10px] block">USDT Balance</span>
+                  <span className="text-white font-bold">{item.data?.usdt || '0.00'} U</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-slate-500 text-[10px] block">tBNB Gas</span>
+                  <span className="text-slate-300">{item.data?.bnb || '0.0000'}</span>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Signer Execution Mode & Category Filter Tabs */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+        {/* Category Tabs */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
+          {[
+            { id: 'all', label: 'แสดงทุกฟังก์ชันทั้งหมด (All)' },
+            { id: 'owner', label: '1. คำสั่ง onlyOwner บนสัญญา (7)' },
+            { id: 'autopools', label: '2. สั่งแตก Auto / Extra ID (4)' },
+            { id: 'allsell', label: '3. จัดการโอนจ่าย AllSell 4%' },
+            { id: 'database', label: '4. สัญญา & ซิงค์ Database' },
+            { id: 'members', label: '5. ข้อมูล ID ทั้ง 4 สถานะ (Main/Auto/Extra/โคลน)' },
+            { id: 'transactions', label: `6. รหัสธุรกรรม (${txLogs.length})` },
+            { id: 'db_explorer', label: '7. ข้อมูลจริงในฐานข้อมูล DB (ค้นหา/จัดเรียง)' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveSection(tab.id as any)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shrink-0 transition cursor-pointer ${
+                activeSection === tab.id
+                  ? 'bg-emerald-500 text-slate-950 font-bold'
+                  : 'bg-slate-800/80 text-slate-300 hover:bg-slate-800 hover:text-white'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Signer Selector */}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-400 whitespace-nowrap">โหมดเซ็นคำสั่งบนเชน:</span>
+          <div className="inline-flex rounded-lg bg-slate-950 p-1 border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setExecMode('server_key')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+                execMode === 'server_key'
+                  ? 'bg-amber-500 text-slate-950 font-bold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Server Admin Key (อัตโนมัติ)
+            </button>
+            <button
+              type="button"
+              onClick={() => setExecMode('web3_wallet')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer whitespace-nowrap ${
+                execMode === 'web3_wallet'
+                  ? 'bg-emerald-500 text-slate-950 font-bold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              กระเป๋า Web3 ที่เชื่อมต่อ
+            </button>
+          </div>
+          {execMode === 'server_key' && (
+            <input
+              type="password"
+              value={customAdminPk}
+              onChange={(e) => setCustomAdminPk(e.target.value)}
+              placeholder="เว้นว่างเพื่อใช้ Key หลักของเซิร์ฟเวอร์ หรือใส่ Private Key 0x..."
+              className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-slate-200 w-56 focus:outline-none focus:border-amber-500"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* =====================================================================
+          SECTION 1: SMART CONTRACT onlyOwner FUNCTIONS (7 FUNCTIONS)
+         ===================================================================== */}
+      {showSection('owner') && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <KeyRound className="w-4 h-4 text-amber-400" />
+              <span>หมวดที่ 1: ฟังก์ชันผู้ดูแลบน Smart Contract (onlyOwner Functions ทั้งหมด 7 ฟังก์ชัน)</span>
+            </h2>
+            <span className="text-xs font-mono text-slate-400">
+              Owner Signer: {overview?.serverSignerAddress ? `${overview.serverSignerAddress.substring(0, 8)}...` : '-'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Function 1 & 2: adminUpgradeRankForMainId & adminUpgradeRank */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <ArrowUpCircle className="w-4 h-4 text-rose-400" />
+                    <span>1 & 2. อัปเกรดแรงค์ฟรี (Admin Free Rank Upgrade)</span>
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    adminUpgradeRankForMainId(uint256 _r1MainId, uint8 _targetRank) / adminUpgradeRank(address _user, uint8 _targetRank)
+                  </p>
+                </div>
+                <span className="text-xs font-mono text-rose-400 shrink-0">onlyOwner</span>
+              </div>
+
+              <form onSubmit={handleExecuteAdminUpgrade} className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between text-xs text-slate-300 mb-1">
+                    <span>ระบุเลขรหัสหลัก (เช่น 2, #2, 5) หรือ Wallet Address (0x...)</span>
+                    <div className="flex items-center gap-1.5">
+                      {['2', '3', '4', '5'].map((idStr) => (
+                        <button
+                          key={idStr}
+                          type="button"
+                          onClick={() => setUpgradeTarget(idStr)}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-cyan-300 font-mono text-[11px] cursor-pointer"
+                        >
+                          #{idStr}
+                        </button>
+                      ))}
+                      {account && (
+                        <button
+                          type="button"
+                          onClick={() => setUpgradeTarget(account)}
+                          className="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[11px] cursor-pointer"
+                        >
+                          กระเป๋าฉัน
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    value={upgradeTarget}
+                    onChange={(e) => setUpgradeTarget(e.target.value)}
+                    placeholder="เช่น 2, #2 หรือ 0x..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                  />
+
+                  {targetLookup?.found && (
+                    <div className="mt-2 p-2.5 rounded-xl bg-emerald-950/40 border border-emerald-500/30 text-xs flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span className="font-bold text-white">รหัสหลัก #{targetLookup.mainId}</span>
+                        <span className="font-mono text-slate-400">
+                          ({targetLookup.owner?.substring(0, 8)}...{targetLookup.owner?.substring(38)})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 font-mono text-xs">
+                        <span className="text-amber-300 font-bold">แรงค์ปัจจุบัน: R{targetLookup.currentRank}</span>
+                        <span className="text-slate-500">·</span>
+                        <span className="text-indigo-300">ผู้แนะนำ: #{targetLookup.directSponsorNodeId}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">แรงค์เป้าหมาย (Rank 2 ถึง 18)</label>
+                    <select
+                      value={upgradeRank}
+                      onChange={(e) => setUpgradeRank(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      {RANK_PRICES_USDT.map((p, idx) => {
+                        const r = idx + 1;
+                        if (r < 2) return null;
+                        return (
+                          <option key={r} value={r}>
+                            Rank {r} ({p.toLocaleString()} USDT)
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">รูปแบบการสั่งอัปเกรด</label>
+                    <select
+                      value={upgradeExecutionMode}
+                      onChange={(e) => setUpgradeExecutionMode(e.target.value as any)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="both">On-Chain + ซิงค์ผัง Database (แนะนำ)</option>
+                      <option value="onchain">ยิงขึ้น Smart Contract บนเชนโดยตรง</option>
+                      <option value="db_only">อัปเกรดเฉพาะในผัง Database ทันที (Off-Chain)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={
+                    isLoading ||
+                    !upgradeTarget.trim() ||
+                    Boolean(targetLookup?.found && (targetLookup.currentRank || 1) >= 18)
+                  }
+                  className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {targetLookup?.found && (targetLookup.currentRank || 1) >= 18
+                    ? `🔒 รหัสหลัก #${targetLookup.mainId} อยู่ใน Rank 18 สูงสุดแล้ว (ปิดการอัพเดท)`
+                    : isLoading
+                    ? 'กำลังดำเนินการอัปเกรด...'
+                    : `สั่งอัปเกรด ${upgradeTarget.startsWith('0x') ? upgradeTarget.substring(0, 8) + '...' : '#' + upgradeTarget.replace(/^#/, '')} ไปยัง Rank ${upgradeRank} ฟรี`}
+                </button>
+              </form>
+            </div>
+
+            {/* Function 3: setSystemWallets */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Wallet className="w-4 h-4 text-cyan-400" />
+                    <span>3. ตั้งค่ากระเป๋ากองกลางทั้ง 3 ใบ (Set System Wallets)</span>
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    setSystemWallets(address _allSell, address _bot, address _familyPool)
+                  </p>
+                </div>
+                <span className="text-xs font-mono text-amber-400 shrink-0">onlyOwner</span>
+              </div>
+
+              <div className="space-y-2.5">
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    กระเป๋า AllSell 4% (_allSell)
+                  </label>
+                  <input
+                    type="text"
+                    value={sysAllSell}
+                    onChange={(e) => setSysAllSell(e.target.value)}
+                    placeholder="0x..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    กระเป๋า Bot 1% (_bot)
+                  </label>
+                  <input
+                    type="text"
+                    value={sysBot}
+                    onChange={(e) => setSysBot(e.target.value)}
+                    placeholder="0x..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] text-slate-400 mb-1">
+                    กระเป๋า Family Pool ค่าชั้นตกหล่น (_familyPool)
+                  </label>
+                  <input
+                    type="text"
+                    value={sysFamily}
+                    onChange={(e) => setSysFamily(e.target.value)}
+                    placeholder="0x..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    executeContractAdminFunction(
+                      'setSystemWallets',
+                      { allSell: sysAllSell, bot: sysBot, familyPool: sysFamily },
+                      'อัปเดตที่อยู่กระเป๋า AllSell, Bot และ Family Pool บน Smart Contract'
+                    )
+                  }
+                  className="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold text-xs transition cursor-pointer"
+                >
+                  บันทึกกระเป๋ากองกลางทั้ง 3 ใบขึ้น Smart Contract (setSystemWallets)
+                </button>
+              </div>
+            </div>
+
+            {/* Function 4 & 5: emergencyWithdrawToken & emergencyWithdrawNative */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Coins className="w-4 h-4 text-amber-400" />
+                    <span>4 & 5. ถอนเหรียญฉุกเฉินออกจากสัญญา (Emergency Withdraw)</span>
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    emergencyWithdrawToken(address _token, uint256 _amount) & emergencyWithdrawNative()
+                  </p>
+                </div>
+                <span className="text-xs font-mono text-amber-400 shrink-0">onlyOwner</span>
+              </div>
+
+              <div className="space-y-3">
+                <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex items-center justify-between text-xs font-mono">
+                  <span className="text-slate-400">ยอดคงเหลือในสัญญาปัจจุบัน:</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-emerald-400 font-bold">
+                      {overview?.wallets?.contract?.usdt || '0.00'} USDT
+                    </span>
+                    <span className="text-slate-600">·</span>
+                    <span className="text-amber-300 font-bold">
+                      {overview?.wallets?.contract?.bnb || '0.0000'} tBNB
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Token Address (ค่าเริ่มต้น USDT)</label>
+                    <input
+                      type="text"
+                      value={withdrawTokenAddr}
+                      onChange={(e) => setWithdrawTokenAddr(e.target.value)}
+                      placeholder="0x..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                      <span>จำนวนเหรียญที่ต้องการถอน</span>
+                      <button
+                        type="button"
+                        onClick={() => setWithdrawTokenAmount(overview?.wallets?.contract?.usdt || '0')}
+                        className="text-amber-400 hover:underline font-mono cursor-pointer"
+                      >
+                        ดึงยอดสูงสุด (MAX)
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={withdrawTokenAmount}
+                      onChange={(e) => setWithdrawTokenAmount(e.target.value)}
+                      placeholder="เช่น 100.00"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      executeContractAdminFunction(
+                        'emergencyWithdrawToken',
+                        { token: withdrawTokenAddr, amount: withdrawTokenAmount },
+                        `ถอนเหรียญ Token จำนวน ${withdrawTokenAmount} ออกจากสัญญาเข้ากระเป๋า Owner`
+                      )
+                    }
+                    disabled={!withdrawTokenAmount || Number(withdrawTokenAmount) <= 0}
+                    className="py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition cursor-pointer disabled:opacity-50"
+                  >
+                    ถอนเหรียญ ERC20 / USDT (emergencyWithdrawToken)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      executeContractAdminFunction(
+                        'emergencyWithdrawNative',
+                        {},
+                        'ถอนเหรียญ Native BNB ทั้งหมดออกจากสัญญาเข้ากระเป๋า Owner'
+                      )
+                    }
+                    className="py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 font-bold text-xs transition cursor-pointer"
+                  >
+                    ถอน BNB ทั้งหมด (emergencyWithdrawNative)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Function 6 & 7: transferOwnership & renounceOwnership */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="flex items-start justify-between gap-2 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-purple-400" />
+                    <span>6 & 7. จัดการสิทธิ์ความเป็นเจ้าของสัญญา (Ownable Controls)</span>
+                  </h3>
+                  <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                    transferOwnership(address newOwner) & renounceOwnership()
+                  </p>
+                </div>
+                <span className="text-xs font-mono text-purple-400 shrink-0">onlyOwner</span>
+              </div>
+
+              <div className="space-y-3">
+                <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-400">Owner / Admin ปัจจุบันบนเชน:</span>
+                  <span className="font-mono text-emerald-400 font-semibold break-all">
+                    {overview?.wallets?.owner?.address || '-'}
+                  </span>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                    <span>โอนสิทธิ์ Owner ไปยังกระเป๋าใหม่ (newOwner Address)</span>
+                    {account && (
+                      <button
+                        type="button"
+                        onClick={() => setNewOwnerAddr(account)}
+                        className="text-purple-300 hover:text-purple-200 underline cursor-pointer"
+                      >
+                        ใส่กระเป๋าฉัน
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newOwnerAddr}
+                      onChange={(e) => setNewOwnerAddr(e.target.value)}
+                      placeholder="0x..."
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        executeContractAdminFunction(
+                          'transferOwnership',
+                          { newOwner: newOwnerAddr.trim() },
+                          `โอนสิทธิ์ Owner ของสัญญาให้กับ ${newOwnerAddr.trim()}`
+                        )
+                      }
+                      disabled={
+                        !ethers.isAddress(newOwnerAddr.trim()) ||
+                        newOwnerAddr.trim() === ethers.ZeroAddress
+                      }
+                      className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs transition cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                    >
+                      โอนสิทธิ์ (transferOwnership)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/80">
+                  <label className="block text-[11px] text-rose-400 mb-1">
+                    สละสิทธิ์การเป็นเจ้าของสัญญาถาวร (renounceOwnership) — พิมพ์คำว่า RENOUNCE เพื่อปลดล็อกปุ่ม
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={renounceConfirmText}
+                      onChange={(e) => setRenounceConfirmText(e.target.value)}
+                      placeholder="พิมพ์ RENOUNCE เพื่อยืนยัน"
+                      className="flex-1 bg-slate-950 border border-rose-500/30 rounded-xl px-3 py-2 text-xs font-mono text-rose-200"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        executeContractAdminFunction(
+                          'renounceOwnership',
+                          {},
+                          'สละสิทธิ์ Owner ของสัญญาถาวร (renounceOwnership)'
+                        )
+                      }
+                      disabled={renounceConfirmText.trim() !== 'RENOUNCE'}
+                      className="px-4 py-2 rounded-xl bg-rose-900/60 hover:bg-rose-700 border border-rose-500/40 text-rose-200 font-bold text-xs transition cursor-pointer disabled:opacity-40 whitespace-nowrap"
+                    >
+                      สละสิทธิ์ (renounceOwnership)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 2: AUTO NEW MAIN ID & AUTO EXTRA ID TRIGGERS (4 FUNCTIONS)
+         ===================================================================== */}
+      {showSection('autopools') && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              <span>หมวดที่ 2: คำสั่งบังคับตรวจกระปุกและแตกโหนด Auto ID / Extra ID บนเชน (4 ฟังก์ชัน)</span>
+            </h2>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Function 8 & 9: checkAndProcessAutoNewMainIdForNode & checkAndProcessAutoNewMainId */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="border-b border-slate-800 pb-3">
+                <h3 className="text-sm font-bold text-amber-300">
+                  8 & 9. สั่งประมวลผลกระปุก Pool 2 เพื่อแตก Auto ID (5 USDT) ในผัง Rank 1
+                </h3>
+                <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  checkAndProcessAutoNewMainIdForNode(uint256 _mainNodeId) & checkAndProcessAutoNewMainId(address _user)
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex gap-2 items-end">
+                  <div className="flex-1">
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      ระบุเลขรหัสหลัก Rank 1 (_mainNodeId)
+                    </label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={autoMainNodeId}
+                      onChange={(e) => setAutoMainNodeId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      executeContractAdminFunction(
+                        'checkAndProcessAutoNewMainIdForNode',
+                        { mainNodeId: Number(autoMainNodeId) },
+                        `สั่งตรวจและแตกรหัส Auto ID จากกระปุก Pool 2 ของรหัสหลัก #${autoMainNodeId}`
+                      )
+                    }
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition cursor-pointer whitespace-nowrap"
+                  >
+                    รันตาม #ID (ForNode)
+                  </button>
+                </div>
+
+                <div className="flex gap-2 items-end pt-2 border-t border-slate-800/80">
+                  <div className="flex-1">
+                    <label className="block text-[11px] text-slate-400 mb-1">
+                      หรือระบุ Wallet Address (_user)
+                    </label>
+                    <input
+                      type="text"
+                      value={autoMainUserAddr}
+                      onChange={(e) => setAutoMainUserAddr(e.target.value)}
+                      placeholder="0x..."
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      executeContractAdminFunction(
+                        'checkAndProcessAutoNewMainId',
+                        { user: autoMainUserAddr || account },
+                        `สั่งตรวจและแตกรหัส Auto ID ให้กระเป๋า ${autoMainUserAddr || account}`
+                      )
+                    }
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-300 font-bold text-xs transition cursor-pointer whitespace-nowrap"
+                  >
+                    รันตาม Wallet
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Function 10 & 11: checkAndProcessAutoExtraIdForNode & checkAndProcessAutoExtraId */}
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+              <div className="border-b border-slate-800 pb-3">
+                <h3 className="text-sm font-bold text-rose-300">
+                  10 & 11. สั่งประมวลผลกระปุก Pool 3 เพื่อแตก Extra ID (Rank 2–18)
+                </h3>
+                <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                  checkAndProcessAutoExtraIdForNode(address _user, uint8 _currentRank, uint256 _sponsorNodeId)
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Wallet (_user)</label>
+                    <input
+                      type="text"
+                      value={autoExtraUserAddr}
+                      onChange={(e) => setAutoExtraUserAddr(e.target.value)}
+                      placeholder={account || '0x...'}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Rank (_currentRank)</label>
+                    <input
+                      type="number"
+                      min={2}
+                      max={18}
+                      value={autoExtraRank}
+                      onChange={(e) => setAutoExtraRank(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] text-slate-400 mb-1">Main ID (_sponsorNodeId)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={autoExtraSponsorId}
+                      onChange={(e) => setAutoExtraSponsorId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      executeContractAdminFunction(
+                        'checkAndProcessAutoExtraIdForNode',
+                        {
+                          user: autoExtraUserAddr || overview?.wallets?.owner?.address || account,
+                          currentRank: Number(autoExtraRank),
+                          sponsorNodeId: Number(autoExtraSponsorId),
+                        },
+                        `สั่งแตก Extra ID บนเชน (Rank ${autoExtraRank}, Main ID #${autoExtraSponsorId})`
+                      )
+                    }
+                    className="py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition cursor-pointer"
+                  >
+                    สั่งแตก Extra ID บนเชน (ForNode)
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setActionStatus({
+                        type: 'loading',
+                        title: 'กำลังคำนวณและซิงค์ Extra ID ในผัง Database...',
+                        message: `ตรวจสอบกระปุก Extra Pool ของรหัสหลัก #${autoExtraSponsorId}`,
+                      });
+                      try {
+                        const res = await fetch('/api/matrix/auto-extra-id', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            mainId: Number(autoExtraSponsorId),
+                            currentRank: Number(autoExtraRank),
+                          }),
+                        });
+                        const data = await res.json();
+                        await fetchAdminOverview();
+                        if (typeof window !== 'undefined') {
+                          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+                        }
+                        setActionStatus({
+                          type: 'success',
+                          title: 'ประมวลผล Extra ID สำเร็จ!',
+                          message: data.message || 'อัปเดตโหนด Extra ID เรียบร้อยแล้ว',
+                        });
+                      } catch (err: any) {
+                        setActionStatus({
+                          type: 'error',
+                          title: 'ประมวลผล Extra ID ล้มเหลว',
+                          message: err.message,
+                        });
+                      }
+                    }}
+                    className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-rose-500/40 text-rose-300 font-bold text-xs transition cursor-pointer"
+                  >
+                    สั่งคำนวณ & แตก Extra ID ด้วยบอท (Bot + DB)
+                  </button>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono text-slate-400">
+                    สถานะ WS-Bot Keeper:{' '}
+                    <strong className={wsBotStatus?.connected ? 'text-emerald-400' : 'text-amber-300'}>
+                      {wsBotStatus?.connected ? '🟢 เชื่อมต่อออนไลน์' : '🟡 HTTP Fallback'}
+                    </strong>{' '}
+                    • Signer Key:{' '}
+                    <strong className={wsBotStatus?.hasBotPrivateKey ? 'text-emerald-400' : 'text-rose-400'}>
+                      {wsBotStatus?.hasBotPrivateKey ? 'พร้อมยิงธุรกรรม' : 'ไม่พบ Key'}
+                    </strong>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setActionStatus({
+                        type: 'loading',
+                        title: 'กำลังสั่งรัน WS-Bot Keeper ตรวจสอบทุก Main ID...',
+                        message: 'ตรวจสอบคิว Auto ID (5 USDT), Extra ID (R18->R2) และซิงค์ข้อมูลจากเชน',
+                      });
+                      try {
+                        const res = await fetch('/api/ws-bot/trigger-check', { method: 'POST' });
+                        const data = await res.json();
+                        await fetchAdminOverview();
+                        onRefreshOnChainData();
+                        if (typeof window !== 'undefined') {
+                          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+                        }
+                        setActionStatus({
+                          type: 'success',
+                          title: 'รัน WS-Bot Keeper สำเร็จ!',
+                          message: data.message || 'บอทตรวจสอบและประมวลผลคิวทั้งหมดเรียบร้อยแล้ว',
+                        });
+                      } catch (err: any) {
+                        setActionStatus({
+                          type: 'error',
+                          title: 'รัน WS-Bot ล้มเหลว',
+                          message: err.message,
+                        });
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer transition"
+                  >
+                    🤖 สั่งบอทตรวจคิว Auto/Extra ID ทั้งระบบทันที
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 3: ALLSELL 4% AUTO-PAYOUT ENGINE
+         ===================================================================== */}
+      {showSection('allsell') && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-800 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <Send className="w-4 h-4 text-cyan-400" />
+                <span>หมวดที่ 3: จัดการกองทุน AllSell 4% & สั่งโอนเหรียญ USDT จริงบนเชน</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                ตัดรอบทุกวันที่ 1 (ต้นเดือน) และวันที่ 15 (กลางเดือน) โอนตรงจากกระเป๋า AllSell ({overview?.wallets?.allSell?.address || '-'})
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await fetch('/api/matrix/allsell-auto-payout/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: !overview?.allSell?.autoEnabled }),
+                  });
+                  const data = await res.json();
+                  await fetchAdminOverview();
+                  setActionStatus({
+                    type: 'success',
+                    title: 'อัปเดตสถานะ Auto AllSell',
+                    message: data.message,
+                  });
+                }}
+                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  overview?.allSell?.autoEnabled
+                    ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
+                    : 'bg-slate-800 border border-slate-700 text-slate-400'
+                }`}
+              >
+                {overview?.allSell?.autoEnabled
+                  ? 'เปิดตัดรอบอัตโนมัติอยู่ (คลิกเพื่อปิด)'
+                  : 'ปิดตัดรอบอัตโนมัติอยู่ (คลิกเพื่อเปิด)'}
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  setActionStatus({
+                    type: 'loading',
+                    title: 'กำลังสั่งตัดรอบและโอนจ่าย AllSell 4%...',
+                    message: 'กำลังตรวจสอบผู้ผ่านเกณฑ์และโอน USDT บนบล็อกเชน',
+                  });
+                  try {
+                    const res = await fetch('/api/matrix/allsell-auto-payout/execute-now', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        privateKey: customAdminPk.trim() || undefined,
+                      }),
+                    });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) throw new Error(data.error || 'ตัดรอบไม่สำเร็จ');
+                    await fetchAdminOverview();
+                    setActionStatus({
+                      type: 'success',
+                      title: 'ตัดรอบ AllSell 4% สำเร็จ!',
+                      message: data.message,
+                    });
+                  } catch (err: any) {
+                    setActionStatus({
+                      type: 'error',
+                      title: 'ตัดรอบ AllSell ล้มเหลว',
+                      message: err.message,
+                    });
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition cursor-pointer flex items-center gap-1.5"
+              >
+                <Play className="w-3.5 h-3.5" />
+                <span>สั่งตัดรอบและโอนจ่าย AllSell ทันที (Execute Now)</span>
+              </button>
+            </div>
+          </div>
+
+          {overview?.allSell?.history && overview.allSell.history.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400">
+                    <th className="py-2 px-3">รอบการจ่าย</th>
+                    <th className="py-2 px-3">เวลาที่รัน</th>
+                    <th className="py-2 px-3 text-right">กองทุนรวม</th>
+                    <th className="py-2 px-3 text-right">จ่ายออกจริง</th>
+                    <th className="py-2 px-3 text-right">ยกยอดสะสม</th>
+                    <th className="py-2 px-3">หมายเหตุ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono tabular-nums">
+                  {overview.allSell.history.slice(0, 5).map((rec: any) => (
+                    <tr key={rec.id} className="hover:bg-slate-800/40">
+                      <td className="py-2 px-3 font-sans font-semibold text-cyan-300">{rec.cycleLabelTh}</td>
+                      <td className="py-2 px-3 text-slate-400">
+                        {new Date(rec.executedAt).toLocaleString('th-TH')}
+                      </td>
+                      <td className="py-2 px-3 text-right text-white">
+                        {Number(rec.totalAllSellPoolUsdt || 0).toFixed(2)} U
+                      </td>
+                      <td className="py-2 px-3 text-right text-emerald-400 font-bold">
+                        {Number(rec.totalDistributedUsdt || 0).toFixed(2)} U ({rec.qualifiedRecipientsCount} รายการ)
+                      </td>
+                      <td className="py-2 px-3 text-right text-amber-300">
+                        {Number(rec.carriedOverUsdt || 0).toFixed(2)} U
+                      </td>
+                      <td className="py-2 px-3 font-sans text-slate-300">{rec.noteTh}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="text-xs text-slate-400 py-3">
+              ยังไม่มีประวัติการตัดรอบโอนจ่าย AllSell ในสัญญานี้ (กดปุ่ม "สั่งตัดรอบและโอนจ่าย AllSell ทันที" ด้านบนเพื่อทดสอบได้เลย)
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 4: CONTRACT ADDRESS, DATABASE CACHE & BATCH QUEUE CONTROLS
+         ===================================================================== */}
+      {showSection('database') && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Smart Contract & DB Sync Manager */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Database className="w-4 h-4 text-indigo-400" />
+                <span>หมวดที่ 4.1: จัดการที่อยู่ Smart Contract & ล้างแคชฐานข้อมูล</span>
+              </h3>
+              <span className="text-xs font-mono text-emerald-400">
+                รวม {overview?.stats?.totalNodesAllRanks ?? 0} โหนด (18 แรงค์)
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">
+                  Smart Contract Address ปัจจุบัน
+                </label>
+                <input
+                  type="text"
+                  value={editContractAddr}
+                  onChange={(e) => setEditContractAddr(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-amber-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1">
+                  USDT Token Address
+                </label>
+                <input
+                  type="text"
+                  value={editUsdtAddr}
+                  onChange={(e) => setEditUsdtAddr(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs font-mono text-slate-200"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await onUpdateContractAddress(editContractAddr.trim(), editUsdtAddr.trim());
+                    if (ok) await fetchAdminOverview();
+                  }}
+                  className="py-2.5 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>บันทึกเลขสัญญาลง Database</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const ok = await onResetContractAddress();
+                    if (ok) await fetchAdminOverview();
+                  }}
+                  className="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  <span>คืนค่าสัญญาเริ่มต้น</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-800/80">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setActionStatus({
+                      type: 'loading',
+                      title: 'กำลังซิงค์ข้อมูลจาก Smart Contract...',
+                      message: 'ดึงโหนดและกระปุกสะสมทั้ง 18 แรงค์จากเชน',
+                    });
+                    await fetch('/api/db/sync', { method: 'POST' });
+                    await fetchAdminOverview();
+                    onRefreshOnChainData();
+                    if (typeof window !== 'undefined') {
+                      window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+                    }
+                    setActionStatus({
+                      type: 'success',
+                      title: 'ซิงค์ข้อมูลสำเร็จ!',
+                      message: 'อัปเดตฐานข้อมูลตรงกับบนเชนทั้ง 18 แรงค์เรียบร้อยแล้ว',
+                    });
+                  }}
+                  className="py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>บังคับซิงค์ข้อมูลจากเชน (Force Sync)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setActionStatus({
+                      type: 'loading',
+                      title: 'กำลังล้างแคชและดึงข้อมูลใหม่จากเชน 100%...',
+                      message: 'กำลังล้าง matrixDB และโหลดข้อมูลใหม่จาก Smart Contract',
+                    });
+                    const res = await fetch('/api/admin/clear-cache', { method: 'POST' });
+                    const data = await res.json();
+                    await fetchAdminOverview();
+                    onRefreshOnChainData();
+                    if (typeof window !== 'undefined') {
+                      window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+                    }
+                    setActionStatus({
+                      type: 'success',
+                      title: 'ล้างแคชฐานข้อมูลสำเร็จ!',
+                      message: data.message || 'ดึงข้อมูลใหม่จากเชนเรียบร้อยแล้ว',
+                    });
+                  }}
+                  className="py-2.5 px-3 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>ล้างแคชเก่า & ดึงจากเชนใหม่ทั้งหมด</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Batch Queue & Rank Inspector */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="border-b border-slate-800 pb-3 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <Layers className="w-4 h-4 text-emerald-400" />
+                <span>หมวดที่ 4.2: จัดการคิว Batch Queue & ตรวจสอบรายแรงค์</span>
+              </h3>
+              <span className="text-xs font-mono text-slate-400">
+                คิวรอประมวลผล: {batchStatus?.queueLength ?? 0} รายการ
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  await fetch('/api/batch-queue/toggle', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled: !batchStatus?.autoBatchEnabled }),
+                  });
+                  await fetchAdminOverview();
+                }}
+                className="py-2 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 cursor-pointer"
+              >
+                {batchStatus?.autoBatchEnabled ? 'ปิด Auto-Batch' : 'เปิด Auto-Batch'}
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await fetch('/api/batch-queue/flush', { method: 'POST' });
+                  await fetchAdminOverview();
+                  setActionStatus({
+                    type: 'success',
+                    title: 'สั่งรันคิว Batch สำเร็จ',
+                    message: 'ประมวลผลรายการในคิวทั้งหมดเรียบร้อยแล้ว',
+                  });
+                }}
+                className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-slate-950 text-xs font-bold cursor-pointer"
+              >
+                รันคิวทันที (Flush)
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  await fetch('/api/batch-queue/clear', { method: 'POST' });
+                  await fetchAdminOverview();
+                }}
+                className="py-2 px-3 rounded-xl bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 text-xs font-semibold cursor-pointer"
+              >
+                ล้างคิว (Clear)
+              </button>
+            </div>
+
+            {/* Quick Rank 1-18 Inspector */}
+            <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-300">
+                  ตรวจสอบข้อมูลรายแรงค์ (Rank 1–18 Inspector)
+                </span>
+                <select
+                  value={inspectRankNum}
+                  onChange={(e) => setInspectRankNum(Number(e.target.value))}
+                  className="bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs font-mono text-emerald-400"
+                >
+                  {RANK_PRICES_USDT.map((price, i) => (
+                    <option key={i + 1} value={i + 1}>
+                      Rank {i + 1} ({price.toLocaleString('en-US')} U) — {overview?.stats?.rankCounts?.[i + 1] ?? 0} โหนด
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-xs tabular-nums space-y-2.5">
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">จำนวนโหนดในผัง</span>
+                    <span className="text-white font-bold">
+                      {overview?.stats?.rankCounts?.[inspectRankNum] ?? 0} โหนด
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">First Node ID</span>
+                    <span className="text-emerald-400 font-bold">#{inspectStats.firstNodeId}</span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">Latest Node ID</span>
+                    <span className="text-cyan-400 font-bold">#{inspectStats.latestNodeId}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-800/80">
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">
+                      ราคา Rank {inspectRankNum} (Current)
+                    </span>
+                    <span className="text-emerald-400 font-bold">
+                      {inspectStats.rankPrice ||
+                        `${(RANK_PRICES_USDT[inspectRankNum - 1] ?? 5).toLocaleString('en-US', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })} USDT`}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-500 block">
+                      ราคาอัพถัดไป ({inspectRankNum < 18 ? `Next Rank ${inspectRankNum + 1}` : 'Max Rank'})
+                    </span>
+                    <span className="text-amber-300 font-bold">{inspectStats.nextRankPrice}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 5: ALL IDS DIRECTORY (MAIN ID, AUTO ID, EXTRA ID, CLONE ID)
+         ===================================================================== */}
+      {showSection('members') && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-800 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-white flex items-center gap-2">
+                <UserCheck className="w-4 h-4 text-emerald-400" />
+                <span>
+                  หมวดที่ 5: ข้อมูล ID ทั้งหมดในระบบ ({idStatusCounts.total} รหัส • ครบ 4 สถานะ)
+                </span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                ดึงข้อมูลแยกตามชุดสถานะ Main ID, Auto ID, Extra ID และโคลนนิ่ง (Cloning ID) พร้อมค้นหาและสั่งอัปเกรดด่วน
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-full sm:w-64">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={memberSearch}
+                  onChange={(e) => {
+                    setMemberSearch(e.target.value);
+                    setMemberPage(1);
+                  }}
+                  placeholder="ค้นหา #ID, R1..R18 หรือ Wallet 0x..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+              <select
+                value={`${memberSortBy}:${memberSortDir}`}
+                onChange={(e) => {
+                  const [col, dir] = e.target.value.split(':') as [typeof memberSortBy, 'asc' | 'desc'];
+                  setMemberSortBy(col);
+                  setMemberSortDir(dir);
+                  setMemberPage(1);
+                }}
+                className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+              >
+                <option value="idNumber:asc">เรียงตาม ID: น้อย → มาก</option>
+                <option value="idNumber:desc">เรียงตาม ID: มาก → น้อย</option>
+                <option value="rank:desc">เรียงตาม Rank: สูง → ต่ำ</option>
+                <option value="rank:asc">เรียงตาม Rank: ต่ำ → สูง</option>
+                <option value="upgradeRankPool:desc">เรียงตาม Vault: มาก → น้อย</option>
+                <option value="newAutoIdPool:desc">เรียงตาม Auto Pool: มาก → น้อย</option>
+                <option value="newExtraIdPool:desc">เรียงตาม Extra Pool: มาก → น้อย</option>
+                <option value="statusKey:asc">เรียงตามสถานะ: A → Z</option>
+              </select>
+            </div>
+          </div>
+
+          {/* 4 Status Summary Cards (Clickable to Filter) */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
+            {[
+              {
+                key: 'main' as const,
+                title: 'Main ID (รหัสหลัก)',
+                count: idStatusCounts.main,
+                Icon: Crown,
+                cardClass: 'bg-sky-950/35 border-sky-500/40 text-sky-200 hover:border-sky-400',
+                badgeClass: 'bg-sky-400 text-slate-950',
+              },
+              {
+                key: 'auto' as const,
+                title: 'Auto ID (รหัสอัตโนมัติ)',
+                count: idStatusCounts.auto,
+                Icon: Bot,
+                cardClass: 'bg-amber-950/35 border-amber-500/40 text-amber-200 hover:border-amber-400',
+                badgeClass: 'bg-amber-400 text-slate-950',
+              },
+              {
+                key: 'extra' as const,
+                title: 'Extra ID (รหัสเสริม)',
+                count: idStatusCounts.extra,
+                Icon: Zap,
+                cardClass: 'bg-rose-950/35 border-rose-500/40 text-rose-200 hover:border-rose-400',
+                badgeClass: 'bg-rose-500 text-white',
+              },
+              {
+                key: 'clone' as const,
+                title: 'โคลนนิ่ง (Cloning ID)',
+                count: idStatusCounts.clone,
+                Icon: Dna,
+                cardClass: 'bg-emerald-950/35 border-emerald-500/40 text-emerald-200 hover:border-emerald-400',
+                badgeClass: 'bg-emerald-400 text-slate-950',
+              },
+            ].map((stat) => {
+              const StatIcon = stat.Icon;
+              const isSelected = memberStatusTab === stat.key;
+              return (
+                <button
+                  key={`admin-id-summary-${stat.key}`}
+                  type="button"
+                  onClick={() => {
+                    setMemberStatusTab((prev) => (prev === stat.key ? 'all' : stat.key));
+                    setMemberPage(1);
+                  }}
+                  className={`rounded-xl border p-3 text-left transition cursor-pointer flex items-center justify-between gap-2 ${stat.cardClass} ${
+                    isSelected ? 'ring-2 ring-white/80 shadow-md' : ''
+                  }`}
+                >
+                  <div className="space-y-1 min-w-0">
+                    <span
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black ${stat.badgeClass}`}
+                    >
+                      <StatIcon className="w-3 h-3 shrink-0" />
+                      <span>{stat.key === 'clone' ? 'CLONE ID' : `${stat.key.toUpperCase()} ID`}</span>
+                    </span>
+                    <div className="text-xs font-bold truncate">{stat.title}</div>
+                  </div>
+                  <div className="text-xl sm:text-2xl font-mono font-black text-white shrink-0">
+                    {stat.count}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Status Filter Pills */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {[
+              { key: 'all' as const, label: `ทั้งหมด (${idStatusCounts.total})`, activeClass: 'bg-white text-slate-950 border-white' },
+              { key: 'main' as const, label: `👑 Main ID (${idStatusCounts.main})`, activeClass: 'bg-sky-400 text-slate-950 border-sky-300' },
+              { key: 'auto' as const, label: `🤖 Auto ID (${idStatusCounts.auto})`, activeClass: 'bg-amber-400 text-slate-950 border-amber-300' },
+              { key: 'extra' as const, label: `⚡ Extra ID (${idStatusCounts.extra})`, activeClass: 'bg-rose-500 text-white border-rose-400' },
+              { key: 'clone' as const, label: `🧬 โคลนนิ่ง (${idStatusCounts.clone})`, activeClass: 'bg-emerald-400 text-slate-950 border-emerald-300' },
+            ].map((pill) => (
+              <button
+                key={`admin-tab-${pill.key}`}
+                type="button"
+                onClick={() => {
+                  setMemberStatusTab(pill.key);
+                  setMemberPage(1);
+                }}
+                className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition cursor-pointer ${
+                  memberStatusTab === pill.key
+                    ? pill.activeClass
+                    : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800'
+                }`}
+              >
+                {pill.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400">
+                  <th className="py-2.5 px-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleMemberSort('idNumber')}
+                      className="inline-flex items-center gap-1 hover:text-white cursor-pointer"
+                    >
+                      <span>รหัส ID</span>
+                      {memberSortBy === 'idNumber' ? (
+                        memberSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-emerald-400" /> : <ArrowDown className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-50" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-2.5 px-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleMemberSort('statusKey')}
+                      className="inline-flex items-center gap-1 hover:text-white cursor-pointer"
+                    >
+                      <span>ชุดสถานะ</span>
+                      {memberSortBy === 'statusKey' ? (
+                        memberSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-emerald-400" /> : <ArrowDown className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-50" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-2.5 px-3">เจ้าของ (Wallet)</th>
+                  <th className="py-2.5 px-3">อัพไลน์ / ผู้แนะนำ</th>
+                  <th className="py-2.5 px-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleMemberSort('rank')}
+                      className="inline-flex items-center gap-1 hover:text-white cursor-pointer"
+                    >
+                      <span>Rank / รายละเอียด</span>
+                      {memberSortBy === 'rank' ? (
+                        memberSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-emerald-400" /> : <ArrowDown className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-50" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-2.5 px-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => toggleMemberSort('upgradeRankPool')}
+                      className="inline-flex items-center gap-1 hover:text-white cursor-pointer ml-auto"
+                    >
+                      <span>Upgrade / Vault</span>
+                      {memberSortBy === 'upgradeRankPool' ? (
+                        memberSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-emerald-400" /> : <ArrowDown className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-50" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-2.5 px-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => toggleMemberSort('newAutoIdPool')}
+                      className="inline-flex items-center gap-1 hover:text-white cursor-pointer ml-auto"
+                    >
+                      <span>Auto ID Pool</span>
+                      {memberSortBy === 'newAutoIdPool' ? (
+                        memberSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-emerald-400" /> : <ArrowDown className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-50" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-2.5 px-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => toggleMemberSort('newExtraIdPool')}
+                      className="inline-flex items-center gap-1 hover:text-white cursor-pointer ml-auto"
+                    >
+                      <span>Extra ID Pool</span>
+                      {memberSortBy === 'newExtraIdPool' ? (
+                        memberSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-emerald-400" /> : <ArrowDown className="w-3 h-3 text-emerald-400" />
+                      ) : (
+                        <ArrowUpDown className="w-3 h-3 opacity-50" />
+                      )}
+                    </button>
+                  </th>
+                  <th className="py-2.5 px-3 text-right">จัดการด่วน</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 font-mono tabular-nums">
+                {pagedAdminIdRows.map((row) => {
+                  const nextR = Math.min(18, (row.rank || 1) + 1);
+                  const statusBadge =
+                    row.statusKey === 'clone'
+                      ? {
+                          label: 'CLONE ID',
+                          cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
+                          Icon: Dna,
+                        }
+                      : row.statusKey === 'extra'
+                      ? {
+                          label: 'EXTRA ID',
+                          cls: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
+                          Icon: Zap,
+                        }
+                      : row.statusKey === 'auto'
+                      ? {
+                          label: 'AUTO ID',
+                          cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+                          Icon: Bot,
+                        }
+                      : {
+                          label: 'MAIN ID',
+                          cls: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+                          Icon: Crown,
+                        };
+                  const RowStatusIcon = statusBadge.Icon;
+
+                  return (
+                    <tr key={row.rowKey} className="hover:bg-slate-800/40">
+                      <td className="py-2.5 px-3 font-bold text-white whitespace-nowrap">
+                        {row.displayId}
+                      </td>
+                      <td className="py-2.5 px-3 font-sans whitespace-nowrap">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10.5px] font-bold ${statusBadge.cls}`}
+                        >
+                          <RowStatusIcon className="w-3 h-3 shrink-0" />
+                          <span>{statusBadge.label}</span>
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-300 whitespace-nowrap">
+                        <div className="flex items-center gap-1.5">
+                          <span>
+                            {row.owner
+                              ? `${row.owner.substring(0, 6)}...${row.owner.substring(row.owner.length - 4)}`
+                              : '-'}
+                          </span>
+                          {row.owner && (
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(row.owner)}
+                              className="text-slate-500 hover:text-white cursor-pointer"
+                            >
+                              <Copy className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 text-indigo-300 whitespace-nowrap">
+                        <div>
+                          ผู้แนะนำ: <strong>#{row.directSponsorNodeId}</strong>
+                        </div>
+                        {row.statusKey === 'auto' && row.spawnedByMainId > 0 && (
+                          <div className="text-[10px] text-amber-300 font-semibold">
+                            แตกจาก: Main #{row.spawnedByMainId}
+                          </div>
+                        )}
+                        <div className="text-[10px] text-slate-400">
+                          อัพไลน์: {row.parentId === 0 ? 'Root (#0)' : `#${row.parentId} (${row.side})`}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 whitespace-nowrap">
+                        <span className="text-amber-300 font-bold">{row.rankLabel}</span>
+                        <span className="text-slate-400 text-[10px] block">{row.windowLabel}</span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-emerald-400 font-semibold whitespace-nowrap">
+                        {Number(row.upgradeRankPool || 0).toFixed(2)} U
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-amber-300 whitespace-nowrap">
+                        {row.canAdminUpgrade ? `${Number(row.newAutoIdPool || 0).toFixed(2)} U` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right text-rose-300 whitespace-nowrap">
+                        {row.canAdminUpgrade ? `${Number(row.newExtraIdPool || 0).toFixed(2)} U` : '-'}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-sans whitespace-nowrap">
+                        {row.canAdminUpgrade ? (
+                          <div className="inline-flex items-center gap-1.5">
+                            {(row.rank || 1) >= 18 ? (
+                              <button
+                                type="button"
+                                disabled
+                                className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-500 font-semibold text-[11px] opacity-60 cursor-not-allowed whitespace-nowrap"
+                              >
+                                🔒 Rank 18 (Max)
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setUpgradeTarget(String(row.idNumber));
+                                    setUpgradeRank(String(nextR));
+                                    setActiveSection('owner');
+                                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                                  }}
+                                  className="px-2.5 py-1 rounded-lg bg-rose-600/20 hover:bg-rose-600/40 border border-rose-500/30 text-rose-300 font-semibold text-[11px] cursor-pointer whitespace-nowrap"
+                                >
+                                  ตั้งค่าอัปแรงค์ #{row.idNumber}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => executeDirectAdminFreeUpgrade(String(row.idNumber), nextR)}
+                                  disabled={isLoading}
+                                  className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-slate-950 font-bold text-[11px] cursor-pointer whitespace-nowrap disabled:opacity-50"
+                                >
+                                  + ขึ้น R{nextR} ฟรีทันที
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        ) : row.statusKey === 'extra' ? (
+                          <span className="px-2 py-1 rounded-lg bg-rose-950/60 border border-rose-500/30 text-rose-300 text-[10.5px] font-semibold">
+                            ⚡ รหัสเสริม R{row.rank} (Main #{row.spawnedByMainId})
+                          </span>
+                        ) : (
+                          <span className="px-2 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-[10.5px] font-semibold">
+                            🧬 โคลนของ Main #{row.spawnedByMainId}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {pagedAdminIdRows.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="py-6 text-center text-slate-500 font-sans">
+                      ไม่พบข้อมูล ID ในชุดสถานะที่เลือก
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          {filteredAdminIdRows.length > ADMIN_ID_PAGE_SIZE && (
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-800 text-xs font-mono">
+              <button
+                type="button"
+                disabled={safeMemberPage <= 1}
+                onClick={() => setMemberPage((p) => Math.max(1, p - 1))}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+              >
+                ◀ ก่อนหน้า
+              </button>
+              <span className="text-slate-400">
+                หน้า <strong className="text-amber-300">{safeMemberPage}</strong> / {memberTotalPages} (ทั้งหมด {filteredAdminIdRows.length} รายการ)
+              </span>
+              <button
+                type="button"
+                disabled={safeMemberPage >= memberTotalPages}
+                onClick={() => setMemberPage((p) => Math.min(memberTotalPages, p + 1))}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+              >
+                ถัดไป ▶
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* =====================================================================
+          SECTION 6: ON-CHAIN TRANSACTION HASHES DIRECTORY (TX HASH LOG)
+         ===================================================================== */}
+      {showSection('transactions') && (() => {
+        const TX_PAGE_SIZE = 15;
+        const countByGroup = {
+          all: txLogs.length,
+          REGISTER: txLogs.filter((t) => t.actionType === 'REGISTER' || t.actionType === 'BATCH_REGISTER').length,
+          UPGRADE: txLogs.filter((t) => t.actionType === 'UPGRADE' || t.actionType === 'ADMIN_UPGRADE').length,
+          AUTO_EXTRA: txLogs.filter((t) => t.actionType === 'AUTO_ID' || t.actionType === 'EXTRA_ID').length,
+          CLONE_BOT: txLogs.filter((t) => t.actionType === 'CLONE_BOT').length,
+          ADMIN: txLogs.filter((t) => t.actionType === 'ADMIN_ACTION' || t.actionType === 'ADMIN_UPGRADE').length,
+          ALLSELL: txLogs.filter((t) => t.actionType === 'ALLSELL_PAYOUT').length,
+        };
+
+        const qTx = txSearch.trim().toLowerCase();
+        const filteredTxLogs = txLogs
+          .filter((t) => {
+            if (txTypeFilter === 'REGISTER' && t.actionType !== 'REGISTER' && t.actionType !== 'BATCH_REGISTER') return false;
+            if (txTypeFilter === 'UPGRADE' && t.actionType !== 'UPGRADE' && t.actionType !== 'ADMIN_UPGRADE') return false;
+            if (txTypeFilter === 'AUTO_EXTRA' && t.actionType !== 'AUTO_ID' && t.actionType !== 'EXTRA_ID') return false;
+            if (txTypeFilter === 'CLONE_BOT' && t.actionType !== 'CLONE_BOT') return false;
+            if (txTypeFilter === 'ADMIN' && t.actionType !== 'ADMIN_ACTION' && t.actionType !== 'ADMIN_UPGRADE') return false;
+            if (txTypeFilter === 'ALLSELL' && t.actionType !== 'ALLSELL_PAYOUT') return false;
+
+            if (!qTx) return true;
+            return (
+              String(t.txHash || '').toLowerCase().includes(qTx) ||
+              String(t.userAddress || '').toLowerCase().includes(qTx) ||
+              String(t.title || '').toLowerCase().includes(qTx) ||
+              String(t.details || '').toLowerCase().includes(qTx) ||
+              String(t.mainNodeId || '').includes(qTx) ||
+              String(t.nodeId || '').includes(qTx) ||
+              String(t.blockNumber || '').includes(qTx) ||
+              String(t.actionType || '').toLowerCase().includes(qTx)
+            );
+          })
+          .sort((a, b) => {
+            const dir = txSortDir === 'asc' ? 1 : -1;
+            if (txSortBy === 'amountUsdt') {
+              return (Number(a.amountUsdt || 0) - Number(b.amountUsdt || 0)) * dir;
+            }
+            if (txSortBy === 'blockNumber') {
+              return (Number(a.blockNumber || 0) - Number(b.blockNumber || 0)) * dir;
+            }
+            if (txSortBy === 'actionType') {
+              return String(a.actionType || '').localeCompare(String(b.actionType || '')) * dir;
+            }
+            const tA = new Date(a.timestamp || 0).getTime() || 0;
+            const tB = new Date(b.timestamp || 0).getTime() || 0;
+            return (tA - tB) * dir;
+          });
+
+        const toggleTxSort = (col: typeof txSortBy) => {
+          if (txSortBy === col) {
+            setTxSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+          } else {
+            setTxSortBy(col);
+            setTxSortDir(col === 'actionType' ? 'asc' : 'desc');
+          }
+          setTxPage(1);
+        };
+
+        const txTotalPages = Math.max(1, Math.ceil(filteredTxLogs.length / TX_PAGE_SIZE));
+        const safeTxPage = Math.min(txPage, txTotalPages);
+        const pagedTxLogs = filteredTxLogs.slice((safeTxPage - 1) * TX_PAGE_SIZE, safeTxPage * TX_PAGE_SIZE);
+
+        const getTxTypeMeta = (actionType: string) => {
+          switch (actionType) {
+            case 'REGISTER':
+            case 'BATCH_REGISTER':
+              return { label: actionType === 'BATCH_REGISTER' ? 'BATCH REG' : 'REGISTER', cls: 'bg-sky-500/20 text-sky-300 border-sky-500/40' };
+            case 'UPGRADE':
+              return { label: 'UPGRADE', cls: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40' };
+            case 'ADMIN_UPGRADE':
+              return { label: 'ADMIN UPGRADE', cls: 'bg-rose-500/20 text-rose-300 border-rose-500/40' };
+            case 'AUTO_ID':
+              return { label: 'AUTO ID', cls: 'bg-amber-500/20 text-amber-300 border-amber-500/40' };
+            case 'EXTRA_ID':
+              return { label: 'EXTRA ID', cls: 'bg-pink-500/20 text-pink-300 border-pink-500/40' };
+            case 'CLONE_BOT':
+              return { label: 'CLONE BOT', cls: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' };
+            case 'ALLSELL_PAYOUT':
+              return { label: 'ALLSELL 4%', cls: 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' };
+            default:
+              return { label: 'ADMIN TX', cls: 'bg-purple-500/20 text-purple-300 border-purple-500/40' };
+          }
+        };
+
+        return (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <History className="w-4 h-4 text-cyan-400" />
+                  <span>
+                    หมวดที่ 6: ประวัติรหัสธุรกรรมบนบล็อกเชน ({txLogs.length} Tx Hash)
+                  </span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  จัดเก็บรหัสธุรกรรม (Tx Hash) จริงจากทุกช่องทาง: สมัครสมาชิก, อัปเกรด, แตก Auto/Extra ID, บอทโคลน, AllSell 4%, Admin และดึงย้อนหลังจาก Event บนเชน
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSyncChainTransactions}
+                  disabled={txSyncing}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/40 text-cyan-300 text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${txSyncing ? 'animate-spin' : ''}`} />
+                  <span>{txSyncing ? 'กำลังดึงจากเชน...' : 'ดึง Tx Hash ล่าสุดจากเชน'}</span>
+                </button>
+
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={txSearch}
+                    onChange={(e) => {
+                      setTxSearch(e.target.value);
+                      setTxPage(1);
+                    }}
+                    placeholder="ค้นหา Tx Hash (0x...), กระเป๋า, #ID, Block..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                  />
+                </div>
+
+                <select
+                  value={`${txSortBy}:${txSortDir}`}
+                  onChange={(e) => {
+                    const [col, dir] = e.target.value.split(':') as [typeof txSortBy, 'asc' | 'desc'];
+                    setTxSortBy(col);
+                    setTxSortDir(dir);
+                    setTxPage(1);
+                  }}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
+                >
+                  <option value="timestamp:desc">ล่าสุดก่อน</option>
+                  <option value="timestamp:asc">เก่าสุดก่อน</option>
+                  <option value="amountUsdt:desc">จำนวนเงิน: มาก → น้อย</option>
+                  <option value="amountUsdt:asc">จำนวนเงิน: น้อย → มาก</option>
+                  <option value="blockNumber:desc">Block: สูง → ต่ำ</option>
+                  <option value="blockNumber:asc">Block: ต่ำ → สูง</option>
+                  <option value="actionType:asc">ประเภท: A → Z</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {[
+                { key: 'all', label: `ทั้งหมด (${countByGroup.all})`, activeCls: 'bg-slate-200 text-slate-950 border-slate-200' },
+                { key: 'REGISTER', label: `สมัคร / Batch (${countByGroup.REGISTER})`, activeCls: 'bg-sky-500 text-slate-950 border-sky-400' },
+                { key: 'UPGRADE', label: `อัปเกรดแรงค์ (${countByGroup.UPGRADE})`, activeCls: 'bg-indigo-500 text-white border-indigo-400' },
+                { key: 'AUTO_EXTRA', label: `Auto / Extra ID (${countByGroup.AUTO_EXTRA})`, activeCls: 'bg-amber-500 text-slate-950 border-amber-400' },
+                { key: 'CLONE_BOT', label: `บอทโคลนนิ่ง (${countByGroup.CLONE_BOT})`, activeCls: 'bg-emerald-500 text-slate-950 border-emerald-400' },
+                { key: 'ADMIN', label: `คำสั่ง Admin (${countByGroup.ADMIN})`, activeCls: 'bg-rose-500 text-white border-rose-400' },
+                { key: 'ALLSELL', label: `AllSell 4% (${countByGroup.ALLSELL})`, activeCls: 'bg-cyan-500 text-slate-950 border-cyan-400' },
+              ].map((pill) => (
+                <button
+                  key={pill.key}
+                  type="button"
+                  onClick={() => {
+                    setTxTypeFilter(pill.key as any);
+                    setTxPage(1);
+                  }}
+                  className={`px-3 py-1.5 rounded-lg border text-xs font-semibold transition cursor-pointer ${
+                    txTypeFilter === pill.key
+                      ? pill.activeCls
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                  }`}
+                >
+                  {pill.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Transaction Hashes Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-slate-800 text-slate-400">
+                    <th className="py-2.5 px-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleTxSort('timestamp')}
+                        className="inline-flex items-center gap-1 hover:text-white cursor-pointer"
+                      >
+                        <span>เวลา / Block</span>
+                        {txSortBy === 'timestamp' ? (
+                          txSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-cyan-400" /> : <ArrowDown className="w-3 h-3 text-cyan-400" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 opacity-50" />
+                        )}
+                      </button>
+                    </th>
+                    <th className="py-2.5 px-3">
+                      <button
+                        type="button"
+                        onClick={() => toggleTxSort('actionType')}
+                        className="inline-flex items-center gap-1 hover:text-white cursor-pointer"
+                      >
+                        <span>ประเภท</span>
+                        {txSortBy === 'actionType' ? (
+                          txSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-cyan-400" /> : <ArrowDown className="w-3 h-3 text-cyan-400" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 opacity-50" />
+                        )}
+                      </button>
+                    </th>
+                    <th className="py-2.5 px-3">รายละเอียดธุรกรรม</th>
+                    <th className="py-2.5 px-3 text-right">
+                      <button
+                        type="button"
+                        onClick={() => toggleTxSort('amountUsdt')}
+                        className="inline-flex items-center gap-1 hover:text-white cursor-pointer ml-auto"
+                      >
+                        <span>จำนวน</span>
+                        {txSortBy === 'amountUsdt' ? (
+                          txSortDir === 'asc' ? <ArrowUp className="w-3 h-3 text-cyan-400" /> : <ArrowDown className="w-3 h-3 text-cyan-400" />
+                        ) : (
+                          <ArrowUpDown className="w-3 h-3 opacity-50" />
+                        )}
+                      </button>
+                    </th>
+                    <th className="py-2.5 px-3">กระเป๋า (Wallet)</th>
+                    <th className="py-2.5 px-3">รหัสธุรกรรม (Tx Hash)</th>
+                    <th className="py-2.5 px-3 text-right">แหล่งที่มา / ตรวจสอบ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60">
+                  {pagedTxLogs.map((tx: any) => {
+                    const meta = getTxTypeMeta(tx.actionType);
+                    const shortHash = tx.txHash
+                      ? `${tx.txHash.slice(0, 10)}...${tx.txHash.slice(-8)}`
+                      : '-';
+                    const shortUser = tx.userAddress && tx.userAddress !== ethers.ZeroAddress
+                      ? `${tx.userAddress.slice(0, 6)}...${tx.userAddress.slice(-4)}`
+                      : '-';
+                    const formattedDate = tx.timestamp
+                      ? new Date(tx.timestamp).toLocaleString('th-TH', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          second: '2-digit',
+                        })
+                      : '-';
+
+                    return (
+                      <tr key={tx.id || tx.txHash} className="hover:bg-slate-800/40">
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <div className="text-slate-200">{formattedDate}</div>
+                          {tx.blockNumber ? (
+                            <div className="text-[10px] text-slate-500">Block #{tx.blockNumber}</div>
+                          ) : null}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap font-sans">
+                          <span className={`inline-flex px-2 py-0.5 rounded-full border text-[10.5px] font-bold ${meta.cls}`}>
+                            {meta.label}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 font-sans">
+                          <div className="text-white font-medium">{tx.title}</div>
+                          <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-2 mt-0.5">
+                            {tx.mainNodeId ? <span className="text-amber-300">Main #{tx.mainNodeId}</span> : null}
+                            {tx.nodeId ? <span className="text-cyan-300">Node #{tx.nodeId}</span> : null}
+                            {tx.rank ? <span className="text-emerald-300">Rank {tx.rank}</span> : null}
+                            {tx.details ? <span>• {tx.details}</span> : null}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-right whitespace-nowrap">
+                          {tx.amountUsdt !== undefined && Number(tx.amountUsdt) > 0 ? (
+                            <span className="text-emerald-400 font-bold">
+                              {Number(tx.amountUsdt).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} U
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">-</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap text-slate-300">
+                          <div className="flex items-center gap-1.5">
+                            <span>{shortUser}</span>
+                            {tx.userAddress && tx.userAddress !== ethers.ZeroAddress && (
+                              <button
+                                type="button"
+                                onClick={() => handleCopy(tx.userAddress)}
+                                className="text-slate-500 hover:text-white cursor-pointer"
+                                title="คัดลอกที่อยู่กระเป๋า"
+                              >
+                                {copiedText === tx.userAddress ? (
+                                  <Check className="w-3 h-3 text-emerald-400" />
+                                ) : (
+                                  <Copy className="w-3 h-3" />
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-cyan-300 font-semibold select-all" title={tx.txHash}>
+                              {shortHash}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleCopy(tx.txHash)}
+                              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 cursor-pointer"
+                              title="คัดลอก Tx Hash แบบเต็ม"
+                            >
+                              {copiedText === tx.txHash ? (
+                                <Check className="w-3 h-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                            </button>
+                          </div>
+                        </td>
+                        <td className="py-2.5 px-3 text-right whitespace-nowrap font-sans">
+                          <div className="inline-flex items-center gap-2">
+                            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                              {tx.source}
+                            </span>
+                            <a
+                              href={tx.explorerUrl || `https://testnet.bscscan.com/tx/${tx.txHash}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 text-[11px] font-semibold"
+                            >
+                              <span>BscScan</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {pagedTxLogs.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-500 font-sans">
+                        {txSyncing
+                          ? 'กำลังสแกน Event บนบล็อกเชนเพื่อดึง Tx Hash...'
+                          : 'ยังไม่มีรายการรหัสธุรกรรมที่บันทึกไว้ — กดปุ่ม "ดึง Tx Hash ล่าสุดจากเชน" ด้านบนเพื่อสแกนธุรกรรมย้อนหลัง'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {filteredTxLogs.length > TX_PAGE_SIZE && (
+              <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-800 text-xs font-mono">
+                <button
+                  type="button"
+                  disabled={safeTxPage <= 1}
+                  onClick={() => setTxPage((p) => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  ◀ ก่อนหน้า
+                </button>
+                <span className="text-slate-400">
+                  หน้า <strong className="text-cyan-300">{safeTxPage}</strong> / {txTotalPages} (ทั้งหมด {filteredTxLogs.length} รายการ)
+                </span>
+                <button
+                  type="button"
+                  disabled={safeTxPage >= txTotalPages}
+                  onClick={() => setTxPage((p) => Math.min(txTotalPages, p + 1))}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  ถัดไป ▶
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* =====================================================================
+          SECTION 7: LIVE POSTGRESQL DATABASE EXPLORER (SEARCHABLE & SORTABLE)
+         ===================================================================== */}
+      {showSection('db_explorer') && (() => {
+        const tableList: Array<{ name: string; labelTh: string }> = dbData?.tables || [
+          { name: 'matrix_nodes', labelTh: 'โหนด Matrix (matrix_nodes)' },
+          { name: 'accounts', labelTh: 'บัญชีสมาชิก (accounts)' },
+          { name: 'wallets', labelTh: 'กระเป๋า (wallets)' },
+          { name: 'matrix_levels', labelTh: 'สรุป Rank 1–18 (matrix_levels)' },
+          { name: 'income_channels', labelTh: 'ช่องทางรายได้ (income_channels)' },
+          { name: 'activities', labelTh: 'กิจกรรม (activities)' },
+          { name: 'allsell_inflows', labelTh: 'รายรับ AllSell 4% (allsell_inflows)' },
+          { name: 'allsell_payout_cycles', labelTh: 'รอบตัดจ่าย AllSell (allsell_payout_cycles)' },
+          { name: 'allsell_payout_transfers', labelTh: 'รายการโอน AllSell (allsell_payout_transfers)' },
+          { name: 'allsell_auto_config', labelTh: 'ตั้งค่า Auto AllSell (allsell_auto_config)' },
+          { name: 'matrix_db_snapshots', labelTh: 'Snapshot สัญญา (matrix_db_snapshots)' },
+        ];
+        const columns: Array<{ key: string; label: string; type: string }> = dbData?.columns || [];
+        const rows: any[] = Array.isArray(dbData?.rows) ? dbData.rows : [];
+        const counts: Record<string, number> = dbData?.tableCounts || {};
+        const currentSortBy = dbSortBy || dbData?.sortBy || '';
+        const currentSortDir: 'asc' | 'desc' = dbSortBy ? dbSortDir : (dbData?.sortDir || 'asc');
+        const dbTotalPages = Math.max(1, Number(dbData?.totalPages || 1));
+        const dbSafePage = Math.min(dbPage, dbTotalPages);
+
+        const handleDbSortClick = (colKey: string) => {
+          if (currentSortBy === colKey) {
+            setDbSortBy(colKey);
+            setDbSortDir(currentSortDir === 'asc' ? 'desc' : 'asc');
+          } else {
+            setDbSortBy(colKey);
+            setDbSortDir('asc');
+          }
+          setDbPage(1);
+        };
+
+        const renderDbCell = (col: { key: string; type: string }, val: any) => {
+          if (val === null || val === undefined || val === '') {
+            return <span className="text-slate-600">-</span>;
+          }
+          if (col.type === 'boolean') {
+            return val ? (
+              <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold">
+                TRUE
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 text-[10px]">
+                FALSE
+              </span>
+            );
+          }
+          if (col.type === 'usdt') {
+            const num = Number(val);
+            return (
+              <span className="text-emerald-400 font-bold">
+                {Number.isFinite(num) ? `${num.toFixed(2)} U` : String(val)}
+              </span>
+            );
+          }
+          if (col.type === 'number') {
+            return <span className="text-amber-300 font-semibold">{String(val)}</span>;
+          }
+          if (col.type === 'date') {
+            const d = new Date(val);
+            const label = Number.isNaN(d.getTime())
+              ? String(val)
+              : d.toLocaleString('th-TH', {
+                  day: '2-digit',
+                  month: '2-digit',
+                  year: '2-digit',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                });
+            return (
+              <span className="text-slate-300 whitespace-nowrap" title={String(val)}>
+                {label}
+              </span>
+            );
+          }
+          if (col.type === 'address' || col.type === 'hash') {
+            const s = String(val);
+            if (!s.startsWith('0x') || s.length < 14) {
+              return <span className="text-slate-300">{s}</span>;
+            }
+            const short = `${s.slice(0, 8)}...${s.slice(-6)}`;
+            const bscPath = col.type === 'hash' && s.length === 66 ? `tx/${s}` : `address/${s}`;
+            return (
+              <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                <span className={col.type === 'hash' ? 'text-cyan-300' : 'text-sky-300'} title={s}>
+                  {short}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(s)}
+                  className="text-slate-500 hover:text-white cursor-pointer"
+                  title="คัดลอก"
+                >
+                  {copiedText === s ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+                </button>
+                {(col.type === 'address' || s.length === 66) && (
+                  <a
+                    href={`https://testnet.bscscan.com/${bscPath}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-slate-500 hover:text-cyan-300"
+                    title="เปิดดูบน BscScan"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
+            );
+          }
+          const strVal = String(val);
+          return (
+            <span className="text-slate-200 max-w-[260px] truncate inline-block align-bottom" title={strVal}>
+              {strVal}
+            </span>
+          );
+        };
+
+        return (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3 border-b border-slate-800 pb-3">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <Table2 className="w-4 h-4 text-emerald-400" />
+                  <span>หมวดที่ 7: ข้อมูลจริงในฐานข้อมูล PostgreSQL (Database Explorer)</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
+                  <span>
+                    ฐานข้อมูล:{' '}
+                    <strong className="font-mono text-emerald-300">
+                      {dbData?.database || 'FractalFlow18'} ({dbData?.host || '-'}:{dbData?.port || '-'})
+                    </strong>
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      dbData?.connected
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                        : 'bg-rose-500/15 border-rose-500/40 text-rose-300'
+                    }`}
+                  >
+                    {dbData?.connected ? 'CONNECTED' : 'DISCONNECTED'}
+                  </span>
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={dbSearchInput}
+                    onChange={(e) => setDbSearchInput(e.target.value)}
+                    placeholder="ค้นหาในตารางนี้ (ID, Wallet, Tx, ชื่อ...)"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl pl-8 pr-7 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-emerald-500"
+                  />
+                  {dbSearchInput && (
+                    <button
+                      type="button"
+                      onClick={() => setDbSearchInput('')}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white cursor-pointer"
+                      title="ล้างคำค้นหา"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {columns.length > 0 && (
+                  <div className="flex items-center gap-1">
+                    <select
+                      value={currentSortBy}
+                      onChange={(e) => {
+                        setDbSortBy(e.target.value);
+                        setDbPage(1);
+                      }}
+                      className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-emerald-500"
+                    >
+                      {columns.map((c) => (
+                        <option key={c.key} value={c.key}>
+                          เรียงตาม: {c.label}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDbSortBy(currentSortBy);
+                        setDbSortDir(currentSortDir === 'asc' ? 'desc' : 'asc');
+                        setDbPage(1);
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-800 text-xs font-mono text-emerald-300 inline-flex items-center gap-1 cursor-pointer"
+                      title="สลับทิศทางการจัดเรียง"
+                    >
+                      {currentSortDir === 'asc' ? (
+                        <>
+                          <ArrowUp className="w-3.5 h-3.5" />
+                          <span>ASC</span>
+                        </>
+                      ) : (
+                        <>
+                          <ArrowDown className="w-3.5 h-3.5" />
+                          <span>DESC</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                <select
+                  value={dbPageSize}
+                  onChange={(e) => {
+                    setDbPageSize(Number(e.target.value));
+                    setDbPage(1);
+                  }}
+                  className="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs font-mono text-slate-200"
+                >
+                  <option value={15}>15 แถว/หน้า</option>
+                  <option value={25}>25 แถว/หน้า</option>
+                  <option value={50}>50 แถว/หน้า</option>
+                  <option value={100}>100 แถว/หน้า</option>
+                </select>
+
+                <button
+                  type="button"
+                  onClick={fetchDbRecords}
+                  disabled={dbLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold cursor-pointer disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${dbLoading ? 'animate-spin' : ''}`} />
+                  <span>รีเฟรช DB</span>
+                </button>
+              </div>
+            </div>
+
+            {/* PostgreSQL Table Selector Pills */}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {tableList.map((tbl) => {
+                const countVal = counts[tbl.name];
+                const isSelected = dbTable === tbl.name;
+                return (
+                  <button
+                    key={tbl.name}
+                    type="button"
+                    onClick={() => {
+                      setDbTable(tbl.name);
+                      setDbSortBy('');
+                      setDbPage(1);
+                    }}
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition cursor-pointer inline-flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <span className="font-mono">{tbl.name}</span>
+                    {typeof countVal === 'number' && (
+                      <span
+                        className={`px-1.5 py-0.2 rounded-md text-[10px] font-mono ${
+                          isSelected ? 'bg-slate-950/20 text-slate-950' : 'bg-slate-800 text-amber-300'
+                        }`}
+                      >
+                        {countVal}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {dbData?.error && (
+              <div className="rounded-xl bg-rose-950/50 border border-rose-500/40 px-4 py-2.5 text-xs text-rose-200">
+                ⚠️ {dbData.error}
+              </div>
+            )}
+
+            {/* Live Table Grid */}
+            <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-950/60">
+              <table className="w-full text-left border-collapse text-xs font-mono">
+                <thead>
+                  <tr className="border-b border-slate-800 bg-slate-950 text-slate-400">
+                    {columns.map((col) => {
+                      const isSorted = currentSortBy === col.key;
+                      const isRight = col.type === 'number' || col.type === 'usdt';
+                      return (
+                        <th key={col.key} className={`py-2.5 px-3 whitespace-nowrap ${isRight ? 'text-right' : ''}`}>
+                          <button
+                            type="button"
+                            onClick={() => handleDbSortClick(col.key)}
+                            className={`inline-flex items-center gap-1 hover:text-white cursor-pointer ${
+                              isSorted ? 'text-emerald-300 font-bold' : ''
+                            }`}
+                          >
+                            <span>{col.label}</span>
+                            {isSorted ? (
+                              currentSortDir === 'asc' ? (
+                                <ArrowUp className="w-3 h-3 text-emerald-400" />
+                              ) : (
+                                <ArrowDown className="w-3 h-3 text-emerald-400" />
+                              )
+                            ) : (
+                              <ArrowUpDown className="w-3 h-3 opacity-40" />
+                            )}
+                          </button>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 tabular-nums">
+                  {rows.map((row, idx) => (
+                    <tr key={row.id || row.address || row.contract_address || row.rank || idx} className="hover:bg-slate-800/40">
+                      {columns.map((col) => {
+                        const isRight = col.type === 'number' || col.type === 'usdt';
+                        return (
+                          <td key={col.key} className={`py-2 px-3 whitespace-nowrap ${isRight ? 'text-right' : ''}`}>
+                            {renderDbCell(col, row[col.key])}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                  {!dbLoading && rows.length === 0 && (
+                    <tr>
+                      <td colSpan={Math.max(1, columns.length)} className="py-8 text-center text-slate-500 font-sans">
+                        {dbSearchQuery
+                          ? `ไม่พบข้อมูลที่ตรงกับ "${dbSearchQuery}" ในตาราง ${dbTable}`
+                          : `ยังไม่มีข้อมูลในตาราง ${dbTable}`}
+                      </td>
+                    </tr>
+                  )}
+                  {dbLoading && rows.length === 0 && (
+                    <tr>
+                      <td colSpan={Math.max(1, columns.length)} className="py-8 text-center text-slate-400 font-sans">
+                        กำลังโหลดข้อมูลจาก PostgreSQL...
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer & Pagination */}
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 text-xs font-mono">
+              <span className="text-slate-400">
+                ตาราง <strong className="text-white">{dbTable}</strong> • พบ{' '}
+                <strong className="text-emerald-300">{dbData?.totalRows ?? rows.length}</strong> รายการ
+                {dbSearchQuery ? ` (กรองจาก "${dbSearchQuery}")` : ''}
+              </span>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={dbSafePage <= 1 || dbLoading}
+                  onClick={() => setDbPage((p) => Math.max(1, p - 1))}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  ◀ ก่อนหน้า
+                </button>
+                <span className="text-slate-400">
+                  หน้า <strong className="text-amber-300">{dbSafePage}</strong> / {dbTotalPages}
+                </span>
+                <button
+                  type="button"
+                  disabled={dbSafePage >= dbTotalPages || dbLoading}
+                  onClick={() => setDbPage((p) => Math.min(dbTotalPages, p + 1))}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  ถัดไป ▶
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+};

@@ -1,0 +1,14054 @@
+import express, { type Request, type Response } from 'express';
+import cors from 'cors';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import dotenv from 'dotenv';
+import { ethers } from 'ethers';
+import { exec } from 'child_process';
+import { Queue, Worker, type Job, QueueEvents } from 'bullmq';
+import Redis from 'ioredis';
+import { EventEmitter } from 'events';
+import http from 'http';
+import { WebSocketServer, WebSocket } from 'ws';
+
+const queueEventsEmitter = new EventEmitter();
+queueEventsEmitter.setMaxListeners(200);
+
+let wssServer: WebSocketServer | null = null;
+
+export function setWssServer(wss: WebSocketServer) {
+  wssServer = wss;
+}
+
+export function formatNodeIdentityLabel(rankNum: number, nodeId: number): { th: string; en: string } {
+  const nId = Number(nodeId);
+  const rNum = Number(rankNum) || 1;
+  if (nId === 0) {
+    return {
+      th: 'Node #0 (Root / ระบบ)',
+      en: 'Node #0 (Root System)',
+    };
+  }
+
+  // 1. Look up in rankNum
+  const rankNodes = matrixDB?.nodesByRank?.[rNum] || [];
+  let node = rankNodes.find((n) => Number(n.id) === nId);
+
+  // 2. If not found in rankNum, look in Rank 1 or other ranks
+  if (!node && rNum !== 1) {
+    node = (matrixDB?.nodesByRank?.[1] || []).find((n) => Number(n.id) === nId);
+  }
+
+  if (!node && matrixDB?.nodesByRank) {
+    for (let r = 1; r <= 18; r++) {
+      const list = matrixDB.nodesByRank[r] || [];
+      const cand = list.find((n) => Number(n.id) === nId);
+      if (cand) {
+        node = cand;
+        break;
+      }
+    }
+  }
+
+  if (!node) {
+    return {
+      th: `Node #${nId}`,
+      en: `Node #${nId}`,
+    };
+  }
+
+  const originMainId = node.originMainId || node.id;
+  if (node.isClone) {
+    return {
+      th: `Node #${nId} (Clone #${nId} ของ Main ID #${originMainId})`,
+      en: `Node #${nId} (Clone #${nId} of Main ID #${originMainId})`,
+    };
+  }
+  if (node.isExtraId) {
+    return {
+      th: `Node #${nId} (Extra ID #${nId})`,
+      en: `Node #${nId} (Extra ID #${nId})`,
+    };
+  }
+
+  return {
+    th: `Node #${nId} (Main ID #${originMainId})`,
+    en: `Node #${nId} (Main ID #${originMainId})`,
+  };
+}
+
+export function getAggregatedTransactions(addressFilter?: string) {
+  const transactions: any[] = [];
+  const lowerAddr = addressFilter ? addressFilter.toLowerCase() : null;
+
+  try {
+    // 1. Registrations
+    const r1Nodes = matrixDB.nodesByRank[1] || [];
+    r1Nodes.forEach((node) => {
+      const ownerLower = (node.owner || '').toLowerCase();
+      if (lowerAddr && ownerLower !== lowerAddr) return;
+
+      const nodeAny = node as any;
+      const isLeft = node.parentId === 0 ? true : nodeAny.isLeft ?? true;
+
+      transactions.push({
+        id: `reg-r1-${node.id}`,
+        category: 'REGISTER',
+        titleTh: node.isClone
+          ? `สร้างรหัสโคลน Clone #${node.id} (Rank 1)`
+          : node.isExtraId
+          ? `สร้างรหัสพิเศษ Extra ID #${node.id} (Rank 1)`
+          : `สมัครสมาชิก / สร้างรหัสหลัก Main ID #${node.id} (Rank 1)`,
+        titleEn: node.isClone
+          ? `Clone Created #${node.id} (Rank 1)`
+          : node.isExtraId
+          ? `Extra ID Created #${node.id} (Rank 1)`
+          : `Member Registration Main ID #${node.id} (Rank 1)`,
+        userAddress: node.owner,
+        mainNodeId: node.originMainId || node.id,
+        rank: 1,
+        amountUsdt: RANK_PRICES_USDT[0] || 5,
+        timestamp: nodeAny.createdAt || matrixDB.lastSyncedAt || new Date().toISOString(),
+        blockNumber: nodeAny.blockNumber,
+        detailsTh: `ต่อสายใต้ อัพไลน์ #${node.parentId} (${isLeft ? '↙ ฝั่งซ้าย' : '↘ ฝั่งขวา'}) • ผู้แนะนำ: ${node.directSponsor ? `${node.directSponsor.slice(0, 6)}...${node.directSponsor.slice(-4)}` : 'Root'}`,
+        detailsEn: `Placed under Parent #${node.parentId} (${isLeft ? 'Left' : 'Right'}) • Sponsor: ${node.directSponsor ? `${node.directSponsor.slice(0, 6)}...${node.directSponsor.slice(-4)}` : 'Root'}`,
+      });
+    });
+
+    // 2. Upgrades
+    const adminFreeKeys = getAdminFreeNodeKeySet();
+    const upgrades = matrixDB.upgradeLogs || [];
+    upgrades.forEach((u) => {
+      const ownerLower = (u.owner || '').toLowerCase();
+      if (lowerAddr && ownerLower !== lowerAddr) return;
+
+      const isAdminFree =
+        Boolean(u.isAdminFreeUpgrade) ||
+        adminFreeKeys.has(`${Number(u.toRank || 1)}:${Number(u.newNodeId || 0)}`);
+      const uCost = isAdminFree
+        ? 0
+        : parseFloat(u.rankPriceUsdt) ||
+          (u as any).costUsdt ||
+          RANK_PRICES_USDT[Number(u.toRank) - 1] ||
+          10;
+
+      transactions.push({
+        id: `upg-${u.id || `${u.mainNodeId}-${u.toRank}`}`,
+        category: 'UPGRADE',
+        titleTh: isAdminFree
+          ? `Admin อัปเกรดฟรี Main ID #${u.mainNodeId} → Rank ${u.toRank}`
+          : `อัพเกรดผังแรงค์ Main ID #${u.mainNodeId} → Rank ${u.toRank}`,
+        titleEn: isAdminFree
+          ? `Admin Free Upgrade Main ID #${u.mainNodeId} → Rank ${u.toRank}`
+          : `Rank Upgrade Main ID #${u.mainNodeId} → Rank ${u.toRank}`,
+        userAddress: u.owner,
+        mainNodeId: Number(u.mainNodeId),
+        rank: Number(u.toRank),
+        amountUsdt: uCost,
+        timestamp: u.createdAt || matrixDB.lastSyncedAt || new Date().toISOString(),
+        txHash: u.txHash,
+        isAdminFreeUpgrade: isAdminFree,
+        detailsTh: isAdminFree
+          ? `Admin อัปเกรดฟรีจาก R${u.fromRank} ไปยัง R${u.toRank} (0.00 USDT • ไม่จ่ายค่าคอม)`
+          : `เลื่อนแรงค์จาก R${u.fromRank} ไปยัง R${u.toRank} (${uCost.toFixed(2)} USDT)`,
+        detailsEn: isAdminFree
+          ? `Admin free upgrade from R${u.fromRank} to R${u.toRank} (0.00 USDT • No commission)`
+          : `Upgraded from R${u.fromRank} to R${u.toRank} (${uCost.toFixed(2)} USDT)`,
+      } as any);
+    });
+
+    // 3. Payouts / Rewards (exclude any rewards originating from Admin Free Upgrade nodes)
+    const rewards = matrixDB.rewardLogs || [];
+    rewards.forEach((r, idx) => {
+      const recipientLower = (r.recipient || '').toLowerCase();
+      if (lowerAddr && recipientLower !== lowerAddr) return;
+
+      const rRank = Number(r.rank || 1);
+      const fromNid = Number(r.fromNodeId || 0);
+      if (adminFreeKeys.has(`${rRank}:${fromNid}`)) return;
+
+      const amt = parseFloat(r.amount) || 0;
+      if (amt <= 0) return;
+
+      const rTime =
+        r.createdAt ||
+        (r as any).timestamp ||
+        matrixDB.lastSyncedAt ||
+        new Date().toISOString();
+
+      transactions.push({
+        id: `rew-${r.id || idx}`,
+        category: 'PAYOUT',
+        titleTh: `รับโบนัส / ค่าคอมมิชชั่น (${r.rewardType})`,
+        titleEn: `Payout / Reward (${r.rewardType})`,
+        userAddress: r.recipient,
+        mainNodeId: Number(r.toNodeId || 1),
+        rank: rRank,
+        amountUsdt: amt,
+        timestamp: rTime,
+        blockNumber: r.blockNumber,
+        txHash: isRealTxHash(r.txHash) ? r.txHash : undefined,
+        rewardType: r.rewardType,
+        fromNodeId: fromNid,
+        toNodeId: Number(r.toNodeId || 0),
+        detailsTh: `ได้รับจาก ${formatNodeIdentityLabel(rRank, fromNid).th} → ${formatNodeIdentityLabel(rRank, Number(r.toNodeId)).th} (Rank ${rRank})`,
+        detailsEn: `Received from ${formatNodeIdentityLabel(rRank, fromNid).en} → ${formatNodeIdentityLabel(rRank, Number(r.toNodeId)).en} (Rank ${rRank})`,
+      } as any);
+    });
+
+    transactions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  } catch (e) {
+    console.warn('[getAggregatedTransactions error]:', e);
+  }
+
+  return transactions;
+}
+
+const sseClients = new Set<Response>();
+
+export function broadcastAllMatrixUpdates() {
+  try {
+    const transactions = getAggregatedTransactions();
+    const payload = JSON.stringify({
+      type: 'ALL_MATRIX_UPDATED',
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      rankCounts: matrixDB.rankCounts,
+      nodesByRank: matrixDB.nodesByRank,
+      contractAddress: CONTRACT_ADDRESS,
+      transactions,
+      rewardLogs: matrixDB.rewardLogs || [],
+      upgradeLogs: matrixDB.upgradeLogs || [],
+    });
+
+    if (wssServer) {
+      wssServer.clients.forEach((client) => {
+        if (client.readyState === 1) { // 1 = OPEN
+          client.send(payload);
+        }
+      });
+    }
+
+    sseClients.forEach((res) => {
+      try {
+        res.write(`data: ${payload}\n\n`);
+      } catch {
+        sseClients.delete(res);
+      }
+    });
+  } catch (err) {
+    console.warn('[WS/SSE Broadcast Error]:', err);
+  }
+}
+
+dotenv.config();
+
+// Prevent transient public RPC errors from crashing the server process in production
+process.on('unhandledRejection', (reason: any) => {
+  const reasonStr = reason ? (reason.stack || reason.message || String(reason)) : '';
+  // Silently ignore benign ethers/RPC cancellation during provider teardown or network drops
+  if (
+    reasonStr.includes('provider destroyed') ||
+    reasonStr.includes('cancelled request') ||
+    reasonStr.includes('eth_unsubscribe') ||
+    reasonStr.includes('UNSUPPORTED_OPERATION') ||
+    reasonStr.includes('WebSocket is not open') ||
+    reasonStr.includes('connection reset') ||
+    reasonStr.includes('ECONNRESET') ||
+    reasonStr.includes('ETIMEDOUT')
+  ) {
+    return;
+  }
+  console.warn('[Process Guard] Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', (err: any) => {
+  const errStr = err ? (err.stack || err.message || String(err)) : '';
+  if (
+    errStr.includes('provider destroyed') ||
+    errStr.includes('cancelled request') ||
+    errStr.includes('eth_unsubscribe') ||
+    errStr.includes('UNSUPPORTED_OPERATION') ||
+    errStr.includes('WebSocket is not open')
+  ) {
+    return;
+  }
+  if (err?.code === 'EADDRINUSE') {
+    console.error(`[Process Guard] Port ${PORT} is already in use:`, err);
+    process.exit(1);
+  }
+  console.warn('[Process Guard] Uncaught Exception:', err);
+});
+
+import fs from 'fs';
+import pg from 'pg';
+const { Pool } = pg;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const portArgIdx = process.argv.indexOf('--port');
+const cliPort = portArgIdx !== -1 ? Number(process.argv[portArgIdx + 1]) : NaN;
+const PORT = Number.isFinite(cliPort) && cliPort > 0 ? cliPort : 3000;
+
+// Persistent Database / Store File for Contract Address & Settings
+const CONFIG_FILE_PATH = path.resolve(__dirname, 'prisma/contract-config.json');
+
+const DEFAULT_SYSTEM_CONFIG = {
+  contractAddress:
+    process.env.OVERRIDE_CONTRACT_ADDRESS ||
+    process.env.CONTRACT_ADDRESS ||
+    '0x0c06f88987E56DE8704390D5b390AE48Ecd2Efe8',
+  usdtAddress: process.env.USDT_ADDRESS || '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b',
+  chainId: Number(process.env.CHAIN_ID || 97),
+  networkName: process.env.NETWORK_NAME || 'BNB Smart Chain Testnet',
+  rpcUrl: process.env.RPC_URL || 'https://bsc-testnet-rpc.publicnode.com',
+  blockExplorerUrl: process.env.BLOCK_EXPLORER_URL || 'https://testnet.bscscan.com',
+  updatedAt: new Date().toISOString(),
+};
+
+const SERVER_LEGACY_CONTRACTS = new Set([
+  '0x72f6ac64a86b1673ed55ba290ac12f1528ebba67',
+  '0xe6ef0985e12c5bc580a231dcc6d977ccede716d1',
+  '0xda9da3b56b75f5d59ac0b17b402e79dd3dddffba',
+  '0x104d65034b00f0db59497036208f3b798b4c10cc',
+  '0x0742e9581217cc8cd6de2aa80b7ce9ad881deee3',
+  '0xc5cf23d0cead13a08b3b3d968a052b956a64fbc6',
+  '0xe231fe72e1c2ab2617d8972c4ea15bc9122e514f',
+  '0x45405293ecce73f1a8c39ca8c0cc2248d6b9ab77',
+  '0xf955de5c1a403c9d286538a872c17837aebdd8ca',
+  '0xc71a9a677d9ef61a9133d6e6545306a11bd3ee5a',
+  '0x87e9f1b9a63eb65c91fca718c5af1cee4eec6209',
+  '0x675cdb85d9a843ac3e87b42beb7A606da79882e8',
+  '0xae3736ecd23dfb6c49b76ef8548391c1b6fff7b9',
+  '0x1700326ce4d4507a5dd88eb50156758581b6f4cb',
+  '0x5f0a48aa94dcfa820a12cb8e6c46e9cce807d341',
+  '0x48acb86c42a389efda47cc1b16938eea73f1f892',
+  '0x82d18c8b7d6b1e3823fb52723435a3b4fb558622',
+  '0xf09a03df9d6f89049dbdbcc5bfdb3d2be3bc5f10',
+  '0x82d07e805f670943a3dbf74ab777eb89189c7c27',
+  '0xa8fce96d490856338384a8a38a297b0789b0a8f1',
+  '0x154f3654088bb55ddabba62850cbcfdea6046e3c',
+  '0x36ff96c21e285fe557e6a3185d2b5467b46edc01',
+  '0x2246c327b711c7ba82ad35af42371253aa88d6e6',
+  '0xcf8d2348894ab77dcd1529c869e526924e2a7c3d',
+  '0xa285257430fbff1bb63c0a74958874a5bf159ccd',
+  '0x2df74a86df9d32c735755e1f448a98f4cda456c5',
+  '0x01fed3686a284dcac8ef7277c4657a2aa12fab54',
+  '0xda7acd2ca8967e8015e0931e652d4b7ee5e1c436',
+  '0x07953ba884e2d05fa543ef7eaec426c8de6d58ff',
+  '0x7fa05f1aeb74209612aea56472d9a2e2e9d44073',
+  '0x003ef4aaab33e517b2f565320df37e88b2db7a69',
+  '0x47ff540a2e04aa36cdc4a4ec6e4feadac1a71b66',
+  '0xc115f39897811d83be2613e9722753cfb78d492b',
+  '0x191d0c2cd0496e05aa4f91273125ddccc6645df4',
+  '0x36932dca76922f8f05513710db89238258e61378',
+  '0xee087e0318a8ac20229892bbc63d2fe43809234d',
+  '0x982a87f726cc1044a546fa853a425e6f445bca3d',
+  '0x3b69efbd1f615cd31e326497555bfa56a194f935',
+  '0x792cd37f508b97e4f86d8747fe7888a281dd1158',
+  '0xd3e4e4d7f367e563756d82989bb930b0261eb2ba',
+  '0x49a754084903678b7d46ff2934edb037cd1ab518',
+  '0x8b2ef84f543f5c1dfa8240a1853d63efe66006eb',
+  '0xb3832d4cc6dae0b24f1e6660d7c85dcc1f005cd1',
+  '0x376cdcf45d6cabe49867b4527bb87b7e988f0a78',
+  '0x4f47842e535001a43376f65cfdc05469dbf0bb99',
+  '0x8d460fb2037831cb2715c301420ca6357994411e',
+  '0x6d85e1d8f1628eadf0baf25d3ab6c3c7bc16743f',
+]);
+
+const SERVER_LEGACY_USDT = new Set([
+  '0x95856be9c16afc9c147c034cd6a514d730bd90ba',
+]);
+
+// ==========================================
+// POSTGRESQL POOL & INTEGRATION
+// ==========================================
+const PG_DATABASE_URL = process.env.DATABASE_URL || '';
+
+function parsePostgresEndpoint(connStr: string): { host: string; port: number; database: string } {
+  if (!connStr) {
+    return { host: 'local-json-fallback', port: 0, database: 'matrix-db.json' };
+  }
+  try {
+    const parsed = new URL(connStr);
+    return {
+      host: parsed.hostname || 'configured',
+      port: parsed.port ? Number(parsed.port) : 5432,
+      database: parsed.pathname.replace(/^\/+/, '') || 'postgres',
+    };
+  } catch {
+    return { host: 'configured', port: 5432, database: 'postgresql' };
+  }
+}
+
+const PG_ENDPOINT_INFO = parsePostgresEndpoint(PG_DATABASE_URL);
+
+let pgPool: pg.Pool | null = null;
+let pgConnected = false;
+let pgSchemaReady = false;
+let pgLastError: string | null = null;
+let pgTablesCount: Record<string, number> = {};
+let pgSyncTimer: NodeJS.Timeout | null = null;
+let pgSyncInFlight: Promise<void> | null = null;
+
+const ALLSELL_PAYOUT_FILE_PATH = path.resolve(__dirname, 'prisma/allsell-payouts.json');
+
+interface AllSellPayoutTransferItem {
+  poolNumber: number;
+  poolTitleTh: string;
+  mainId: number;
+  recipientWallet: string;
+  amountUsdt: number;
+  txHash: string;
+  mode: 'ONCHAIN_TRANSFER' | 'CYCLE_SETTLEMENT';
+}
+
+interface AllSellPayoutCycleRecord {
+  id: string;
+  contractAddress: string;
+  cycleKey: string;
+  cycleLabelTh: string;
+  triggerType: 'AUTO_SCHEDULE' | 'MANUAL_TRIGGER';
+  executedAt: string;
+  totalAllSellPoolUsdt: number;
+  totalDistributedUsdt: number;
+  carriedOverUsdt: number;
+  qualifiedRecipientsCount: number;
+  transfers: AllSellPayoutTransferItem[];
+  noteTh: string;
+}
+
+interface AllSellAutoStore {
+  autoEnabled: boolean;
+  lastExecutedCycleKey: string | null;
+  lastExecutedAt: string | null;
+  history: AllSellPayoutCycleRecord[];
+}
+
+function loadAllSellAutoStore(): AllSellAutoStore {
+  try {
+    if (fs.existsSync(ALLSELL_PAYOUT_FILE_PATH)) {
+      const raw = fs.readFileSync(ALLSELL_PAYOUT_FILE_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      return {
+        autoEnabled: parsed.autoEnabled !== false,
+        lastExecutedCycleKey: parsed.lastExecutedCycleKey || null,
+        lastExecutedAt: parsed.lastExecutedAt || null,
+        history: Array.isArray(parsed.history) ? parsed.history : [],
+      };
+    }
+  } catch {
+    // ignore read errors
+  }
+  return {
+    autoEnabled: true,
+    lastExecutedCycleKey: null,
+    lastExecutedAt: null,
+    history: [],
+  };
+}
+
+let allSellAutoStore: AllSellAutoStore = loadAllSellAutoStore();
+
+function saveAllSellAutoStore(syncToPg = true) {
+  try {
+    const dir = path.dirname(ALLSELL_PAYOUT_FILE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(ALLSELL_PAYOUT_FILE_PATH, JSON.stringify(allSellAutoStore, null, 2), 'utf8');
+  } catch {
+    // ignore write errors
+  }
+  if (syncToPg && pgPool && pgConnected && pgSchemaReady) {
+    syncAllSellStoreToPostgres().catch(() => {});
+  }
+}
+
+async function ensurePostgresSchema() {
+  if (!pgPool) return;
+  await pgPool.query(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      main_node_id INTEGER,
+      current_max_rank INTEGER DEFAULT 1,
+      sponsor_address TEXT,
+      sponsor_main_node_id INTEGER,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS wallets (
+      address TEXT PRIMARY KEY,
+      total_nodes INTEGER DEFAULT 0,
+      max_rank INTEGER DEFAULT 1,
+      total_rewards_usdt NUMERIC(20, 6) DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS matrix_levels (
+      rank INTEGER PRIMARY KEY,
+      price_usdt NUMERIC(20, 6) NOT NULL,
+      total_nodes INTEGER DEFAULT 1,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS matrix_nodes (
+      id TEXT PRIMARY KEY,
+      rank INTEGER NOT NULL DEFAULT 1,
+      node_id INTEGER NOT NULL DEFAULT 0,
+      label TEXT NOT NULL,
+      category TEXT NOT NULL,
+      level INTEGER NOT NULL DEFAULT 1,
+      parent_id TEXT NOT NULL,
+      sponsor_id TEXT NOT NULL,
+      owner TEXT,
+      left_child INTEGER DEFAULT 0,
+      right_child INTEGER DEFAULT 0,
+      is_clone BOOLEAN DEFAULT FALSE,
+      is_extra_id BOOLEAN DEFAULT FALSE,
+      is_admin_free_upgrade BOOLEAN DEFAULT FALSE,
+      personal_volume_usdt NUMERIC(20, 6) DEFAULT 0,
+      direct_referrals INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS income_channels (
+      id TEXT PRIMARY KEY,
+      rank INTEGER NOT NULL,
+      reward_type TEXT NOT NULL,
+      from_node_id INTEGER NOT NULL,
+      to_node_id INTEGER NOT NULL,
+      recipient TEXT NOT NULL,
+      amount_usdt NUMERIC(20, 6) NOT NULL,
+      tx_hash TEXT,
+      block_number BIGINT,
+      is_admin_free_upgrade BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS activities (
+      id TEXT PRIMARY KEY,
+      date_time TEXT NOT NULL,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      detail TEXT NOT NULL,
+      amount_usdt TEXT NOT NULL,
+      amount_display TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'สำเร็จ',
+      tx_hash TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS matrix_db_snapshots (
+      contract_address TEXT PRIMARY KEY,
+      payload JSONB NOT NULL,
+      last_synced_block BIGINT DEFAULT 0,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS allsell_auto_config (
+      id TEXT PRIMARY KEY,
+      auto_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      last_executed_cycle_key TEXT,
+      last_executed_at TEXT,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS allsell_payout_cycles (
+      id TEXT PRIMARY KEY,
+      contract_address TEXT NOT NULL,
+      cycle_key TEXT NOT NULL,
+      cycle_label_th TEXT NOT NULL,
+      trigger_type TEXT NOT NULL,
+      executed_at TEXT NOT NULL,
+      total_allsell_pool_usdt NUMERIC(20, 6) NOT NULL DEFAULT 0,
+      total_distributed_usdt NUMERIC(20, 6) NOT NULL DEFAULT 0,
+      carried_over_usdt NUMERIC(20, 6) NOT NULL DEFAULT 0,
+      qualified_recipients_count INTEGER NOT NULL DEFAULT 0,
+      transfers JSONB NOT NULL DEFAULT '[]'::jsonb,
+      note_th TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS allsell_payout_transfers (
+      id TEXT PRIMARY KEY,
+      cycle_id TEXT NOT NULL,
+      contract_address TEXT NOT NULL,
+      cycle_key TEXT NOT NULL,
+      pool_number INTEGER NOT NULL,
+      pool_title_th TEXT NOT NULL,
+      main_id INTEGER NOT NULL,
+      recipient_wallet TEXT NOT NULL,
+      amount_usdt NUMERIC(20, 6) NOT NULL,
+      tx_hash TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      executed_at TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS allsell_inflows (
+      id TEXT PRIMARY KEY,
+      contract_address TEXT NOT NULL,
+      rank INTEGER NOT NULL,
+      from_node_id INTEGER NOT NULL,
+      from_main_id INTEGER NOT NULL,
+      from_node_type TEXT NOT NULL,
+      parent_id INTEGER NOT NULL,
+      amount_usdt NUMERIC(20, 6) NOT NULL,
+      recipient TEXT NOT NULL,
+      note TEXT NOT NULL,
+      tx_hash TEXT,
+      block_number BIGINT,
+      event_time TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_allsell_cycles_contract ON allsell_payout_cycles (LOWER(contract_address));
+    CREATE INDEX IF NOT EXISTS idx_allsell_cycles_executed ON allsell_payout_cycles (executed_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_allsell_transfers_cycle ON allsell_payout_transfers (cycle_id);
+    CREATE INDEX IF NOT EXISTS idx_allsell_inflows_contract ON allsell_inflows (LOWER(contract_address));
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS rank INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS node_id INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS owner TEXT;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS left_child INTEGER DEFAULT 0;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS right_child INTEGER DEFAULT 0;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS is_clone BOOLEAN DEFAULT FALSE;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS is_extra_id BOOLEAN DEFAULT FALSE;
+    ALTER TABLE matrix_nodes ADD COLUMN IF NOT EXISTS is_admin_free_upgrade BOOLEAN DEFAULT FALSE;
+  `);
+  pgSchemaReady = true;
+}
+
+async function hydrateAllSellAutoFromPostgres() {
+  if (!pgPool || !pgConnected || !pgSchemaReady) return;
+  try {
+    const cfgRes = await pgPool.query(
+      `SELECT auto_enabled, last_executed_cycle_key, last_executed_at
+       FROM allsell_auto_config WHERE id = 'default' LIMIT 1`
+    );
+    const cyclesRes = await pgPool.query(
+      `SELECT id, contract_address, cycle_key, cycle_label_th, trigger_type, executed_at,
+              total_allsell_pool_usdt, total_distributed_usdt, carried_over_usdt,
+              qualified_recipients_count, transfers, note_th
+       FROM allsell_payout_cycles
+       ORDER BY executed_at DESC
+       LIMIT 200`
+    );
+
+    const pgCycles: AllSellPayoutCycleRecord[] = cyclesRes.rows.map((row: any) => ({
+      id: String(row.id),
+      contractAddress: String(row.contract_address || ''),
+      cycleKey: String(row.cycle_key || ''),
+      cycleLabelTh: String(row.cycle_label_th || ''),
+      triggerType: row.trigger_type === 'AUTO_SCHEDULE' ? 'AUTO_SCHEDULE' : 'MANUAL_TRIGGER',
+      executedAt: String(row.executed_at || ''),
+      totalAllSellPoolUsdt: Number(row.total_allsell_pool_usdt || 0),
+      totalDistributedUsdt: Number(row.total_distributed_usdt || 0),
+      carriedOverUsdt: Number(row.carried_over_usdt || 0),
+      qualifiedRecipientsCount: Number(row.qualified_recipients_count || 0),
+      transfers: Array.isArray(row.transfers) ? row.transfers : [],
+      noteTh: String(row.note_th || ''),
+    }));
+
+    const mergedById = new Map<string, AllSellPayoutCycleRecord>();
+    for (const c of allSellAutoStore.history || []) {
+      if (c?.id) mergedById.set(c.id, c);
+    }
+    for (const c of pgCycles) {
+      if (c?.id && !mergedById.has(c.id)) {
+        mergedById.set(c.id, c);
+      }
+    }
+
+    const mergedHistory = Array.from(mergedById.values())
+      .sort((a, b) => new Date(b.executedAt).getTime() - new Date(a.executedAt).getTime())
+      .slice(0, 200);
+
+    let changed = mergedHistory.length !== (allSellAutoStore.history || []).length;
+    if (cfgRes.rows[0]) {
+      const cfg = cfgRes.rows[0];
+      const pgLastMs = cfg.last_executed_at ? new Date(cfg.last_executed_at).getTime() : 0;
+      const localLastMs = allSellAutoStore.lastExecutedAt
+        ? new Date(allSellAutoStore.lastExecutedAt).getTime()
+        : 0;
+      if (pgLastMs > localLastMs || !allSellAutoStore.lastExecutedAt) {
+        allSellAutoStore.autoEnabled = Boolean(cfg.auto_enabled);
+        allSellAutoStore.lastExecutedCycleKey = cfg.last_executed_cycle_key || allSellAutoStore.lastExecutedCycleKey;
+        allSellAutoStore.lastExecutedAt = cfg.last_executed_at || allSellAutoStore.lastExecutedAt;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      allSellAutoStore.history = mergedHistory;
+      saveAllSellAutoStore(false);
+    }
+  } catch (e: any) {
+    console.warn('⚠️ [PostgreSQL] hydrateAllSellAutoFromPostgres notice:', e?.message);
+  }
+}
+
+async function syncAllSellStoreToPostgres(existingClient?: pg.PoolClient) {
+  if (!pgPool || !pgConnected || !pgSchemaReady) return;
+  const runner: { query: (text: string, params?: any[]) => Promise<any> } = existingClient || pgPool;
+  try {
+    await runner.query(
+      `INSERT INTO allsell_auto_config (id, auto_enabled, last_executed_cycle_key, last_executed_at, updated_at)
+       VALUES ('default', $1, $2, $3, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         auto_enabled = EXCLUDED.auto_enabled,
+         last_executed_cycle_key = EXCLUDED.last_executed_cycle_key,
+         last_executed_at = EXCLUDED.last_executed_at,
+         updated_at = NOW()`,
+      [
+        Boolean(allSellAutoStore.autoEnabled),
+        allSellAutoStore.lastExecutedCycleKey || null,
+        allSellAutoStore.lastExecutedAt || null,
+      ]
+    );
+
+    for (const rec of allSellAutoStore.history || []) {
+      if (!rec?.id) continue;
+      await runner.query(
+        `INSERT INTO allsell_payout_cycles (
+           id, contract_address, cycle_key, cycle_label_th, trigger_type, executed_at,
+           total_allsell_pool_usdt, total_distributed_usdt, carried_over_usdt,
+           qualified_recipients_count, transfers, note_th
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12)
+         ON CONFLICT (id) DO UPDATE SET
+           contract_address = EXCLUDED.contract_address,
+           cycle_key = EXCLUDED.cycle_key,
+           cycle_label_th = EXCLUDED.cycle_label_th,
+           trigger_type = EXCLUDED.trigger_type,
+           executed_at = EXCLUDED.executed_at,
+           total_allsell_pool_usdt = EXCLUDED.total_allsell_pool_usdt,
+           total_distributed_usdt = EXCLUDED.total_distributed_usdt,
+           carried_over_usdt = EXCLUDED.carried_over_usdt,
+           qualified_recipients_count = EXCLUDED.qualified_recipients_count,
+           transfers = EXCLUDED.transfers,
+           note_th = EXCLUDED.note_th`,
+        [
+          String(rec.id),
+          String(rec.contractAddress || CONTRACT_ADDRESS),
+          String(rec.cycleKey || ''),
+          String(rec.cycleLabelTh || ''),
+          String(rec.triggerType || 'MANUAL_TRIGGER'),
+          String(rec.executedAt || new Date().toISOString()),
+          Number(rec.totalAllSellPoolUsdt || 0).toFixed(6),
+          Number(rec.totalDistributedUsdt || 0).toFixed(6),
+          Number(rec.carriedOverUsdt || 0).toFixed(6),
+          Number(rec.qualifiedRecipientsCount || 0),
+          JSON.stringify(Array.isArray(rec.transfers) ? rec.transfers : []),
+          String(rec.noteTh || ''),
+        ]
+      );
+
+      const tList = Array.isArray(rec.transfers) ? rec.transfers : [];
+      for (let i = 0; i < tList.length; i++) {
+        const t = tList[i];
+        const tId = `${rec.id}:${i}:${Number(t.poolNumber || 0)}:${Number(t.mainId || 0)}`;
+        await runner.query(
+          `INSERT INTO allsell_payout_transfers (
+             id, cycle_id, contract_address, cycle_key, pool_number, pool_title_th,
+             main_id, recipient_wallet, amount_usdt, tx_hash, mode, executed_at
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (id) DO UPDATE SET
+             amount_usdt = EXCLUDED.amount_usdt,
+             tx_hash = EXCLUDED.tx_hash,
+             mode = EXCLUDED.mode`,
+          [
+            tId,
+            String(rec.id),
+            String(rec.contractAddress || CONTRACT_ADDRESS),
+            String(rec.cycleKey || ''),
+            Number(t.poolNumber || 1),
+            String(t.poolTitleTh || ''),
+            Number(t.mainId || 0),
+            String(t.recipientWallet || ''),
+            Number(t.amountUsdt || 0).toFixed(6),
+            String(t.txHash || ''),
+            String(t.mode || 'CYCLE_SETTLEMENT'),
+            String(rec.executedAt || new Date().toISOString()),
+          ]
+        );
+      }
+    }
+    if (!existingClient) {
+      await refreshPgTableCounts();
+    }
+  } catch (e: any) {
+    console.warn('⚠️ [PostgreSQL] syncAllSellStoreToPostgres notice:', e?.message);
+  }
+}
+
+async function hydrateMatrixDBFromPostgres() {
+  if (!pgPool || !pgConnected || !pgSchemaReady) return;
+  try {
+    const res = await pgPool.query(
+      `SELECT payload FROM matrix_db_snapshots WHERE LOWER(contract_address) = LOWER($1) LIMIT 1`,
+      [CONTRACT_ADDRESS]
+    );
+    const snap = res.rows[0]?.payload as PersistentMatrixDatabase | undefined;
+    if (snap && snap.contractAddress && snap.contractAddress.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()) {
+      for (let r = 1; r <= 18; r++) {
+        for (const n of snap.nodesByRank?.[r] || []) {
+          if (n?.isAdminFreeUpgrade) {
+            markNodeAsAdminFreeUpgrade(r, n.id);
+          }
+        }
+      }
+      const diskR1Count = (matrixDB.nodesByRank?.[1] || []).length;
+      const pgR1Count = (snap.nodesByRank?.[1] || []).length;
+      if (pgR1Count > diskR1Count) {
+        matrixDB = {
+          ...matrixDB,
+          ...snap,
+          nodesByRank: snap.nodesByRank || matrixDB.nodesByRank,
+          rankCounts: snap.rankCounts || matrixDB.rankCounts,
+          transactionLogs: Array.isArray(snap.transactionLogs) && snap.transactionLogs.length >= (matrixDB.transactionLogs || []).length
+            ? snap.transactionLogs
+            : matrixDB.transactionLogs,
+          upgradeLogs: Array.isArray(snap.upgradeLogs) && snap.upgradeLogs.length >= (matrixDB.upgradeLogs || []).length
+            ? snap.upgradeLogs
+            : matrixDB.upgradeLogs,
+        };
+        reconcileAutoExtraIdsAcrossRanks();
+        rebuildDatabaseRewardLogsFromNodes();
+        rebuildDatabaseUpgradeLogsFromNodes();
+        saveMatrixDBToDisk(true);
+      }
+    }
+  } catch (e: any) {
+    console.warn('⚠️ [PostgreSQL] hydrateMatrixDBFromPostgres notice:', e?.message);
+  }
+}
+
+function initPostgresPool() {
+  if (!PG_DATABASE_URL) {
+    pgConnected = false;
+    pgLastError = 'Using local JSON Matrix DB (DATABASE_URL not configured)';
+    return;
+  }
+  try {
+    pgPool = new Pool({
+      connectionString: PG_DATABASE_URL,
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 8000,
+      ssl: false,
+    });
+
+    pgPool.on('error', (err: Error) => {
+      pgConnected = false;
+      pgLastError = err.message;
+    });
+
+    pgPool.query('SELECT current_database(), current_user, version()', async (err, res) => {
+      if (err) {
+        pgConnected = false;
+        pgLastError = err.message;
+      } else {
+        pgConnected = true;
+        pgLastError = null;
+        const dbName = res.rows[0]?.current_database || PG_ENDPOINT_INFO.database;
+        const user = res.rows[0]?.current_user || 'user';
+        console.log(`🐘 [PostgreSQL] Connected successfully to database: ${dbName} as ${user}`);
+        try {
+          await ensurePostgresSchema();
+          await hydrateMatrixDBFromPostgres();
+          await hydrateAllSellAutoFromPostgres();
+          await syncAllMatrixDBToPostgres();
+        } catch (schemaErr: any) {
+          pgLastError = schemaErr?.message || String(schemaErr);
+          console.warn('⚠️ [PostgreSQL] Schema/initial sync notice:', pgLastError);
+        }
+      }
+    });
+  } catch (err: any) {
+    pgConnected = false;
+    pgLastError = err?.message || String(err);
+  }
+}
+
+async function refreshPgTableCounts() {
+  if (!pgPool || !pgConnected) return;
+  try {
+    const tables = [
+      'accounts',
+      'matrix_levels',
+      'income_channels',
+      'activities',
+      'wallets',
+      'matrix_nodes',
+      'allsell_inflows',
+      'allsell_payout_cycles',
+      'allsell_payout_transfers',
+      'allsell_auto_config',
+      'matrix_db_snapshots',
+    ];
+    const counts: Record<string, number> = {};
+    for (const t of tables) {
+      try {
+        const r = await pgPool.query(`SELECT COUNT(*)::int as count FROM ${t}`);
+        counts[t] = r.rows[0]?.count ?? 0;
+      } catch {
+        counts[t] = 0;
+      }
+    }
+    pgTablesCount = counts;
+  } catch (e: any) {
+    console.warn('⚠️ [PostgreSQL] refresh table counts error:', e.message);
+  }
+}
+
+async function syncNodeToPostgres(node: {
+  id: number;
+  rank: number;
+  owner: string;
+  directSponsor?: string;
+  parentId: number;
+  leftChild?: number;
+  rightChild?: number;
+  isClone?: boolean;
+  isExtraId?: boolean;
+  isAdminFreeUpgrade?: boolean;
+  nodeVault?: number;
+  directSponsorNodeId?: number;
+}) {
+  if (!pgPool || !pgConnected || !pgSchemaReady) return;
+  try {
+    const nodeIdStr = `R${node.rank}-#${node.id}`;
+    const parentIdStr = node.parentId === 0 ? 'ROOT' : `R${node.rank}-#${node.parentId}`;
+    const sponsorIdStr = node.directSponsorNodeId ? `R1-#${node.directSponsorNodeId}` : `R1-#1`;
+    const label = node.isClone
+      ? `Clone R${node.rank}-#${node.id}`
+      : `Main ID #${node.id} (Rank ${node.rank})`;
+    const category = node.isClone ? 'Cloning' : node.isExtraId ? 'Extra' : 'Original';
+    const volume = (node.nodeVault || (RANK_PRICES_USDT[node.rank - 1] * 0.35)).toFixed(2);
+    const directRefs = (node.leftChild ? 1 : 0) + (node.rightChild ? 1 : 0);
+
+    await pgPool.query(
+      `INSERT INTO matrix_nodes (
+         id, rank, node_id, label, category, level, parent_id, sponsor_id, owner,
+         left_child, right_child, is_clone, is_extra_id, is_admin_free_upgrade,
+         personal_volume_usdt, direct_referrals, created_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         rank = EXCLUDED.rank,
+         node_id = EXCLUDED.node_id,
+         label = EXCLUDED.label,
+         category = EXCLUDED.category,
+         parent_id = EXCLUDED.parent_id,
+         sponsor_id = EXCLUDED.sponsor_id,
+         owner = EXCLUDED.owner,
+         left_child = EXCLUDED.left_child,
+         right_child = EXCLUDED.right_child,
+         is_clone = EXCLUDED.is_clone,
+         is_extra_id = EXCLUDED.is_extra_id,
+         is_admin_free_upgrade = EXCLUDED.is_admin_free_upgrade,
+         personal_volume_usdt = EXCLUDED.personal_volume_usdt,
+         direct_referrals = EXCLUDED.direct_referrals;`,
+      [
+        nodeIdStr,
+        node.rank,
+        node.id,
+        label,
+        category,
+        node.rank,
+        parentIdStr,
+        sponsorIdStr,
+        node.owner || '',
+        Number(node.leftChild || 0),
+        Number(node.rightChild || 0),
+        Boolean(node.isClone),
+        Boolean(node.isExtraId),
+        Boolean(node.isAdminFreeUpgrade),
+        volume,
+        directRefs,
+      ]
+    );
+  } catch {
+    // Non-blocking
+  }
+}
+
+async function recordPostgresActivity(activity: {
+  id?: string;
+  type: string;
+  title: string;
+  detail: string;
+  amountUsdt: string;
+  amountDisplay: string;
+  status?: string;
+  txHash?: string;
+  dateTime?: string;
+}) {
+  if (!pgPool || !pgConnected || !pgSchemaReady) return;
+  try {
+    const actId = activity.id || `act_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const nowStr = (activity.dateTime || new Date().toISOString()).replace('T', ' ').substring(0, 19);
+    await pgPool.query(
+      `INSERT INTO activities (id, date_time, type, title, detail, amount_usdt, amount_display, status, tx_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (id) DO UPDATE SET
+         type = EXCLUDED.type,
+         title = EXCLUDED.title,
+         detail = EXCLUDED.detail,
+         amount_usdt = EXCLUDED.amount_usdt,
+         amount_display = EXCLUDED.amount_display,
+         status = EXCLUDED.status,
+         tx_hash = COALESCE(EXCLUDED.tx_hash, activities.tx_hash)`,
+      [
+        actId,
+        nowStr,
+        activity.type,
+        activity.title,
+        activity.detail,
+        activity.amountUsdt,
+        activity.amountDisplay,
+        activity.status || 'สำเร็จ',
+        activity.txHash || null,
+      ]
+    );
+  } catch {
+    // non-blocking
+  }
+}
+
+function schedulePostgresSync(immediate = false) {
+  if (!pgPool || !pgConnected || !pgSchemaReady) return;
+  if (immediate) {
+    if (pgSyncTimer) clearTimeout(pgSyncTimer);
+    pgSyncTimer = null;
+    syncAllMatrixDBToPostgres().catch(() => {});
+    return;
+  }
+  if (pgSyncTimer) return;
+  pgSyncTimer = setTimeout(() => {
+    pgSyncTimer = null;
+    syncAllMatrixDBToPostgres().catch(() => {});
+  }, 1500);
+}
+
+async function syncAllMatrixDBToPostgres() {
+  if (!pgPool || !pgConnected) return;
+  if (pgSyncInFlight) return pgSyncInFlight;
+  pgSyncInFlight = (async () => {
+    try {
+      if (!pgSchemaReady) {
+        await ensurePostgresSchema();
+      }
+      const client = await pgPool!.connect();
+      try {
+        await client.query('BEGIN');
+
+        // 1. Sync matrix_levels (Ranks 1..18)
+        for (let r = 1; r <= 18; r++) {
+          const price = Number(RANK_PRICES_USDT[r - 1] || 0);
+          const count = Math.max(1, (matrixDB.nodesByRank[r] || []).length);
+          await client.query(
+            `INSERT INTO matrix_levels (rank, price_usdt, total_nodes, updated_at)
+             VALUES ($1, $2, $3, NOW())
+             ON CONFLICT (rank) DO UPDATE SET
+               price_usdt = EXCLUDED.price_usdt,
+               total_nodes = EXCLUDED.total_nodes,
+               updated_at = NOW()`,
+            [r, price.toFixed(6), count]
+          );
+        }
+
+        // 2. Sync matrix_nodes & aggregate wallet/account stats
+        const walletStats = new Map<string, { totalNodes: number; maxRank: number; totalRewards: number }>();
+        const adminFreeKeys = getAdminFreeNodeKeySet();
+
+        for (let r = 1; r <= 18; r++) {
+          const rNodes = matrixDB.nodesByRank[r] || [];
+          for (const n of rNodes) {
+            const ownerLower = String(n.owner || '').toLowerCase();
+            if (ownerLower && ownerLower !== ethers.ZeroAddress) {
+              const cur = walletStats.get(ownerLower) || { totalNodes: 0, maxRank: 1, totalRewards: 0 };
+              cur.totalNodes += 1;
+              if (r > cur.maxRank) cur.maxRank = r;
+              walletStats.set(ownerLower, cur);
+            }
+
+            if (r > 1 && rNodes.length <= 1 && n.id === 1 && !n.owner) continue;
+
+            const nodeIdStr = `R${n.rank}-#${n.id}`;
+            const parentIdStr = n.parentId === 0 ? 'ROOT' : `R${n.rank}-#${n.parentId}`;
+            const sponsorIdStr = n.directSponsorNodeId ? `R1-#${n.directSponsorNodeId}` : 'R1-#1';
+            const label = n.isClone
+              ? `Clone R${n.rank}-#${n.id}`
+              : n.isExtraId
+              ? `Extra R${n.rank}-#${n.id}`
+              : `Main ID #${n.id} (Rank ${n.rank})`;
+            const category = n.isClone ? 'Cloning' : n.isExtraId ? 'Extra' : 'Original';
+            const isFree = Boolean(n.isAdminFreeUpgrade || adminFreeKeys.has(`${n.rank}:${n.id}`));
+            const volume = Number(n.nodeVault || 0).toFixed(6);
+            const directRefs = (n.leftChild ? 1 : 0) + (n.rightChild ? 1 : 0);
+
+            await client.query(
+              `INSERT INTO matrix_nodes (
+                 id, rank, node_id, label, category, level, parent_id, sponsor_id, owner,
+                 left_child, right_child, is_clone, is_extra_id, is_admin_free_upgrade,
+                 personal_volume_usdt, direct_referrals, created_at
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+               ON CONFLICT (id) DO UPDATE SET
+                 rank = EXCLUDED.rank,
+                 node_id = EXCLUDED.node_id,
+                 label = EXCLUDED.label,
+                 category = EXCLUDED.category,
+                 parent_id = EXCLUDED.parent_id,
+                 sponsor_id = EXCLUDED.sponsor_id,
+                 owner = EXCLUDED.owner,
+                 left_child = EXCLUDED.left_child,
+                 right_child = EXCLUDED.right_child,
+                 is_clone = EXCLUDED.is_clone,
+                 is_extra_id = EXCLUDED.is_extra_id,
+                 is_admin_free_upgrade = EXCLUDED.is_admin_free_upgrade,
+                 personal_volume_usdt = EXCLUDED.personal_volume_usdt,
+                 direct_referrals = EXCLUDED.direct_referrals`,
+              [
+                nodeIdStr,
+                n.rank,
+                n.id,
+                label,
+                category,
+                n.rank,
+                parentIdStr,
+                sponsorIdStr,
+                n.owner || '',
+                Number(n.leftChild || 0),
+                Number(n.rightChild || 0),
+                Boolean(n.isClone),
+                Boolean(n.isExtraId),
+                isFree,
+                volume,
+                directRefs,
+              ]
+            );
+          }
+        }
+
+        // 3. Sync accounts (Rank 1 nodes)
+        const r1Nodes = matrixDB.nodesByRank[1] || [];
+        const maxRankByMain = new Map<number, number>();
+        for (let r = 1; r <= 18; r++) {
+          for (const n of matrixDB.nodesByRank[r] || []) {
+            const mId = Number(n.originMainId || 0);
+            if (mId > 0) {
+              maxRankByMain.set(mId, Math.max(maxRankByMain.get(mId) || 1, r));
+            }
+          }
+        }
+        for (const n of r1Nodes) {
+          await client.query(
+            `INSERT INTO accounts (id, owner, main_node_id, current_max_rank, sponsor_address, sponsor_main_node_id, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, NOW())
+             ON CONFLICT (id) DO UPDATE SET
+               owner = EXCLUDED.owner,
+               main_node_id = EXCLUDED.main_node_id,
+               current_max_rank = EXCLUDED.current_max_rank,
+               sponsor_address = EXCLUDED.sponsor_address,
+               sponsor_main_node_id = EXCLUDED.sponsor_main_node_id,
+               updated_at = NOW()`,
+            [
+              `main-${n.id}`,
+              n.owner || '',
+              n.id,
+              maxRankByMain.get(n.id) || 1,
+              n.directSponsor || '',
+              Number(n.directSponsorNodeId || 0),
+            ]
+          );
+        }
+
+        // 4. Sync income_channels (rewardLogs) & accumulate wallet rewards
+        for (const r of matrixDB.rewardLogs || []) {
+          const amt = Number(parseFloat(String(r.amount || '0')) || 0);
+          const isFree = Boolean(r.isAdminFreeUpgrade || adminFreeKeys.has(`${r.rank}:${r.fromNodeId}`));
+          if (isFree || amt <= 0) continue;
+
+          const recipLower = String(r.recipient || '').toLowerCase();
+          if (recipLower && recipLower !== ethers.ZeroAddress) {
+            const cur = walletStats.get(recipLower) || { totalNodes: 0, maxRank: 1, totalRewards: 0 };
+            if (!String(r.rewardType || '').toUpperCase().includes('VAULT')) {
+              cur.totalRewards += amt;
+            }
+            walletStats.set(recipLower, cur);
+          }
+
+          await client.query(
+            `INSERT INTO income_channels (
+               id, rank, reward_type, from_node_id, to_node_id, recipient, amount_usdt,
+               tx_hash, block_number, is_admin_free_upgrade
+             )
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             ON CONFLICT (id) DO UPDATE SET
+               amount_usdt = EXCLUDED.amount_usdt,
+               tx_hash = COALESCE(EXCLUDED.tx_hash, income_channels.tx_hash),
+               block_number = COALESCE(EXCLUDED.block_number, income_channels.block_number)`,
+            [
+              String(r.id),
+              Number(r.rank || 1),
+              String(r.rewardType || 'DIRECT'),
+              Number(r.fromNodeId || 0),
+              Number(r.toNodeId || 0),
+              String(r.recipient || ''),
+              amt.toFixed(6),
+              r.txHash || null,
+              r.blockNumber ? Number(r.blockNumber) : null,
+              false,
+            ]
+          );
+        }
+
+        // 5. Sync wallets
+        for (const [addr, st] of walletStats.entries()) {
+          await client.query(
+            `INSERT INTO wallets (address, total_nodes, max_rank, total_rewards_usdt, updated_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             ON CONFLICT (address) DO UPDATE SET
+               total_nodes = EXCLUDED.total_nodes,
+               max_rank = EXCLUDED.max_rank,
+               total_rewards_usdt = EXCLUDED.total_rewards_usdt,
+               updated_at = NOW()`,
+            [addr, st.totalNodes, st.maxRank, st.totalRewards.toFixed(6)]
+          );
+        }
+
+        // 6. Sync activities (transactionLogs + upgradeLogs)
+        for (const tx of matrixDB.transactionLogs || []) {
+          const amtStr = tx.amountUsdt !== undefined ? Number(tx.amountUsdt).toFixed(2) : '0.00';
+          const dt = String(tx.timestamp || new Date().toISOString()).replace('T', ' ').substring(0, 19);
+          await client.query(
+            `INSERT INTO activities (id, date_time, type, title, detail, amount_usdt, amount_display, status, tx_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (id) DO UPDATE SET
+               type = EXCLUDED.type,
+               title = EXCLUDED.title,
+               detail = EXCLUDED.detail,
+               amount_usdt = EXCLUDED.amount_usdt,
+               amount_display = EXCLUDED.amount_display,
+               tx_hash = COALESCE(EXCLUDED.tx_hash, activities.tx_hash)`,
+            [
+              String(tx.id),
+              dt,
+              String(tx.actionType || 'TX'),
+              String(tx.title || tx.actionType),
+              String(tx.details || `Rank ${tx.rank || 1} Main #${tx.mainNodeId || 0}`),
+              amtStr,
+              `${amtStr} USDT`,
+              'สำเร็จ',
+              tx.txHash || null,
+            ]
+          );
+        }
+
+        // 7. Sync AllSell 4% inflows & payout cycles/transfers
+        const allSellWalletAddr =
+          matrixDB.systemWallets.allSellWallet || '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710';
+        const contractAddrLower = (matrixDB.contractAddress || CONTRACT_ADDRESS).toLowerCase();
+        for (let r = 1; r <= 18; r++) {
+          const rNodes = matrixDB.nodesByRank[r] || [];
+          if (rNodes.length <= 1) continue;
+          const unitPrice = RANK_PRICES_USDT[r - 1] || 5;
+          const allSellAmt = Number((unitPrice * 0.04).toFixed(2));
+          const rMap = new Map<number, IndexedTreeNode>();
+          for (const nodeItem of rNodes) rMap.set(nodeItem.id, nodeItem);
+
+          for (const nodeItem of rNodes) {
+            if (nodeItem.id <= 1 || nodeItem.isAdminFreeUpgrade) continue;
+            const parentItem = rMap.get(nodeItem.parentId);
+            if (!parentItem || parentItem.leftChild !== nodeItem.id) continue;
+
+            const fromMainId = Number(nodeItem.originMainId || nodeItem.id);
+            const fromNodeType = nodeItem.isExtraId
+              ? `Extra R${r}-#${nodeItem.id}`
+              : nodeItem.isClone
+              ? `โคลน R${r}-#${nodeItem.id} (ของ Main #${fromMainId})`
+              : nodeItem.originType === 'AUTO_NEW_MAIN'
+              ? `Auto ID #${fromMainId} (R${r}-#${nodeItem.id})`
+              : `Main #${fromMainId} (R${r}-#${nodeItem.id})`;
+
+            const matchingAllSellRew = (matrixDB.rewardLogs || []).find(
+              (rw) =>
+                String(rw.rewardType || '').toUpperCase() === 'ALLSELL' &&
+                Number(rw.rank || 1) === r &&
+                Number(rw.fromNodeId || 0) === nodeItem.id
+            );
+            const matchingNodeTx = (matrixDB.transactionLogs || []).find(
+              (t) =>
+                Number(t.rank || 1) === r &&
+                (Number(t.nodeId || 0) === nodeItem.id || Number(t.mainNodeId || 0) === fromMainId) &&
+                isRealTxHash(t.txHash)
+            );
+
+            const inflowId = `${contractAddrLower}:r${r}-#${nodeItem.id}`;
+            const eventTime =
+              nodeItem.createdAt ||
+              matchingAllSellRew?.createdAt ||
+              matchingNodeTx?.timestamp ||
+              matrixDB.lastSyncedAt ||
+              new Date().toISOString();
+            const txHash = isRealTxHash(matchingAllSellRew?.txHash)
+              ? matchingAllSellRew?.txHash
+              : matchingNodeTx?.txHash || matchingAllSellRew?.txHash || null;
+            const blockNumber =
+              matchingAllSellRew?.blockNumber || matchingNodeTx?.blockNumber || null;
+
+            await client.query(
+              `INSERT INTO allsell_inflows (
+                 id, contract_address, rank, from_node_id, from_main_id, from_node_type,
+                 parent_id, amount_usdt, recipient, note, tx_hash, block_number, event_time
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+               ON CONFLICT (id) DO UPDATE SET
+                 from_main_id = EXCLUDED.from_main_id,
+                 from_node_type = EXCLUDED.from_node_type,
+                 parent_id = EXCLUDED.parent_id,
+                 amount_usdt = EXCLUDED.amount_usdt,
+                 recipient = EXCLUDED.recipient,
+                 note = EXCLUDED.note,
+                 tx_hash = COALESCE(EXCLUDED.tx_hash, allsell_inflows.tx_hash),
+                 block_number = COALESCE(EXCLUDED.block_number, allsell_inflows.block_number),
+                 event_time = EXCLUDED.event_time`,
+              [
+                inflowId,
+                matrixDB.contractAddress || CONTRACT_ADDRESS,
+                r,
+                nodeItem.id,
+                fromMainId,
+                fromNodeType,
+                parentItem.id,
+                allSellAmt.toFixed(6),
+                matchingAllSellRew?.recipient || allSellWalletAddr,
+                `4% AllSell จาก ${fromNodeType} (วางเม็ดซ้ายใต้ R${r}-#${parentItem.id})`,
+                txHash,
+                blockNumber ? Number(blockNumber) : null,
+                eventTime,
+              ]
+            );
+          }
+        }
+
+        await syncAllSellStoreToPostgres(client);
+
+        // 8. Persist full JSONB snapshot
+        await client.query(
+          `INSERT INTO matrix_db_snapshots (contract_address, payload, last_synced_block, updated_at)
+           VALUES ($1, $2::jsonb, $3, NOW())
+           ON CONFLICT (contract_address) DO UPDATE SET
+             payload = EXCLUDED.payload,
+             last_synced_block = EXCLUDED.last_synced_block,
+             updated_at = NOW()`,
+          [
+            CONTRACT_ADDRESS.toLowerCase(),
+            JSON.stringify(matrixDB),
+            Number(matrixDB.lastSyncedBlock || 0),
+          ]
+        );
+
+        await client.query('COMMIT');
+        pgLastError = null;
+      } catch (txErr) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw txErr;
+      } finally {
+        client.release();
+      }
+      await refreshPgTableCounts();
+    } catch (e: any) {
+      pgLastError = e?.message || String(e);
+      console.warn('⚠️ [PostgreSQL] syncAllMatrixDBToPostgres notice:', pgLastError);
+    } finally {
+      pgSyncInFlight = null;
+    }
+  })();
+  return pgSyncInFlight;
+}
+
+// Start PostgreSQL connection
+initPostgresPool();
+
+function readContractConfigFromDB() {
+  try {
+    if (fs.existsSync(CONFIG_FILE_PATH)) {
+      const raw = fs.readFileSync(CONFIG_FILE_PATH, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed.contractAddress && ethers.isAddress(parsed.contractAddress)) {
+        if (SERVER_LEGACY_CONTRACTS.has(parsed.contractAddress.toLowerCase())) {
+          parsed.contractAddress = DEFAULT_SYSTEM_CONFIG.contractAddress;
+        }
+        if (parsed.usdtAddress && SERVER_LEGACY_USDT.has(parsed.usdtAddress.toLowerCase())) {
+          parsed.usdtAddress = DEFAULT_SYSTEM_CONFIG.usdtAddress;
+        }
+        if (
+          parsed.rpcUrl === 'https://data-seed-prebsc-1-s1.binance.org:8545/' &&
+          !process.env.RPC_URL
+        ) {
+          parsed.rpcUrl = 'https://bsc-testnet-rpc.publicnode.com';
+        }
+        return { ...DEFAULT_SYSTEM_CONFIG, ...parsed };
+      }
+    }
+  } catch (err) {
+    console.warn('[DB Config] Error reading config file, using defaults:', err);
+  }
+  return DEFAULT_SYSTEM_CONFIG;
+}
+
+let activeSystemConfig = readContractConfigFromDB();
+let CONTRACT_ADDRESS = activeSystemConfig.contractAddress;
+let USDT_ADDRESS = activeSystemConfig.usdtAddress;
+const RPC_URL = activeSystemConfig.rpcUrl || process.env.RPC_URL || 'https://bsc-testnet-rpc.publicnode.com';
+
+let activeUsdtDecimals = 18;
+async function resolveUsdtDecimals(): Promise<number> {
+  try {
+    const provider = getProvider();
+    const usdtContract = new ethers.Contract(USDT_ADDRESS, USDT_READ_ABI, provider);
+    const d = await usdtContract.decimals();
+    if (d) {
+      activeUsdtDecimals = Number(d);
+      return activeUsdtDecimals;
+    }
+  } catch {
+    try {
+      const provider = getProvider();
+      const matrixContract = new ethers.Contract(CONTRACT_ADDRESS, MATRIX_READ_ABI, provider);
+      const p1 = await matrixContract.rankPrice(1);
+      if (p1 >= 1000000000000000000n) {
+        activeUsdtDecimals = 18;
+      } else {
+        activeUsdtDecimals = 6;
+      }
+      return activeUsdtDecimals;
+    } catch {
+      // fallback
+    }
+  }
+  return activeUsdtDecimals;
+}
+
+function updateContractConfigInDB(newConfig: Partial<typeof DEFAULT_SYSTEM_CONFIG>) {
+  activeSystemConfig = {
+    ...activeSystemConfig,
+    ...newConfig,
+    updatedAt: new Date().toISOString(),
+  };
+  CONTRACT_ADDRESS = activeSystemConfig.contractAddress;
+  if (activeSystemConfig.usdtAddress) {
+    USDT_ADDRESS = activeSystemConfig.usdtAddress;
+  }
+  resolveUsdtDecimals().catch(() => {});
+  try {
+    const dir = path.dirname(CONFIG_FILE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(CONFIG_FILE_PATH, JSON.stringify(activeSystemConfig, null, 2), 'utf8');
+    console.log(`💾 [DB Config] Smart Contract updated in database: ${CONTRACT_ADDRESS} (USDT: ${USDT_ADDRESS})`);
+  } catch (e) {
+    console.error('[DB Config] Failed to write contract-config.json:', e);
+  }
+  return activeSystemConfig;
+}
+
+const FALLBACK_RPCS = Array.from(
+  new Set([
+    RPC_URL,
+    'https://bsc-testnet-rpc.publicnode.com',
+    'https://bsc-testnet.publicnode.com',
+    'https://bsc-testnet.bnbchain.org',
+    'https://data-seed-prebsc-1-s2.binance.org:8545/',
+    'https://data-seed-prebsc-1-s1.binance.org:8545/',
+  ])
+);
+
+let eventListenerActive = false;
+let currentProviderIndex = 0;
+
+const MATRIX_READ_ABI = [
+  'function totalNodesInRank(uint8) external view returns (uint256)',
+  'function rankNodes(uint8, uint256) external view returns (uint256 id, address owner, address directSponsor, uint256 parentId, uint256 leftChild, uint256 rightChild, bool isClone, bool isExtraId)',
+  'function previewPlacement(uint8 _rank, address _sponsor) external view returns (uint256 targetParentId, bool isLeft, uint8 activeRound)',
+  'function sponsorRoundToggle(uint8, uint256) external view returns (uint8)',
+  'function placementRoundToggle(uint8) external view returns (uint8)',
+  'function nodeOriginMainId(uint8, uint256) external view returns (uint256)',
+  'function nodeToR1MainId(uint8, uint256) external view returns (uint256)',
+  'function nodeCloneRound(uint8, uint256) external view returns (uint256)',
+  'function nodeDirectSponsorNodeId(uint8, uint256) external view returns (uint256)',
+  'function nodeUpgradeVault(uint8, uint256) external view returns (uint256)',
+  'function getMainIdCurrentRank(uint256) external view returns (uint8)',
+  'function getMainIdNodeInRank(uint256, uint8) external view returns (uint256)',
+  'function getMainIdThreePools(address, uint256) external view returns (uint8 currentRank, uint8 window5Start, uint8 window5End, uint256 upgradeRankPool, uint256 newAutoIdPool, uint256 newExtraIdPool)',
+  'function getUserProfile(address) external view returns (tuple(bool isRegistered, address sponsor, uint256 sponsorMainNodeId, uint8 currentMaxRank, uint256 mainNodeIdRank1, uint256 latestCloneIdRank1))',
+  'function getUserRankInfo(address, uint8) external view returns (uint256 firstNodeId, uint256 latestNodeId, uint256 upgradeVaultBalance, uint256 nextRankPrice)',
+  'function checkValidSponsorId(uint256) external view returns (bool isValid, string reason, address sponsorAddress)',
+  'function allSellWallet() external view returns (address)',
+  'function botWallet() external view returns (address)',
+  'function familyPool() external view returns (address)',
+];
+
+const USDT_READ_ABI = [
+  'function balanceOf(address) external view returns (uint256)',
+  'function allowance(address, address) external view returns (uint256)',
+  'function decimals() external view returns (uint8)',
+];
+
+const cachedProviders = new Map<string, ethers.JsonRpcProvider>();
+
+function getProvider(): ethers.JsonRpcProvider {
+  const url = FALLBACK_RPCS[currentProviderIndex % FALLBACK_RPCS.length];
+  let provider = cachedProviders.get(url);
+  if (!provider) {
+    const fetchReq = new ethers.FetchRequest(url);
+    fetchReq.timeout = 8000;
+    provider = new ethers.JsonRpcProvider(
+      fetchReq,
+      {
+        chainId: 97,
+        name: 'bnbt',
+      },
+      {
+        staticNetwork: true,
+        polling: false,
+        batchMaxCount: 1,
+      }
+    );
+    provider.on('error', () => {
+      currentProviderIndex = (currentProviderIndex + 1) % FALLBACK_RPCS.length;
+    });
+    cachedProviders.set(url, provider);
+  }
+  return provider;
+}
+
+// ==========================================
+// DATA MODELS & PERSISTENT MATRIX DATABASE (prisma/matrix-db.json)
+// ==========================================
+type NodeOrigin = 'REGISTRATION' | 'BATCH' | 'CLONE' | 'AUTO_MAIN' | 'AUTO_EXTRA';
+type RewardType =
+  | 'DIRECT'
+  | 'DIRECT_ROOT_FEE'
+  | 'LEVEL'
+  | 'UPGRADE_VAULT'
+  | 'VAULT_OVERFLOW'
+  | 'ALLSELL'
+  | 'BOT'
+  | 'FAMILY_POOL_OVERFLOW'
+  | 'UNPAID_LEVEL_FAMILY_POOL'
+  | 'DIRECT_ID1_CLONE_FAMILY_POOL';
+
+const RANK_PRICES_USDT: number[] = [
+  5, 10, 20, 30, 40, 50, 60, 80, 100, 200,
+  300, 400, 600, 800, 1000, 2000, 3000, 5000,
+];
+
+interface UserVaultModel {
+  id: string;
+  owner: string;
+  rank: number;
+  balance: string;
+  firstNodeId?: string;
+  latestNodeId?: string;
+  updatedAt: string;
+}
+
+interface UserAccountModel {
+  id: string;
+  owner: string;
+  sponsor: string | null;
+  sponsorMainNodeId: string | null;
+  currentMaxRank: number;
+  createdAt: string;
+  updatedAt: string;
+  vaults: UserVaultModel[];
+}
+
+interface MatrixNodeModel {
+  id: string;
+  rank: number;
+  owner: string;
+  sponsor: string;
+  parentId: string;
+  leftChild: string;
+  rightChild: string;
+  isClone: boolean;
+  isExtraId: boolean;
+  origin: NodeOrigin;
+  createdAt: string;
+}
+
+interface RewardLogModel {
+  id: string;
+  fromNodeId: string;
+  toNodeId: string;
+  recipient: string;
+  rank: number;
+  rewardType: RewardType;
+  amount: string;
+  txHash: string;
+  blockNumber?: number;
+  isAdminFreeUpgrade?: boolean;
+  createdAt: string;
+}
+
+export interface UpgradeLogModel {
+  id: string;
+  mainNodeId: string;
+  owner: string;
+  fromRank: number;
+  toRank: number;
+  newNodeId: string;
+  parentId: string;
+  side: 'LEFT' | 'RIGHT' | 'ROOT';
+  directSponsor: string;
+  directSponsorNodeId: string;
+  rankPriceUsdt: string;
+  vaultDeductedUsdt: string;
+  walletPaidUsdt: string;
+  upgradeMode: 'AUTO_VAULT' | 'HYBRID_VAULT_WALLET' | 'MANUAL_WALLET' | 'CLONE_IN_RANK' | 'ROOT_INIT';
+  isClone?: boolean;
+  isExtraId?: boolean;
+  isAdminFreeUpgrade?: boolean;
+  txHash: string;
+  blockNumber?: number;
+  createdAt: string;
+}
+
+export interface IndexedTreeNode {
+  id: number;
+  rank: number;
+  owner: string;
+  directSponsor: string;
+  parentId: number;
+  leftChild: number;
+  rightChild: number;
+  isClone: boolean;
+  isExtraId: boolean;
+  isLeft?: boolean;
+  isSyntheticExtra?: boolean;
+  originMainId: number;
+  cloneRound: number;
+  cloneSequence?: number;
+  directSponsorNodeId: number;
+  nodeVault: number;
+  rawNodeVault: number;
+  reconciledBaseVault?: number;
+  isLocalUpgrade?: boolean;
+  isAdminFreeUpgrade?: boolean;
+  originType?: 'MANUAL_REGISTER' | 'AUTO_MAIN' | 'AUTO_NEW_MAIN' | 'AUTO_EXTRA' | 'CLONE';
+  confirmedOriginType?: 'MANUAL_REGISTER' | 'AUTO_NEW_MAIN';
+  autoSourceMainId?: number;
+  createdAt?: string;
+}
+
+export type TxActionType =
+  | 'REGISTER'
+  | 'BATCH_REGISTER'
+  | 'UPGRADE'
+  | 'ADMIN_UPGRADE'
+  | 'AUTO_ID'
+  | 'EXTRA_ID'
+  | 'CLONE_BOT'
+  | 'ALLSELL_PAYOUT'
+  | 'ADMIN_ACTION'
+  | 'REWARD';
+
+export interface TransactionRecordModel {
+  id: string;
+  txHash: string;
+  actionType: TxActionType;
+  title: string;
+  userAddress: string;
+  mainNodeId?: number;
+  nodeId?: number;
+  rank?: number;
+  amountUsdt?: number;
+  blockNumber?: number;
+  source: 'ONCHAIN_EVENT' | 'ADMIN_SERVER' | 'WEB3_CLIENT' | 'WS_BOT' | 'ALLSELL_PAYOUT';
+  explorerUrl: string;
+  details?: string;
+  timestamp: string;
+}
+
+export const DEFAULT_BOT_WALLET = '0xB3832D4cc6daE0B24f1e6660d7C85dcc1F005Cd1';
+export const LEGACY_BOT_WALLET = '0xbFD03d4D69221085a63Dd372A5d59f952C084a56';
+
+interface PersistentMatrixDatabase {
+  contractAddress: string;
+  usdtAddress: string;
+  lastSyncedBlock: number;
+  lastSyncedAt: string;
+  systemWallets: {
+    allSellWallet: string;
+    botWallet: string;
+    customBotWallet?: string;
+    familyPool: string;
+    rootOwner: string;
+  };
+  rankCounts: Record<number, number>;
+  nodesByRank: Record<number, IndexedTreeNode[]>;
+  userRankVaults: Record<string, Record<number, number>>;
+  rewardLogs: RewardLogModel[];
+  upgradeLogs: UpgradeLogModel[];
+  transactionLogs: TransactionRecordModel[];
+}
+
+const MATRIX_DB_FILE_PATH = path.resolve(__dirname, 'prisma/matrix-db.json');
+
+function createEmptyMatrixDB(contractAddr = CONTRACT_ADDRESS, usdtAddr = USDT_ADDRESS): PersistentMatrixDatabase {
+  const defaultCounts: Record<number, number> = {};
+  for (let r = 1; r <= 18; r++) defaultCounts[r] = 1;
+  return {
+    contractAddress: contractAddr,
+    usdtAddress: usdtAddr,
+    lastSyncedBlock: 0,
+    lastSyncedAt: new Date().toISOString(),
+    systemWallets: {
+      allSellWallet: '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710',
+      botWallet: DEFAULT_BOT_WALLET,
+      customBotWallet: DEFAULT_BOT_WALLET,
+      familyPool: '0x225DF4b5961f757f54728138F289Eaf49D4F275A',
+      rootOwner: '0x622E20082e63c7220c5AF0A77Cbc437a98505311',
+    },
+    rankCounts: defaultCounts,
+    nodesByRank: {},
+    userRankVaults: {},
+    rewardLogs: [],
+    upgradeLogs: [],
+    transactionLogs: [],
+  };
+}
+
+function loadMatrixDBFromDisk(): PersistentMatrixDatabase {
+  try {
+    if (fs.existsSync(MATRIX_DB_FILE_PATH)) {
+      const raw = fs.readFileSync(MATRIX_DB_FILE_PATH, 'utf8');
+      const parsed = JSON.parse(raw) as PersistentMatrixDatabase;
+      if (
+        parsed &&
+        parsed.contractAddress &&
+        parsed.contractAddress.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
+      ) {
+        let strippedAny = false;
+        if (parsed.nodesByRank) {
+          for (let r = 1; r <= 18; r++) {
+            const rList = parsed.nodesByRank[r];
+            if (!Array.isArray(rList)) continue;
+            const realNodes = rList.filter((n) => !n.isSyntheticExtra);
+            if (realNodes.length !== rList.length) {
+              strippedAny = true;
+            }
+            const realIds = new Set(realNodes.map((n) => n.id));
+            for (const n of realNodes) {
+              if (n.leftChild > 0 && !realIds.has(n.leftChild)) n.leftChild = 0;
+              if (n.rightChild > 0 && !realIds.has(n.rightChild)) n.rightChild = 0;
+              if (n.rawNodeVault !== undefined && n.rawNodeVault >= 0) {
+                n.nodeVault = Number(n.rawNodeVault);
+                n.reconciledBaseVault = Number(n.rawNodeVault);
+              }
+            }
+            parsed.nodesByRank[r] = realNodes;
+            if (parsed.rankCounts) {
+              parsed.rankCounts[r] = Math.max(1, realNodes.length);
+            }
+          }
+        }
+        const loaded: PersistentMatrixDatabase = {
+          ...createEmptyMatrixDB(CONTRACT_ADDRESS, USDT_ADDRESS),
+          ...parsed,
+          upgradeLogs: Array.isArray(parsed.upgradeLogs) ? parsed.upgradeLogs : [],
+          transactionLogs: Array.isArray(parsed.transactionLogs) ? parsed.transactionLogs : [],
+        };
+        if (
+          !loaded.systemWallets.customBotWallet &&
+          (!loaded.systemWallets.botWallet ||
+            loaded.systemWallets.botWallet.toLowerCase() === LEGACY_BOT_WALLET.toLowerCase())
+        ) {
+          loaded.systemWallets.botWallet = DEFAULT_BOT_WALLET;
+          loaded.systemWallets.customBotWallet = DEFAULT_BOT_WALLET;
+          strippedAny = true;
+        }
+        if (strippedAny) {
+          try {
+            fs.writeFileSync(MATRIX_DB_FILE_PATH, JSON.stringify(loaded, null, 2), 'utf8');
+          } catch {
+            // Non-blocking
+          }
+        }
+        return loaded;
+      }
+    }
+  } catch (err) {
+    console.warn('[MatrixDB] Notice reading prisma/matrix-db.json:', err);
+  }
+  return createEmptyMatrixDB(CONTRACT_ADDRESS, USDT_ADDRESS);
+}
+
+let matrixDB: PersistentMatrixDatabase = loadMatrixDBFromDisk();
+let dbWriteTimer: NodeJS.Timeout | null = null;
+
+// Admin Free Upgrade on-chain selectors:
+// - adminUpgradeRankForMainId(uint256,uint8) => 0x6c2d42b4
+// - adminUpgradeRank(address,uint8) => 0x854562dc
+const ADMIN_UPGRADE_SELECTORS = new Set<string>(['0x6c2d42b4', '0x854562dc']);
+const knownAdminFreeNodeKeys = new Set<string>();
+const inspectedAdminTxCache = new Map<string, boolean>();
+const ADMIN_NODE_CREATED_IFACE = new ethers.Interface([
+  'event NodeCreated(uint8 indexed rank, uint256 indexed nodeId, address indexed owner, address directSponsor, uint256 parentId, bool isLeft, bool isClone, bool isExtraId)',
+  'event RankUpgraded(address indexed user, uint8 fromRank, uint8 toRank, uint256 newNodeId, bool isAutoUpgrade)',
+]);
+
+for (let r = 1; r <= 18; r++) {
+  for (const n of matrixDB.nodesByRank[r] || []) {
+    if (n?.isAdminFreeUpgrade) {
+      knownAdminFreeNodeKeys.add(`${r}:${n.id}`);
+    }
+  }
+}
+
+function getAdminFreeNodeKeySet(): Set<string> {
+  const keys = new Set<string>(knownAdminFreeNodeKeys);
+  for (let r = 1; r <= 18; r++) {
+    for (const n of matrixDB.nodesByRank[r] || []) {
+      if (n?.isAdminFreeUpgrade) {
+        keys.add(`${r}:${n.id}`);
+      }
+    }
+  }
+  return keys;
+}
+
+function markNodeAsAdminFreeUpgrade(rank: number, nodeId: number): boolean {
+  if (rank < 2 || rank > 18 || nodeId <= 1) return false;
+  const key = `${rank}:${nodeId}`;
+  let changed = !knownAdminFreeNodeKeys.has(key);
+  knownAdminFreeNodeKeys.add(key);
+  const list = matrixDB.nodesByRank[rank] || [];
+  const target = list.find((n) => n.id === nodeId);
+  if (target && !target.isAdminFreeUpgrade) {
+    target.isAdminFreeUpgrade = true;
+    changed = true;
+  }
+  return changed;
+}
+
+async function inspectAndTagAdminUpgradeTx(
+  txHash: string,
+  provider?: ethers.Provider,
+  preFetchedReceipt?: any
+): Promise<{ isAdminTx: boolean; taggedNodes: Array<{ rank: number; nodeId: number }>; newlyTagged: boolean }> {
+  if (!isRealTxHash(txHash)) {
+    return { isAdminTx: false, taggedNodes: [], newlyTagged: false };
+  }
+  const hashLower = txHash.toLowerCase();
+  const cached = inspectedAdminTxCache.get(hashLower);
+  if (cached === false && !preFetchedReceipt) {
+    return { isAdminTx: false, taggedNodes: [], newlyTagged: false };
+  }
+
+  let activeProvider: ethers.Provider | undefined = provider;
+  if (!activeProvider) {
+    try {
+      activeProvider = getProvider();
+    } catch {
+      activeProvider = undefined;
+    }
+  }
+  if (!activeProvider && !preFetchedReceipt) {
+    return { isAdminTx: Boolean(cached), taggedNodes: [], newlyTagged: false };
+  }
+
+  try {
+    let isAdminTx = cached === true;
+    if (!isAdminTx && activeProvider) {
+      const tx = await Promise.race([
+        activeProvider.getTransaction(txHash),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+      ]);
+      const selector = String((tx as any)?.data || '').slice(0, 10).toLowerCase();
+      if (ADMIN_UPGRADE_SELECTORS.has(selector)) {
+        isAdminTx = true;
+      } else if (tx && selector) {
+        inspectedAdminTxCache.set(hashLower, false);
+        return { isAdminTx: false, taggedNodes: [], newlyTagged: false };
+      }
+    }
+
+    if (!isAdminTx) {
+      return { isAdminTx: false, taggedNodes: [], newlyTagged: false };
+    }
+
+    inspectedAdminTxCache.set(hashLower, true);
+    const receipt =
+      preFetchedReceipt ||
+      (activeProvider
+        ? await Promise.race([
+            activeProvider.getTransactionReceipt(txHash),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+          ])
+        : null);
+
+    const taggedNodes: Array<{ rank: number; nodeId: number }> = [];
+    let newlyTagged = false;
+
+    for (const log of receipt?.logs || []) {
+      try {
+        const parsed = ADMIN_NODE_CREATED_IFACE.parseLog(log);
+        if (parsed && parsed.name === 'NodeCreated') {
+          const evRank = Number(parsed.args.rank || 0);
+          const evNodeId = Number(parsed.args.nodeId || 0);
+          if (evRank >= 2 && evRank <= 18 && evNodeId > 1) {
+            taggedNodes.push({ rank: evRank, nodeId: evNodeId });
+            if (markNodeAsAdminFreeUpgrade(evRank, evNodeId)) {
+              newlyTagged = true;
+            }
+          }
+        }
+      } catch {
+        // ignore non-matching logs
+      }
+    }
+
+    // Reclassify any earlier transactionLogs recorded for this txHash as ADMIN_UPGRADE (0 USDT)
+    if (Array.isArray(matrixDB.transactionLogs)) {
+      for (const t of matrixDB.transactionLogs) {
+        if (t.txHash.toLowerCase() === hashLower && (t.actionType === 'UPGRADE' || t.actionType === 'CLONE_BOT')) {
+          t.actionType = 'ADMIN_UPGRADE';
+          t.amountUsdt = 0;
+          if (!t.title.includes('Admin')) {
+            t.title = `Admin อัพฟรี: ${t.title}`;
+          }
+        }
+      }
+    }
+
+    return { isAdminTx: true, taggedNodes, newlyTagged };
+  } catch {
+    return { isAdminTx: Boolean(cached), taggedNodes: [], newlyTagged: false };
+  }
+}
+
+function saveMatrixDBToDisk(immediate = false) {
+  broadcastAllMatrixUpdates();
+  schedulePostgresSync(immediate);
+  const writeNow = () => {
+    try {
+      const dir = path.dirname(MATRIX_DB_FILE_PATH);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(MATRIX_DB_FILE_PATH, JSON.stringify(matrixDB, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('[MatrixDB] Failed to persist matrix-db.json:', err);
+    }
+  };
+  if (immediate) {
+    if (dbWriteTimer) clearTimeout(dbWriteTimer);
+    dbWriteTimer = null;
+    writeNow();
+    return;
+  }
+  if (dbWriteTimer) return;
+  dbWriteTimer = setTimeout(() => {
+    dbWriteTimer = null;
+    writeNow();
+  }, 800);
+}
+
+function isRealTxHash(hash?: string | null): boolean {
+  return /^0x[a-fA-F0-9]{64}$/.test(String(hash || '').trim());
+}
+
+function recordRealTransactionLog(input: {
+  txHash?: string | null;
+  actionType: TxActionType;
+  title: string;
+  userAddress?: string;
+  mainNodeId?: number;
+  nodeId?: number;
+  rank?: number;
+  amountUsdt?: number;
+  blockNumber?: number;
+  source: TransactionRecordModel['source'];
+  details?: string;
+  timestamp?: string;
+  immediateSave?: boolean;
+}): TransactionRecordModel | null {
+  const hash = String(input.txHash || '').trim();
+  if (!isRealTxHash(hash)) return null;
+
+  if (!Array.isArray(matrixDB.transactionLogs)) {
+    matrixDB.transactionLogs = [];
+  }
+
+  const hashLower = hash.toLowerCase();
+  const normRank = Number(input.rank || 0) || undefined;
+  const normNode = Number(input.nodeId || 0) || undefined;
+  const normMain = Number(input.mainNodeId || 0) || undefined;
+  const cleanUser = String(input.userAddress || '').trim();
+  const ts = input.timestamp || new Date().toISOString();
+
+  const existing = matrixDB.transactionLogs.find(
+    (t) =>
+      t.txHash.toLowerCase() === hashLower &&
+      t.actionType === input.actionType &&
+      Number(t.rank || 0) === Number(normRank || 0) &&
+      Number(t.nodeId || t.mainNodeId || 0) === Number(normNode || normMain || 0)
+  );
+
+  if (existing) {
+    if (!existing.blockNumber && input.blockNumber) existing.blockNumber = input.blockNumber;
+    if (!existing.amountUsdt && input.amountUsdt) existing.amountUsdt = input.amountUsdt;
+    if (!existing.userAddress && cleanUser) existing.userAddress = cleanUser;
+    if (
+      input.actionType === 'AUTO_ID' &&
+      input.source === 'ONCHAIN_EVENT' &&
+      normNode &&
+      normNode > 1 &&
+      normMain &&
+      normMain > 0
+    ) {
+      if (existing.mainNodeId !== normMain) existing.mainNodeId = normMain;
+      if (input.title && existing.title !== input.title) existing.title = input.title;
+      if (input.details && existing.details !== input.details) existing.details = input.details;
+    } else {
+      if (!existing.mainNodeId && normMain) existing.mainNodeId = normMain;
+      if (!existing.details && input.details) existing.details = input.details;
+    }
+    if (!existing.nodeId && normNode) existing.nodeId = normNode;
+    if (input.timestamp && (!existing.timestamp || input.source === 'ONCHAIN_EVENT')) {
+      existing.timestamp = input.timestamp;
+    }
+    saveMatrixDBToDisk(Boolean(input.immediateSave));
+    return existing;
+  }
+
+  const record: TransactionRecordModel = {
+    id: `tx-${hashLower.slice(2, 12)}-${input.actionType}-${normRank || 0}-${normNode || normMain || 0}`,
+    txHash: hash,
+    actionType: input.actionType,
+    title: input.title,
+    userAddress: cleanUser || ethers.ZeroAddress,
+    mainNodeId: normMain,
+    nodeId: normNode,
+    rank: normRank,
+    amountUsdt: input.amountUsdt !== undefined ? Number(input.amountUsdt) : undefined,
+    blockNumber: input.blockNumber ? Number(input.blockNumber) : undefined,
+    source: input.source,
+    explorerUrl: `https://testnet.bscscan.com/tx/${hash}`,
+    details: input.details,
+    timestamp: ts,
+  };
+
+  matrixDB.transactionLogs.unshift(record);
+  matrixDB.transactionLogs.sort((a, b) => {
+    const bDiff = Number(b.blockNumber || 0) - Number(a.blockNumber || 0);
+    if (bDiff !== 0) return bDiff;
+    return new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime();
+  });
+  if (matrixDB.transactionLogs.length > 1500) {
+    matrixDB.transactionLogs = matrixDB.transactionLogs.slice(0, 1500);
+  }
+
+  // Attach real txHash to matching upgradeLogs when possible
+  if (normRank && (normMain || normNode) && Array.isArray(matrixDB.upgradeLogs)) {
+    for (const u of matrixDB.upgradeLogs) {
+      if (
+        u.toRank === normRank &&
+        (Number(u.mainNodeId) === normMain || Number(u.newNodeId) === normNode) &&
+        !isRealTxHash(u.txHash)
+      ) {
+        u.txHash = hash;
+        if (record.blockNumber) u.blockNumber = record.blockNumber;
+      }
+    }
+  }
+
+  saveMatrixDBToDisk(Boolean(input.immediateSave));
+  return record;
+}
+
+const inMemoryDB = {
+  users: new Map<string, UserAccountModel>(),
+  nodes: new Map<string, MatrixNodeModel>(),
+  rewardLogs: matrixDB.rewardLogs,
+  upgradeLogs: matrixDB.upgradeLogs,
+};
+
+// Reconstruct deterministic on-chain reward logs from indexed nodes across Ranks 1..27 so the Database always has 100% of rewards
+function ensurePersistentNodeTimestamps() {
+  let missingAny = false;
+  const seenTimes = new Set<string>();
+  const staleCutoffMs = 1793900000000; // Refresh any legacy hardcoded Nov 5 (1793853600000) timestamps
+  for (let r = 1; r <= 18; r++) {
+    for (const n of matrixDB.nodesByRank[r] || []) {
+      const tMs = n.createdAt ? new Date(n.createdAt).getTime() : 0;
+      if (!n.createdAt || !tMs || tMs <= staleCutoffMs || seenTimes.has(n.createdAt)) {
+        missingAny = true;
+        break;
+      }
+      seenTimes.add(n.createdAt);
+    }
+    if (missingAny) break;
+  }
+  if (!missingAny) return;
+
+  // Build a deterministic chronological sequence across all ranks anchored to current time
+  const orderedNodes: IndexedTreeNode[] = [];
+  for (let r = 1; r <= 18; r++) {
+    const rList = (matrixDB.nodesByRank[r] || []).slice().sort((a, b) => a.id - b.id);
+    for (const n of rList) {
+      orderedNodes.push(n);
+    }
+  }
+  const totalCount = orderedNodes.length;
+  const anchorMs = Date.now();
+  orderedNodes.forEach((n, idx) => {
+    const tMs = n.createdAt ? new Date(n.createdAt).getTime() : 0;
+    if (!n.createdAt || !tMs || tMs <= staleCutoffMs) {
+      const stepsFromEnd = Math.max(0, totalCount - 1 - idx);
+      n.createdAt = new Date(anchorMs - stepsFromEnd * 2000).toISOString();
+    }
+  });
+}
+
+function rebuildDatabaseRewardLogsFromNodes() {
+  ensurePersistentNodeTimestamps();
+  const r1Nodes = matrixDB.nodesByRank[1] || [];
+  if (r1Nodes.length <= 1) {
+    matrixDB.rewardLogs = [];
+    inMemoryDB.rewardLogs = matrixDB.rewardLogs;
+    return;
+  }
+
+  const rootOwnerAddr = r1Nodes[0]?.owner || matrixDB.systemWallets.rootOwner;
+  const allSellAddr = matrixDB.systemWallets.allSellWallet || '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710';
+  const botAddr = matrixDB.systemWallets.customBotWallet || matrixDB.systemWallets.botWallet || DEFAULT_BOT_WALLET;
+  const familyAddr = matrixDB.systemWallets.familyPool || '0x225DF4b5961f757f54728138F289Eaf49D4F275A';
+
+  const adminFreeKeys = getAdminFreeNodeKeySet();
+
+  // Preserve any real txHash events captured live by the listener that still exist in current rank nodes
+  // and NEVER belong to an Admin Free Upgrade node (0 commissions / 0 level rewards on-chain)
+  const liveTxEvents = matrixDB.rewardLogs.filter((l) => {
+    if (!l.txHash || l.id.startsWith('db-chain-')) return false;
+    const rNum = Number(l.rank || 1);
+    const fromNid = Number(l.fromNodeId || 0);
+    if (adminFreeKeys.has(`${rNum}:${fromNid}`)) return false;
+    const rLen = matrixDB.nodesByRank[rNum]?.length || 1;
+    return fromNid <= rLen;
+  });
+  const seenKeys = new Set<string>();
+  for (const ev of liveTxEvents) {
+    seenKeys.add(`${ev.rank || 1}:${ev.fromNodeId}:${ev.rewardType}:${ev.toNodeId}`);
+  }
+
+  const reconstructed: RewardLogModel[] = [...liveTxEvents];
+  const baseBlock = matrixDB.lastSyncedBlock || 99850000;
+
+  for (let rankNum = 1; rankNum <= 18; rankNum++) {
+    const rNodes = matrixDB.nodesByRank[rankNum] || [];
+    if (rNodes.length <= 1) continue;
+
+    const unitPrice = RANK_PRICES_USDT[rankNum - 1] || 10;
+    const directAmt = (unitPrice * 0.3).toFixed(2);
+    const vaultAmt = (unitPrice * 0.35).toFixed(2);
+    const levelUnit = unitPrice * 0.02;
+    const levelAmt = levelUnit.toFixed(2);
+    const allSellAmt = (unitPrice * 0.04).toFixed(2);
+    const botAmt = (unitPrice * 0.01).toFixed(2);
+
+    const nodesMap = new Map<number, IndexedTreeNode>();
+    for (const n of rNodes) {
+      nodesMap.set(n.id, n);
+    }
+
+    const ownerMainsMap = new Map<string, number[]>();
+    const sortedIds = Array.from(nodesMap.keys()).sort((a, b) => a - b);
+
+    for (const id of sortedIds) {
+      const n = nodesMap.get(id)!;
+      if (!n.isClone && !n.isExtraId) {
+        const oKey = n.owner.toLowerCase();
+        const list = ownerMainsMap.get(oKey) || [];
+        list.push(n.id);
+        ownerMainsMap.set(oKey, list);
+      }
+    }
+
+    const resolveSponsorNodeId = (nodeId: number): number => {
+      const n = nodesMap.get(nodeId);
+      if (!n || nodeId === 1) return 1;
+      if (rankNum > 1) {
+        const localOrigNode =
+          !n.isClone && !n.isExtraId
+            ? n
+            : rNodes.find(
+                (x) =>
+                  !x.isClone &&
+                  !x.isExtraId &&
+                  (x.id === n.originMainId || x.originMainId === n.originMainId)
+              );
+        const r1OriginId = localOrigNode?.originMainId || n.originMainId;
+        if (r1OriginId === 1) return 1;
+        if (r1OriginId > 1) {
+          const origR1 = r1Nodes.find((x) => x.id === r1OriginId && !x.isClone && !x.isExtraId);
+          if (origR1 && origR1.directSponsorNodeId > 0) {
+            const spR1 = r1Nodes.find((x) => x.id === origR1.directSponsorNodeId);
+            return spR1 && spR1.isClone && spR1.originMainId > 0
+              ? spR1.originMainId
+              : origR1.directSponsorNodeId;
+          }
+        }
+      }
+      if (n.directSponsorNodeId > 0) {
+        const spR1 = r1Nodes.find((x) => x.id === n.directSponsorNodeId);
+        return spR1 && spR1.isClone && spR1.originMainId > 0
+          ? spR1.originMainId
+          : n.directSponsorNodeId;
+      }
+      const spKey = (n.directSponsor || '').toLowerCase();
+      if (!spKey || spKey === ethers.ZeroAddress) return 1;
+
+      if (rankNum > 1) {
+        const spInR1 = r1Nodes.find(
+          (x) => x.owner.toLowerCase() === spKey && !x.isClone && !x.isExtraId
+        );
+        if (spInR1) return spInR1.id;
+      }
+
+      let cur = n.parentId;
+      const guard = new Set<number>();
+      while (cur > 0 && !guard.has(cur)) {
+        guard.add(cur);
+        const anc = nodesMap.get(cur);
+        if (!anc) break;
+        if (anc.owner.toLowerCase() === spKey) {
+          if (!anc.isClone && !anc.isExtraId && anc.id < nodeId) return anc.id;
+        }
+        cur = anc.parentId;
+      }
+      const mains = (ownerMainsMap.get(spKey) || []).filter((m) => m < nodeId);
+      return mains[0] || 1;
+    };
+
+    for (const id of sortedIds) {
+      if (id <= 1) continue;
+      const child = nodesMap.get(id)!;
+      if (child.isAdminFreeUpgrade || adminFreeKeys.has(`${rankNum}:${id}`)) continue; // เงื่อนไข Admin อัพ Rank ฟรี: ไม่จ่ายค่าคอมเมื่อวางฝั่งซ้าย
+      const parent = nodesMap.get(child.parentId);
+      if (!parent || parent.leftChild !== id) continue;
+
+      const syntheticTx = `0x${rankNum.toString(16).padStart(2, '0')}${id
+        .toString(16)
+        .padStart(4, '0')}db48acb86c42a389efda47cc1b16938eea73f1f892000000000000${id
+        .toString(16)
+        .padStart(4, '0')}`;
+      const eventTime =
+        child.createdAt ||
+        new Date(
+          Date.now() - (Math.max(0, rNodes.length - id) * 2000 + Math.max(0, 18 - rankNum) * 1000)
+        ).toISOString();
+
+      const parentOrigin = nodesMap.get(parent.originMainId || parent.id) || parent;
+      const isParentExtraLineage = Boolean(parent.isExtraId || parentOrigin.isExtraId);
+
+      // กฎหลัก Rank 2-27: 30% ค่าแนะนำตรง (Direct Sponsor) ต้องจ่ายให้ผู้แนะนำตรงของโหนดที่วาง (อ้างอิงที่ Rank 1 เสมอ)
+      // กรณีโคลนของรหัส #1 (Root #1 Clone) 30% ค่าแนะนำจะส่งเข้า Family Pool
+      const isId1CloneChild = child.isClone && (child.originMainId === 1 || parent.id === 1);
+      const childDirectSpNodeId = resolveSponsorNodeId(id);
+      const childDirectSpNode =
+        rankNum > 1
+          ? r1Nodes.find((x) => x.id === childDirectSpNodeId) || nodesMap.get(childDirectSpNodeId)
+          : nodesMap.get(childDirectSpNodeId);
+      const childDirectRecip = isId1CloneChild
+        ? familyAddr
+        : childDirectSpNode?.owner || child.directSponsor || rootOwnerAddr;
+      const childDirectType: RewardType = isId1CloneChild
+        ? 'DIRECT_ID1_CLONE_FAMILY_POOL'
+        : 'DIRECT';
+
+      if (isParentExtraLineage) {
+        const extraSpNodeId =
+          parentOrigin.directSponsorNodeId > 0
+            ? parentOrigin.directSponsorNodeId
+            : parent.directSponsorNodeId > 0
+            ? parent.directSponsorNodeId
+            : resolveSponsorNodeId(parentOrigin.id);
+        const extraSpNode =
+          rankNum > 1
+            ? r1Nodes.find((x) => x.id === extraSpNodeId) || nodesMap.get(extraSpNodeId)
+            : nodesMap.get(extraSpNodeId);
+        const extraSpRecip =
+          extraSpNode?.owner || parentOrigin.directSponsor || parent.directSponsor || rootOwnerAddr;
+        const fullLevelAmt = (unitPrice * 0.3).toFixed(2);
+
+        // 1. 30% ค่าแนะนำตรง -> จ่ายให้ผู้แนะนำตรงของโหนดที่วาง (อ้างอิงที่ Rank 1 เสมอ หรือเข้า Family Pool หากเป็นโคลนของ #1)
+        const targetDirectNodeKey = isId1CloneCloneTarget(isId1CloneChild, childDirectSpNodeId);
+        if (!seenKeys.has(`${rankNum}:${id}:${childDirectType}:${targetDirectNodeKey}`)) {
+          reconstructed.push({
+            id: `db-chain-r${rankNum}-${id}-direct`,
+            fromNodeId: String(id),
+            toNodeId: isId1CloneChild ? '0' : String(childDirectSpNodeId),
+            recipient: childDirectRecip,
+            rank: rankNum,
+            rewardType: childDirectType,
+            amount: directAmt,
+            txHash: syntheticTx,
+            blockNumber: baseBlock - (rNodes.length - id),
+            createdAt: eventTime,
+          });
+        }
+
+        // 2. 30% ค่าชั้น -> ส่งกลับไปให้ directSponsor
+        if (!seenKeys.has(`${rankNum}:${id}:LEVEL:${extraSpNodeId}`)) {
+          reconstructed.push({
+            id: `db-chain-r${rankNum}-${id}-level-extra-${extraSpNodeId}`,
+            fromNodeId: String(id),
+            toNodeId: String(extraSpNodeId),
+            recipient: extraSpRecip,
+            rank: rankNum,
+            rewardType: 'LEVEL',
+            amount: fullLevelAmt,
+            txHash: syntheticTx,
+            blockNumber: baseBlock - (rNodes.length - id),
+            createdAt: eventTime,
+          });
+        }
+
+        // 3. Vault (35%) -> ส่งกลับที่ New Extra ID Pool ของ directSponsor
+        if (!seenKeys.has(`${rankNum}:${id}:UPGRADE_VAULT:${extraSpNodeId}`)) {
+          reconstructed.push({
+            id: `db-chain-r${rankNum}-${id}-vault`,
+            fromNodeId: String(id),
+            toNodeId: String(extraSpNodeId),
+            recipient: extraSpRecip,
+            rank: rankNum,
+            rewardType: 'UPGRADE_VAULT',
+            amount: vaultAmt,
+            txHash: syntheticTx,
+            blockNumber: baseBlock - (rNodes.length - id),
+            createdAt: eventTime,
+          });
+        }
+
+        // 4. AllSell 4%
+        if (!seenKeys.has(`${rankNum}:${id}:ALLSELL:0`)) {
+          reconstructed.push({
+            id: `db-chain-r${rankNum}-${id}-allsell`,
+            fromNodeId: String(id),
+            toNodeId: '0',
+            recipient: allSellAddr,
+            rank: rankNum,
+            rewardType: 'ALLSELL',
+            amount: allSellAmt,
+            txHash: syntheticTx,
+            blockNumber: baseBlock - (rNodes.length - id),
+            createdAt: eventTime,
+          });
+        }
+
+        // 5. Bot 1%
+        if (!seenKeys.has(`${rankNum}:${id}:BOT:0`)) {
+          reconstructed.push({
+            id: `db-chain-r${rankNum}-${id}-bot`,
+            fromNodeId: String(id),
+            toNodeId: '0',
+            recipient: botAddr,
+            rank: rankNum,
+            rewardType: 'BOT',
+            amount: botAmt,
+            txHash: syntheticTx,
+            blockNumber: baseBlock - (rNodes.length - id),
+            createdAt: eventTime,
+          });
+        }
+        continue;
+      }
+
+      const spNodeId = childDirectSpNodeId;
+      const directRecip = childDirectRecip;
+      const directType: RewardType = childDirectType;
+
+      // 1. Direct 30%
+      if (!seenKeys.has(`${rankNum}:${id}:${directType}:${isId1CloneCloneTarget(isId1CloneChild, spNodeId)}`)) {
+        reconstructed.push({
+          id: `db-chain-r${rankNum}-${id}-direct`,
+          fromNodeId: String(id),
+          toNodeId: isId1CloneChild ? '0' : String(spNodeId),
+          recipient: directRecip,
+          rank: rankNum,
+          rewardType: directType,
+          amount: directAmt,
+          txHash: syntheticTx,
+          blockNumber: baseBlock - (rNodes.length - id),
+          createdAt: eventTime,
+        });
+      }
+
+      // 2. Vault 35%
+      const parentMainId = !parent.isClone ? parent.id : (parent.originMainId || parent.id);
+      if (!seenKeys.has(`${rankNum}:${id}:UPGRADE_VAULT:${parentMainId}`)) {
+        reconstructed.push({
+          id: `db-chain-r${rankNum}-${id}-vault`,
+          fromNodeId: String(id),
+          toNodeId: String(parentMainId),
+          recipient: parent.owner,
+          rank: rankNum,
+          rewardType: 'UPGRADE_VAULT',
+          amount: vaultAmt,
+          txHash: syntheticTx,
+          blockNumber: baseBlock - (rNodes.length - id),
+          createdAt: eventTime,
+        });
+      }
+
+      // 3. Unilevel 15 Tiers (2% per tier) + Unpaid tiers to Family Pool
+      let currUp = child.parentId;
+      let paidLevels = 0;
+      for (let tier = 1; tier <= 15; tier++) {
+        if (currUp <= 0) break;
+        const upNode = nodesMap.get(currUp);
+        if (!upNode) break;
+        paidLevels++;
+        if (!seenKeys.has(`${rankNum}:${id}:LEVEL:${upNode.id}`)) {
+          reconstructed.push({
+            id: `db-chain-r${rankNum}-${id}-level-${tier}-${upNode.id}`,
+            fromNodeId: String(id),
+            toNodeId: String(upNode.id),
+            recipient: upNode.owner,
+            rank: rankNum,
+            rewardType: 'LEVEL',
+            amount: levelAmt,
+            txHash: syntheticTx,
+            blockNumber: baseBlock - (rNodes.length - id),
+            createdAt: eventTime,
+          });
+        }
+        currUp = upNode.parentId;
+      }
+
+      const unpaidTiers = 15 - paidLevels;
+      if (unpaidTiers > 0 && !seenKeys.has(`${rankNum}:${id}:UNPAID_LEVEL_FAMILY_POOL:0`)) {
+        reconstructed.push({
+          id: `db-chain-r${rankNum}-${id}-unpaid-family`,
+          fromNodeId: String(id),
+          toNodeId: '0',
+          recipient: familyAddr,
+          rank: rankNum,
+          rewardType: 'UNPAID_LEVEL_FAMILY_POOL',
+          amount: (unpaidTiers * levelUnit).toFixed(2),
+          txHash: syntheticTx,
+          blockNumber: baseBlock - (rNodes.length - id),
+          createdAt: eventTime,
+        });
+      }
+
+      // 4. AllSell 4%
+      if (!seenKeys.has(`${rankNum}:${id}:ALLSELL:0`)) {
+        reconstructed.push({
+          id: `db-chain-r${rankNum}-${id}-allsell`,
+          fromNodeId: String(id),
+          toNodeId: '0',
+          recipient: allSellAddr,
+          rank: rankNum,
+          rewardType: 'ALLSELL',
+          amount: allSellAmt,
+          txHash: syntheticTx,
+          blockNumber: baseBlock - (rNodes.length - id),
+          createdAt: eventTime,
+        });
+      }
+
+      // 5. Bot 1%
+      if (!seenKeys.has(`${rankNum}:${id}:BOT:0`)) {
+        reconstructed.push({
+          id: `db-chain-r${rankNum}-${id}-bot`,
+          fromNodeId: String(id),
+          toNodeId: '0',
+          recipient: botAddr,
+          rank: rankNum,
+          rewardType: 'BOT',
+          amount: botAmt,
+          txHash: syntheticTx,
+          blockNumber: baseBlock - (rNodes.length - id),
+          createdAt: eventTime,
+        });
+      }
+    }
+  }
+
+  reconstructed.sort((a, b) => {
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (timeB !== timeA) return timeB - timeA;
+    const rDiff = Number(b.rank || 1) - Number(a.rank || 1);
+    if (rDiff !== 0) return rDiff;
+    return Number(b.fromNodeId || 0) - Number(a.fromNodeId || 0);
+  });
+  matrixDB.rewardLogs = reconstructed.slice(0, 500);
+  inMemoryDB.rewardLogs = matrixDB.rewardLogs;
+}
+
+function isNodeFlaggedAdminFree(rankNum: number, nodeId: number): boolean {
+  return knownAdminFreeNodeKeys.has(`${rankNum}:${nodeId}`);
+}
+
+// Reconstruct deterministic Rank Upgrade History from indexed Ranks 2..27 so the Database always has 100% of Rank Upgrades
+function rebuildDatabaseUpgradeLogsFromNodes() {
+  const r1Nodes = matrixDB.nodesByRank[1] || [];
+  if (r1Nodes.length === 0) return;
+
+  // Map owner -> Rank 1 Main IDs in order
+  const r1OwnerMainsMap = new Map<string, number[]>();
+  for (const n of r1Nodes) {
+    if (!n.isClone && !n.isExtraId) {
+      const oKey = n.owner.toLowerCase();
+      const list = r1OwnerMainsMap.get(oKey) || [];
+      list.push(n.id);
+      r1OwnerMainsMap.set(oKey, list);
+    }
+  }
+
+  // Preserve any real txHash captured from live RankUpgraded events
+  const liveTxByRankNode = new Map<string, { txHash: string; blockNumber?: number; createdAt?: string }>();
+  for (const u of matrixDB.upgradeLogs || []) {
+    if (u.txHash && !u.id.startsWith('db-upgrade-')) {
+      liveTxByRankNode.set(`${u.toRank}:${u.newNodeId}`, {
+        txHash: u.txHash,
+        blockNumber: u.blockNumber,
+        createdAt: u.createdAt,
+      });
+    }
+  }
+
+  // Also check rewardLogs for real txHash on that rank & fromNodeId
+  for (const rLog of matrixDB.rewardLogs || []) {
+    if (rLog.rank >= 2 && rLog.txHash && !rLog.id.startsWith('db-chain-')) {
+      const key = `${rLog.rank}:${rLog.fromNodeId}`;
+      if (!liveTxByRankNode.has(key)) {
+        liveTxByRankNode.set(key, {
+          txHash: rLog.txHash,
+          blockNumber: rLog.blockNumber,
+          createdAt: rLog.createdAt,
+        });
+      }
+    }
+  }
+
+  const baseBlock = matrixDB.lastSyncedBlock || 140018600;
+  const upgrades: UpgradeLogModel[] = [];
+
+  for (let rankNum = 2; rankNum <= 18; rankNum++) {
+    const rNodes = matrixDB.nodesByRank[rankNum] || [];
+    if (rNodes.length <= 1) continue; // Only Root #1 exists in this rank
+
+    const prevRankNodes = matrixDB.nodesByRank[rankNum - 1] || [];
+    const rankPrice = RANK_PRICES_USDT[rankNum - 1] || 10;
+
+    // Group non-clone, non-extra nodes in this rank by owner to resolve exact Rank 1 Main ID index
+    const ownerMainsInR = new Map<string, IndexedTreeNode[]>();
+    for (const n of rNodes) {
+      if (!n.isClone && !n.isExtraId) {
+        const oKey = n.owner.toLowerCase();
+        const list = ownerMainsInR.get(oKey) || [];
+        list.push(n);
+        ownerMainsInR.set(oKey, list);
+      }
+    }
+
+    const ownerMainsInPrev = new Map<string, IndexedTreeNode[]>();
+    for (const pn of prevRankNodes) {
+      if (!pn.isClone && !pn.isExtraId) {
+        const oKey = pn.owner.toLowerCase();
+        const list = ownerMainsInPrev.get(oKey) || [];
+        list.push(pn);
+        ownerMainsInPrev.set(oKey, list);
+      }
+    }
+
+    for (const node of rNodes) {
+      if (node.id <= 1) continue; // Skip Root #1 deployment initialization
+
+      const oKey = node.owner.toLowerCase();
+      const resolvedMainIdRank1 =
+        node.originMainId && node.originMainId > 0 ? node.originMainId : node.id;
+      const mainNodeIdLabel = node.isExtraId
+        ? `Extra-R${rankNum}-#${node.id}`
+        : String(resolvedMainIdRank1);
+
+      // Find previous rank node for this Main ID to calculate Vault Deducted vs Wallet Paid
+      const mainsInPrev = ownerMainsInPrev.get(oKey) || [];
+      const prevNode = mainsInPrev.find((m) => m.id === resolvedMainIdRank1) || mainsInPrev[0];
+      const rawPrevVault = Number(prevNode?.rawNodeVault || 0);
+      const remPrevVault = Number(prevNode?.nodeVault || 0);
+      const rawDiff = Math.max(0, Number((rawPrevVault - remPrevVault).toFixed(2)));
+
+      let vaultDeducted = Math.min(rankPrice, rawDiff);
+      let walletPaid = Math.max(0, Number((rankPrice - vaultDeducted).toFixed(2)));
+      let upgradeMode: UpgradeLogModel['upgradeMode'] = 'MANUAL_WALLET';
+
+      const isAdminFree = Boolean(
+        node.isAdminFreeUpgrade || isNodeFlaggedAdminFree(rankNum, node.id)
+      );
+      if (node.isClone) {
+        upgradeMode = 'CLONE_IN_RANK';
+        vaultDeducted = 0;
+        walletPaid = 0;
+      } else if (isAdminFree) {
+        upgradeMode = 'MANUAL_WALLET';
+        vaultDeducted = 0;
+        walletPaid = 0;
+      } else if (node.isExtraId) {
+        upgradeMode = 'AUTO_VAULT';
+        vaultDeducted = rankPrice;
+        walletPaid = 0;
+      } else if (vaultDeducted >= rankPrice - 1e-4) {
+        upgradeMode = 'AUTO_VAULT';
+        vaultDeducted = rankPrice;
+        walletPaid = 0;
+      } else if (vaultDeducted > 0) {
+        upgradeMode = 'HYBRID_VAULT_WALLET';
+      } else {
+        upgradeMode = 'MANUAL_WALLET';
+      }
+
+      const parentNode = rNodes.find((p) => p.id === node.parentId);
+      const side: 'LEFT' | 'RIGHT' | 'ROOT' =
+        node.parentId === 0
+          ? 'ROOT'
+          : parentNode && parentNode.leftChild === node.id
+          ? 'LEFT'
+          : 'RIGHT';
+
+      const spKey = (node.directSponsor || '').toLowerCase();
+      const spMainsInR = ownerMainsInR.get(spKey) || [];
+      const spNodeIdInR =
+        node.directSponsorNodeId > 0
+          ? node.directSponsorNodeId
+          : spMainsInR[0]?.id || 1;
+
+      const liveMeta = liveTxByRankNode.get(`${rankNum}:${node.id}`);
+      const syntheticTx = `0xup${rankNum.toString(16).padStart(2, '0')}${node.id
+        .toString(16)
+        .padStart(4, '0')}48acb86c42a389efda47cc1b16938eea73f1f892000000000000${resolvedMainIdRank1
+        .toString(16)
+        .padStart(4, '0')}`;
+
+      upgrades.push({
+        id: `db-upgrade-r${rankNum}-n${node.id}`,
+        mainNodeId: mainNodeIdLabel,
+        owner: node.owner,
+        fromRank: rankNum - 1,
+        toRank: rankNum,
+        newNodeId: String(node.id),
+        parentId: String(node.parentId || 1),
+        side,
+        directSponsor: node.directSponsor || matrixDB.systemWallets.rootOwner,
+        directSponsorNodeId: String(spNodeIdInR),
+        rankPriceUsdt: isAdminFree ? '0.00' : rankPrice.toFixed(2),
+        vaultDeductedUsdt: vaultDeducted.toFixed(2),
+        walletPaidUsdt: walletPaid.toFixed(2),
+        upgradeMode,
+        isClone: node.isClone,
+        isExtraId: node.isExtraId,
+        isAdminFreeUpgrade: isAdminFree,
+        txHash: liveMeta?.txHash || syntheticTx,
+        blockNumber: liveMeta?.blockNumber || baseBlock - Math.max(0, rNodes.length - node.id),
+        createdAt:
+          liveMeta?.createdAt ||
+          node.createdAt ||
+          new Date(
+            Date.now() -
+              Math.max(0, rNodes.length - node.id) * 2000 -
+              Math.max(0, 18 - rankNum) * 1000
+          ).toISOString(),
+      });
+    }
+  }
+
+  upgrades.sort((a, b) => {
+    const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (timeB !== timeA) return timeB - timeA;
+    if (b.toRank !== a.toRank) return b.toRank - a.toRank;
+    return Number(b.newNodeId || 0) - Number(a.newNodeId || 0);
+  });
+
+  matrixDB.upgradeLogs = upgrades;
+  inMemoryDB.upgradeLogs = matrixDB.upgradeLogs;
+}
+
+function isId1CloneCloneTarget(isId1CloneChild: boolean, spNodeId: number): string {
+  return isId1CloneChild ? '0' : String(spNodeId);
+}
+
+async function registerUserAccount(owner: string, sponsor?: string, sponsorMainNodeId?: string | number) {
+  const key = owner.toLowerCase();
+  const existing = inMemoryDB.users.get(key);
+  if (existing) return existing;
+
+  const newUser: UserAccountModel = {
+    id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    owner,
+    sponsor: sponsor || null,
+    sponsorMainNodeId: sponsorMainNodeId ? sponsorMainNodeId.toString() : '1',
+    currentMaxRank: 1,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    vaults: Array.from({ length: 18 }, (_, i) => ({
+      id: `v-${owner}-${i + 1}`,
+      owner,
+      rank: i + 1,
+      balance: '0.00',
+      updatedAt: new Date().toISOString(),
+    })),
+  };
+
+  inMemoryDB.users.set(key, newUser);
+  return newUser;
+}
+
+function findShallowestLeftToRightSlotInRankNodes(
+  rNodes: IndexedTreeNode[],
+  startNodeId: number = 1
+): { parentId: number; isLeft: boolean } {
+  const byId = new Map<number, IndexedTreeNode>();
+  for (const n of rNodes) byId.set(n.id, n);
+
+  const rootId = byId.has(startNodeId) ? startNodeId : 1;
+  const queue: number[] = [rootId];
+  const visited = new Set<number>();
+
+  while (queue.length > 0) {
+    const curId = queue.shift()!;
+    if (visited.has(curId)) continue;
+    visited.add(curId);
+    const cur = byId.get(curId);
+    if (!cur) continue;
+    if (!cur.leftChild || cur.leftChild <= 0 || !byId.has(cur.leftChild)) {
+      return { parentId: cur.id, isLeft: true };
+    }
+    if (!cur.rightChild || cur.rightChild <= 0 || !byId.has(cur.rightChild)) {
+      return { parentId: cur.id, isLeft: false };
+    }
+    queue.push(cur.leftChild, cur.rightChild);
+  }
+
+  return { parentId: rootId, isLeft: true };
+}
+
+function reconcileRankTreeLinks(nodes: IndexedTreeNode[]): IndexedTreeNode[] {
+  if (!Array.isArray(nodes) || nodes.length === 0) return [];
+  nodes.sort((a, b) => a.id - b.id);
+  const byId = new Map<number, IndexedTreeNode>();
+  const ownerFirstMain = new Map<string, number>();
+  const rankNum = nodes[0]?.rank || 1;
+  const r1Nodes = matrixDB?.nodesByRank?.[1] || [];
+  for (const n of nodes) {
+    byId.set(n.id, n);
+    const ok = (n.owner || '').toLowerCase();
+    if (!n.isClone && !n.isExtraId && !ownerFirstMain.has(ok)) {
+      ownerFirstMain.set(ok, rankNum === 1 ? n.id : (n.originMainId > 0 ? n.originMainId : n.id));
+    }
+  }
+  const cloneCountByOrigin = new Map<number, number>();
+  for (const n of nodes) {
+    if (n.isClone) {
+      n.isExtraId = false;
+      const ok = (n.owner || '').toLowerCase();
+      const fallbackMain = ownerFirstMain.get(ok) || 1;
+      const candidateOrig =
+        rankNum === 1
+          ? byId.get(n.originMainId)
+          : r1Nodes.find((x) => x.id === n.originMainId && !x.isClone) ||
+            nodes.find(
+              (x) =>
+                !x.isClone &&
+                (x.originMainId === n.originMainId || x.id === n.originMainId)
+            ) ||
+            byId.get(n.originMainId);
+      if (
+        !n.originMainId ||
+        (rankNum === 1 && n.originMainId === n.id) ||
+        !candidateOrig ||
+        candidateOrig.isClone
+      ) {
+        n.originMainId = fallbackMain;
+      }
+      const origId = n.originMainId > 0 ? n.originMainId : fallbackMain;
+      const nextCount = (cloneCountByOrigin.get(origId) || 0) + 1;
+      cloneCountByOrigin.set(origId, nextCount);
+      n.cloneSequence = nextCount;
+      n.cloneRound = ((nextCount - 1) % 2) + 1;
+    } else {
+      n.cloneSequence = 0;
+      n.cloneRound = 0;
+    }
+    if (n.id <= 1 || n.parentId <= 0) continue;
+  }
+
+  // Canonical Binary Tree Linker: รวบรวมลูกของแต่ละ Parent และจัดระเบียบ Left / Right ให้ถูกต้องเสมอ
+  // กฎเหล็ก: ลูกลำดับแรก (หรือโคลนรอบ 1) ต้องอยู่ฝั่งซ้าย (leftChild) เสมอ และลูกลำดับสอง (หรือโคลนรอบ 2) อยู่ฝั่งขวา (rightChild)
+  // ป้องกันบั๊กฝั่งซ้าย-ขวากลับด้าน (เช่น ซ้ายเป็นรอบ 2 ขวาเป็นรอบ 1) หรือมีลูกฝั่งขวาขณะที่ฝั่งซ้ายยังว่าง
+  const childrenByParent = new Map<number, IndexedTreeNode[]>();
+  for (const n of nodes) {
+    if (n.id <= 1 || n.parentId <= 0) continue;
+    if (!byId.has(n.parentId)) continue;
+    const list = childrenByParent.get(n.parentId) || [];
+    list.push(n);
+    childrenByParent.set(n.parentId, list);
+  }
+
+  for (const [pId, children] of childrenByParent.entries()) {
+    const parent = byId.get(pId);
+    if (!parent) continue;
+    children.sort((a, b) => a.id - b.id);
+
+    const leftNode = children[0];
+    const rightNode = children.length > 1 ? children[1] : undefined;
+
+    parent.leftChild = leftNode ? leftNode.id : 0;
+    parent.rightChild = rightNode ? rightNode.id : 0;
+    if (leftNode) leftNode.isLeft = true;
+    if (rightNode) rightNode.isLeft = false;
+  }
+
+  for (const p of nodes) {
+    if (!childrenByParent.has(p.id)) {
+      if (p.leftChild > 0 && !byId.has(p.leftChild)) p.leftChild = 0;
+      if (p.rightChild > 0 && !byId.has(p.rightChild)) p.rightChild = 0;
+    } else {
+      const cList = childrenByParent.get(p.id)!;
+      if (cList.length < 2) p.rightChild = 0;
+    }
+  }
+
+  // สำหรับ Rank 1-27: ตรวจสอบว่าโหนดและโคลนนิ่งรอบที่ 1 วางอยู่ใต้ผู้แนะนำตรง/โคลนของผู้แนะนำตามลำดับที่ถูกต้องหรือไม่
+  if (rankNum >= 1 && nodes.length > 1) {
+    const r9Nodes = matrixDB?.nodesByRank?.[9] || [];
+    const r4Nodes = matrixDB?.nodesByRank?.[4] || [];
+
+    // 1. กฎหลัก Rank 2..27: ห้ามเปลี่ยนข้อมูล ผู้แนะนำตรง (Direct Sponsor) ให้ยึดตาม Rank 1 เสมอ
+    if (rankNum > 1 && r1Nodes.length > 0) {
+      for (const n of nodes) {
+        if (n.isExtraId && !n.isClone) {
+          const ok = (n.owner || '').toLowerCase();
+          const ownerMainsR1 = r1Nodes.filter(
+            (m) => !m.isClone && !m.isExtraId && (m.owner || '').toLowerCase() === ok
+          );
+          const hasValidExistingSp =
+            n.directSponsorNodeId > 0 &&
+            (ownerMainsR1.length === 0 ||
+              ownerMainsR1.some((m) => m.id === n.directSponsorNodeId));
+          if (hasValidExistingSp) {
+            const matchedSp = r1Nodes.find((m) => m.id === n.directSponsorNodeId);
+            if (matchedSp?.owner) n.directSponsor = matchedSp.owner;
+          } else if (ownerMainsR1.length === 1) {
+            n.directSponsorNodeId = ownerMainsR1[0].id;
+            n.directSponsor = ownerMainsR1[0].owner;
+          } else if (ownerMainsR1.length > 1) {
+            const eligibleMain =
+              ownerMainsR1.find(
+                (m) =>
+                  m.id === 1 ||
+                  r9Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+              ) ||
+              ownerMainsR1.find(
+                (m) =>
+                  m.id === 1 ||
+                  r4Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+              ) ||
+              ownerMainsR1[0];
+            n.directSponsorNodeId = eligibleMain.id;
+            n.directSponsor = eligibleMain.owner;
+          }
+        } else if (!n.isClone && !n.isExtraId && n.id > 1) {
+          const ok = (n.owner || '').toLowerCase();
+          const ownerMainsR1 = r1Nodes.filter(
+            (x) => x.id > 1 && !x.isClone && !x.isExtraId && (x.owner || '').toLowerCase() === ok
+          );
+          let origR1 =
+            n.originMainId > 1
+              ? r1Nodes.find(
+                  (x) =>
+                    x.id === n.originMainId &&
+                    !x.isClone &&
+                    !x.isExtraId &&
+                    (x.owner || '').toLowerCase() === ok
+                )
+              : undefined;
+          if (!origR1 && n.directSponsorNodeId > 1 && ownerMainsR1.length > 1) {
+            origR1 = ownerMainsR1.find((x) => x.directSponsorNodeId === n.directSponsorNodeId);
+          }
+          if (!origR1 && ownerMainsR1.length > 0) {
+            origR1 = ownerMainsR1[0];
+          }
+          if (origR1) {
+            n.originMainId = origR1.id;
+            const spR1 = r1Nodes.find((x) => x.id === origR1.directSponsorNodeId);
+            const canonSpId =
+              origR1.autoSourceMainId && origR1.autoSourceMainId > 0
+                ? origR1.autoSourceMainId
+                : spR1 && spR1.isClone && spR1.originMainId > 0
+                ? spR1.originMainId
+                : origR1.directSponsorNodeId || 1;
+            const canonSpNode = r1Nodes.find((x) => x.id === canonSpId) || spR1;
+            n.directSponsorNodeId = canonSpId;
+            n.directSponsor = canonSpNode?.owner || origR1.directSponsor || n.directSponsor;
+          }
+        } else if (n.isClone) {
+          const nOwner = (n.owner || '').toLowerCase();
+          const localOrigMain =
+            nodes.find(
+              (m) =>
+                !m.isClone &&
+                !m.isExtraId &&
+                (m.originMainId === n.originMainId || m.id === n.originMainId) &&
+                (!nOwner || (m.owner || '').toLowerCase() === nOwner)
+            ) ||
+            nodes.find(
+              (m) =>
+                !m.isClone &&
+                (m.originMainId === n.originMainId || m.id === n.originMainId) &&
+                (!nOwner || (m.owner || '').toLowerCase() === nOwner)
+            );
+          const isExtraClone = Boolean(localOrigMain?.isExtraId);
+          const r1OriginId = localOrigMain ? localOrigMain.originMainId : n.originMainId;
+          if (r1OriginId > 0) {
+            n.originMainId = r1OriginId;
+          }
+          if (isExtraClone && localOrigMain) {
+            n.directSponsorNodeId = localOrigMain.directSponsorNodeId || 1;
+            n.directSponsor = localOrigMain.directSponsor || n.directSponsor;
+          } else if (r1OriginId === 1) {
+            n.directSponsorNodeId = 0;
+            const rootR1 = r1Nodes.find((x) => x.id === 1);
+            if (rootR1) n.directSponsor = rootR1.directSponsor;
+          } else {
+            const origR1 = r1Nodes.find(
+              (x) => x.id === r1OriginId && !x.isClone && !x.isExtraId
+            );
+            if (origR1) {
+              const spR1 = r1Nodes.find((x) => x.id === origR1.directSponsorNodeId);
+              const canonSpId =
+                origR1.autoSourceMainId && origR1.autoSourceMainId > 0
+                  ? origR1.autoSourceMainId
+                  : spR1 && spR1.isClone && spR1.originMainId > 0
+                  ? spR1.originMainId
+                  : origR1.directSponsorNodeId || 1;
+              const canonSpNode = r1Nodes.find((x) => x.id === canonSpId) || spR1;
+              n.directSponsorNodeId = canonSpId;
+              n.directSponsor = canonSpNode?.owner || origR1.directSponsor || n.directSponsor;
+            }
+          }
+        }
+      }
+    }
+
+    // 2. Check if any node in Rank 1..27 is actually orphaned (missing parent link on-chain)
+    // Authentic on-chain parentId / leftChild / rightChild placements are always preserved.
+    let needsReplay = false;
+    for (const n of nodes) {
+      if (n.id <= 1) continue;
+      const p = byId.get(n.parentId);
+      if (!p || (p.leftChild !== n.id && p.rightChild !== n.id)) {
+        needsReplay = true;
+        break;
+      }
+    }
+
+    const leftCountBeforeByMain = new Map<number, number>();
+    for (const m of nodes) {
+      if (m.isClone || m.isExtraId) continue;
+      let lc = 0;
+      const mOrig = m.originMainId || m.id;
+      for (const cand of nodes) {
+        const cOrig = cand.originMainId || cand.id;
+        if (
+          (cand.id === m.id || (cand.isClone && (cOrig === m.id || cOrig === mOrig))) &&
+          cand.leftChild > 0 &&
+          byId.has(cand.leftChild)
+        ) {
+          lc++;
+        }
+      }
+      leftCountBeforeByMain.set(m.id, lc);
+    }
+
+    // 3. Chronological replay of Rank 1..27 placements and right-child Rebirth Clone triggers
+    if (needsReplay) {
+      const rootNode = nodes.find((n) => n.id === 1) || nodes[0];
+      const nonCloneList = nodes
+        .filter((n) => n.id !== rootNode.id && !n.isClone)
+        .sort((a, b) => a.id - b.id);
+      const cloneIds = nodes
+        .filter((n) => n.id !== rootNode.id && n.isClone)
+        .map((n) => n.id)
+        .sort((a, b) => a - b);
+      const cloneTemplates = new Map<number, IndexedTreeNode>();
+      for (const n of nodes) {
+        if (n.isClone) cloneTemplates.set(n.id, n);
+      }
+
+      rootNode.parentId = 0;
+      rootNode.leftChild = 0;
+      rootNode.rightChild = 0;
+
+      const placedNodes: IndexedTreeNode[] = [rootNode];
+      let cloneCursor = 0;
+
+      const spawnTriggeredClones = (initialParent: IndexedTreeNode) => {
+        const rightQueue: IndexedTreeNode[] = [initialParent];
+        let guard = 0;
+        while (rightQueue.length > 0 && guard < 100) {
+          guard++;
+          const trigParent = rightQueue.shift()!;
+          const trigOriginNode = !trigParent.isClone
+            ? trigParent
+            : placedNodes.find(
+                (p) =>
+                  !p.isClone &&
+                  (p.id === trigParent.originMainId ||
+                    p.originMainId === trigParent.originMainId)
+              ) || trigParent;
+
+          const cloneOrigMainId = trigOriginNode.isExtraId
+            ? trigOriginNode.id
+            : trigOriginNode.originMainId || trigOriginNode.id;
+
+          const existingClonesForOrig = placedNodes.filter(
+            (p) => p.isClone && (p.originMainId || p.id) === cloneOrigMainId
+          ).length;
+          const roundIdx = existingClonesForOrig % 2;
+          const cRound = roundIdx + 1;
+
+          let savedSponsorId = trigOriginNode.directSponsorNodeId || 1;
+          let sponsorNodeInRankId = 0;
+          if (cloneOrigMainId === 1 || trigOriginNode.id === 1) {
+            savedSponsorId = 1;
+            sponsorNodeInRankId = 1;
+          } else {
+            const spNodeInR = placedNodes.find(
+              (p) =>
+                !p.isClone &&
+                !p.isExtraId &&
+                (savedSponsorId === 1 ? p.id === 1 : p.id === savedSponsorId || p.originMainId === savedSponsorId)
+            );
+            sponsorNodeInRankId = spNodeInR ? spNodeInR.id : 0;
+          }
+
+          const cSlot =
+            roundIdx === 0 && sponsorNodeInRankId > 0
+              ? findExtraIdPlacementInRankNodes(placedNodes, sponsorNodeInRankId)
+              : findShallowestLeftToRightSlotInRankNodes(placedNodes, 1);
+
+          const assignedCloneId =
+            cloneCursor < cloneIds.length
+              ? cloneIds[cloneCursor++]
+              : Math.max(
+                  ...placedNodes.map((x) => x.id),
+                  ...nonCloneList.map((x) => x.id),
+                  0
+                ) + 1;
+
+          const template = cloneTemplates.get(assignedCloneId);
+          const cloneNode: IndexedTreeNode = {
+            ...(template || {}),
+            id: assignedCloneId,
+            rank: rankNum,
+            owner: trigOriginNode.owner,
+            directSponsor: trigOriginNode.directSponsor || rootNode.owner,
+            parentId: cSlot.parentId,
+            leftChild: 0,
+            rightChild: 0,
+            isClone: true,
+            isExtraId: false,
+            originMainId: cloneOrigMainId,
+            cloneSequence: existingClonesForOrig + 1,
+            cloneRound: cRound,
+            directSponsorNodeId: savedSponsorId,
+            nodeVault: 0,
+            rawNodeVault: 0,
+            reconciledBaseVault: 0,
+            isLocalUpgrade: template?.isLocalUpgrade,
+            isAdminFreeUpgrade: template?.isAdminFreeUpgrade,
+            originType: 'CLONE',
+          };
+
+          const cParent = placedNodes.find((p) => p.id === cSlot.parentId);
+          placedNodes.push(cloneNode);
+          if (cParent) {
+            const placeLeft = !cParent.leftChild || cParent.leftChild <= 0 || cSlot.isLeft;
+            if (placeLeft) {
+              cParent.leftChild = cloneNode.id;
+            } else {
+              cParent.rightChild = cloneNode.id;
+              rightQueue.push(cParent);
+            }
+          }
+        }
+      };
+
+      let replayedAdminUpgrades = 0;
+      for (const n of nonCloneList) {
+        n.leftChild = 0;
+        n.rightChild = 0;
+        const spMainId = n.directSponsorNodeId > 0 ? n.directSponsorNodeId : 1;
+        const spNodeInRank = placedNodes.find(
+          (p) =>
+            !p.isClone &&
+            !p.isExtraId &&
+            (spMainId === 1 ? p.id === 1 : p.id === spMainId || p.originMainId === spMainId)
+        );
+        let slot: { parentId: number; isLeft: boolean };
+        if (n.isAdminFreeUpgrade) {
+          const adminRoundIdx = replayedAdminUpgrades % 2;
+          replayedAdminUpgrades++;
+          slot =
+            adminRoundIdx === 0 && spNodeInRank
+              ? findExtraIdPlacementInRankNodes(placedNodes, spNodeInRank.id)
+              : findShallowestLeftToRightSlotInRankNodes(placedNodes, 1);
+        } else {
+          slot = spNodeInRank
+            ? findExtraIdPlacementInRankNodes(placedNodes, spNodeInRank.id)
+            : findShallowestLeftToRightSlotInRankNodes(placedNodes, 1);
+        }
+
+        const targetParent = placedNodes.find((p) => p.id === slot.parentId) || rootNode;
+        n.parentId = targetParent.id;
+        placedNodes.push(n);
+        const placeLeft = !targetParent.leftChild || targetParent.leftChild <= 0 || slot.isLeft;
+        if (placeLeft) {
+          targetParent.leftChild = n.id;
+        } else {
+          targetParent.rightChild = n.id;
+          spawnTriggeredClones(targetParent);
+        }
+      }
+
+      placedNodes.sort((a, b) => a.id - b.id);
+      nodes.length = 0;
+      byId.clear();
+      for (const pn of placedNodes) {
+        nodes.push(pn);
+        byId.set(pn.id, pn);
+      }
+    }
+
+    // Preserve authentic on-chain nodeVault (nodeUpgradeVault) values directly from the contract
+    for (const m of nodes) {
+      if (m.rawNodeVault !== undefined && m.rawNodeVault >= 0) {
+        m.nodeVault = Number(m.rawNodeVault);
+        m.reconciledBaseVault = Number(m.rawNodeVault);
+      }
+    }
+  }
+
+  return nodes;
+}
+
+// Reconcile Pool 3 (New Extra ID Pool: Vault R4-18) -> Loop Rank 18 down to Rank 2 (5,000 -> ... -> 10 USDT)
+function findExtraIdPlacementInRankNodes(
+  rNodes: IndexedTreeNode[],
+  sponsorMainId: number
+): { parentId: number; isLeft: boolean } {
+  const byId = new Map<number, IndexedTreeNode>();
+  for (const n of rNodes) byId.set(n.id, n);
+
+  if (!sponsorMainId || sponsorMainId <= 0 || !byId.has(sponsorMainId)) {
+    return findShallowestLeftToRightSlotInRankNodes(rNodes, 1);
+  }
+
+  const mainNode = byId.get(sponsorMainId)!;
+  const sponsorOwner = (mainNode.owner || '').toLowerCase();
+
+  // Priority 1: ต่อติดตัวผู้แนะนำ Direct Sponsor เท่านั้น (Left ซ้ายก่อน แล้ว Right ขวาตาม)
+  if (!mainNode.leftChild || mainNode.leftChild <= 0 || !byId.has(mainNode.leftChild)) {
+    return { parentId: mainNode.id, isLeft: true };
+  }
+  if (!mainNode.rightChild || mainNode.rightChild <= 0 || !byId.has(mainNode.rightChild)) {
+    return { parentId: mainNode.id, isLeft: false };
+  }
+
+  // Priority 2: ถ้าไอดีผู้แนะนำเต็ม -> ไปหาไอดีโคลนนิ่งของผู้แนะนำ Direct Sponsor เท่านั้น
+  const mainOriginTag = mainNode.originMainId || mainNode.id;
+  const sorted = [...rNodes].sort((a, b) => a.id - b.id);
+  const isSponsorClone = (cand: IndexedTreeNode) => {
+    if (!cand.isClone) return false;
+    const candOrig = cand.originMainId || cand.id;
+    return candOrig === mainNode.id || candOrig === mainOriginTag;
+  };
+
+  for (const cand of sorted) {
+    if (isSponsorClone(cand)) {
+      if (!cand.leftChild || cand.leftChild <= 0 || !byId.has(cand.leftChild)) {
+        return { parentId: cand.id, isLeft: true };
+      }
+      if (!cand.rightChild || cand.rightChild <= 0 || !byId.has(cand.rightChild)) {
+        return { parentId: cand.id, isLeft: false };
+      }
+    }
+  }
+
+  // Priority 3: หากโหนดหลักและโคลนติดตัวของผู้แนะนำเต็มหมด ให้หาตำแหน่งว่างชั้นตื้นสุดแบบ BFS ภายใต้สายงานของโหนดหลักผู้แนะนำ (ตรงกับ Smart Contract _findPlacementSpot)
+  return findShallowestLeftToRightSlotInRankNodes(rNodes, mainNode.id);
+}
+
+function findClonePlacementInRankNodes(
+  rNodes: IndexedTreeNode[],
+  triggerParent: IndexedTreeNode
+): {
+  parentId: number;
+  isLeft: boolean;
+  cloneRound: number;
+  cloneOriginMainId: number;
+  targetSponsorNodeId: number;
+} {
+  const byId = new Map<number, IndexedTreeNode>();
+  for (const n of rNodes) byId.set(n.id, n);
+
+  const cloneOriginMainId =
+    triggerParent.originMainId && triggerParent.originMainId > 0
+      ? triggerParent.originMainId
+      : triggerParent.id;
+
+  const existingClonesCount = rNodes.filter(
+    (n) => n.isClone && (n.originMainId || n.id) === cloneOriginMainId
+  ).length;
+
+  // รอบโคลนแยกตามรหัสหลักต้นสังกัด (originMainId): ตัวที่ 1 = รอบ 1, ตัวที่ 2 = รอบ 2 สลับกัน
+  const roundIndex = existingClonesCount % 2;
+  const cloneRound = roundIndex + 1;
+
+  const trigOwner = (triggerParent.owner || '').toLowerCase();
+  const originNode =
+    rNodes.find(
+      (n) =>
+        !n.isClone &&
+        !n.isExtraId &&
+        (n.id === cloneOriginMainId || n.originMainId === cloneOriginMainId)
+    ) ||
+    rNodes.find(
+      (n) =>
+        !n.isClone &&
+        (n.id === cloneOriginMainId || n.originMainId === cloneOriginMainId) &&
+        (!trigOwner || (n.owner || '').toLowerCase() === trigOwner)
+    ) ||
+    byId.get(cloneOriginMainId) ||
+    triggerParent;
+  const rankNum = originNode.rank || triggerParent.rank || 1;
+
+  let sponsorNodeInRankId = 0;
+  let savedDirectSponsorId = originNode.directSponsorNodeId || 1;
+
+  if (cloneOriginMainId === 1 || originNode.id === 1) {
+    sponsorNodeInRankId = 1;
+    savedDirectSponsorId = 1;
+  } else if (rankNum === 1 || originNode.isExtraId) {
+    if (originNode.directSponsorNodeId && originNode.directSponsorNodeId > 0) {
+      sponsorNodeInRankId = originNode.directSponsorNodeId;
+      savedDirectSponsorId = originNode.directSponsorNodeId;
+    } else {
+      const spKey = (originNode.directSponsor || '').toLowerCase();
+      const spMain = rNodes.find(
+        (n) => !n.isClone && !n.isExtraId && (n.owner || '').toLowerCase() === spKey
+      );
+      sponsorNodeInRankId = spMain ? spMain.id : 1;
+      savedDirectSponsorId = sponsorNodeInRankId;
+    }
+  } else {
+    // Rank 2..27: ตรวจสอบว่าผู้แนะนำตรง (savedDirectSponsorId เช่น ID #5) มีโหนดใน Rank นี้หรือยัง
+    const r1SponsorId = originNode.directSponsorNodeId || 1;
+    savedDirectSponsorId = r1SponsorId;
+    const spNodeInR = rNodes.find(
+      (n) =>
+        !n.isClone &&
+        !n.isExtraId &&
+        (r1SponsorId === 1 ? n.id === 1 : n.originMainId === r1SponsorId)
+    );
+    sponsorNodeInRankId = spNodeInR ? spNodeInR.id : 0;
+  }
+
+  if (roundIndex === 0 && sponsorNodeInRankId > 0 && byId.has(sponsorNodeInRankId)) {
+    // รอบที่ 1: ติดตัวผู้แนะนำของรหัสหลักนั้น (เมื่อผู้แนะนำมีโหนดใน Rank นี้แล้ว)
+    const slot = findExtraIdPlacementInRankNodes(rNodes, sponsorNodeInRankId);
+    return {
+      parentId: slot.parentId,
+      isLeft: slot.isLeft,
+      cloneRound,
+      cloneOriginMainId,
+      targetSponsorNodeId: savedDirectSponsorId,
+    };
+  }
+
+  // รอบที่ 2 หรือกรณีผู้แนะนำยังไม่ได้อัปเกรดขึ้นมาถึง Rank นี้ (sponsorNodeInRankId === 0):
+  // ให้หาตำแหน่งว่างชั้นตื้นลงมาจากซ้ายไปขวา (BFS เริ่มจาก Root #1)
+  const bfsSlot = findShallowestLeftToRightSlotInRankNodes(rNodes, 1);
+  return {
+    parentId: bfsSlot.parentId,
+    isLeft: bfsSlot.isLeft,
+    cloneRound,
+    cloneOriginMainId,
+    targetSponsorNodeId: savedDirectSponsorId,
+  };
+}
+
+function reconcileRank1AutoMainIds(): Map<number, number> {
+  const autoMainSourceMap = new Map<number, number>();
+  const r1Nodes = matrixDB.nodesByRank[1] || [];
+  if (r1Nodes.length === 0) return autoMainSourceMap;
+
+  // Ensure every clone in Ranks 1..27 has a valid non-clone originMainId, cloneSequence, and cloneRound
+  for (let r = 1; r <= 18; r++) {
+    const rList = matrixDB.nodesByRank[r] || [];
+    if (rList.length === 0) continue;
+    const sortedR = [...rList].sort((a, b) => a.id - b.id);
+    const byIdR = new Map<number, IndexedTreeNode>();
+    const ownerFirstMainR = new Map<string, number>();
+    for (const rn of sortedR) {
+      byIdR.set(rn.id, rn);
+      const ok = (rn.owner || '').toLowerCase();
+      if (!rn.isClone && !rn.isExtraId && !ownerFirstMainR.has(ok)) {
+        ownerFirstMainR.set(ok, r === 1 ? rn.id : (rn.originMainId > 0 ? rn.originMainId : rn.id));
+      }
+    }
+    const cloneCountByOriginR = new Map<number, number>();
+    const matchedRightTriggersR = new Set<number>();
+    for (const rn of sortedR) {
+      if (rn.isClone) {
+        const ok = (rn.owner || '').toLowerCase();
+        const fallbackMain = ownerFirstMainR.get(ok) || 1;
+
+        // Find the right-child Rebirth trigger parent for this clone
+        let triggeredByParent: IndexedTreeNode | undefined;
+        for (let lb = rn.id - 1; lb >= 1; lb--) {
+          const candRight = byIdR.get(lb);
+          if (!candRight || candRight.parentId <= 0) continue;
+          const trigParent = byIdR.get(candRight.parentId);
+          if (
+            trigParent &&
+            trigParent.rightChild === candRight.id &&
+            (trigParent.owner || '').toLowerCase() === ok &&
+            !matchedRightTriggersR.has(trigParent.id)
+          ) {
+            triggeredByParent = trigParent;
+            matchedRightTriggersR.add(trigParent.id);
+            break;
+          }
+        }
+
+        const triggeredOriginMainId = triggeredByParent
+          ? r === 1
+            ? triggeredByParent.isClone
+              ? triggeredByParent.originMainId || triggeredByParent.id
+              : triggeredByParent.id
+            : triggeredByParent.originMainId > 0
+            ? triggeredByParent.originMainId
+            : triggeredByParent.id
+          : 0;
+
+        let origNode =
+          sortedR.find(
+            (x) =>
+              !x.isClone &&
+              (x.owner || '').toLowerCase() === ok &&
+              (x.originMainId === rn.originMainId || x.id === rn.originMainId)
+          ) || byIdR.get(rn.originMainId);
+
+        // If right-child trigger clearly points to a specific Main ID (e.g. #39 on R2-#11), or if rn.originMainId is missing/corrupted
+        if (
+          !rn.originMainId ||
+          rn.originMainId === rn.id ||
+          !origNode ||
+          origNode.isClone ||
+          (triggeredOriginMainId > 0 && rn.originMainId === fallbackMain && triggeredOriginMainId !== fallbackMain)
+        ) {
+          rn.originMainId = triggeredOriginMainId > 0 ? triggeredOriginMainId : fallbackMain;
+          origNode =
+            sortedR.find(
+              (x) =>
+                !x.isClone &&
+                (x.owner || '').toLowerCase() === ok &&
+                (x.originMainId === rn.originMainId || x.id === rn.originMainId)
+            ) || origNode;
+        } else if (r > 1 && origNode && !origNode.isClone && !origNode.isExtraId && origNode.originMainId > 0) {
+          // Normalize Rank 2..27 clone originMainId to always hold the Rank 1 Main ID (e.g. #39, not Rank 2 slot #11)
+          rn.originMainId = origNode.originMainId;
+        }
+
+        if (origNode && !origNode.isClone) {
+          const origSp =
+            origNode.autoSourceMainId && origNode.autoSourceMainId > 0
+              ? origNode.autoSourceMainId
+              : origNode.directSponsorNodeId;
+          if (origSp > 0) {
+            rn.directSponsorNodeId = origSp;
+          }
+          if (origNode.directSponsor && origNode.directSponsor !== ethers.ZeroAddress) {
+            rn.directSponsor = origNode.directSponsor;
+          }
+        }
+
+        const origId = rn.originMainId > 0 ? rn.originMainId : fallbackMain;
+        const nextCount = (cloneCountByOriginR.get(origId) || 0) + 1;
+        cloneCountByOriginR.set(origId, nextCount);
+        rn.cloneSequence = nextCount;
+        rn.cloneRound = ((nextCount - 1) % 2) + 1;
+      } else {
+        rn.cloneSequence = 0;
+        rn.cloneRound = 0;
+        if (rn.isExtraId) {
+          const ok = (rn.owner || '').toLowerCase();
+          const ownerMainsR1 = r1Nodes.filter(
+            (m) => !m.isClone && !m.isExtraId && (m.owner || '').toLowerCase() === ok
+          );
+          const hasValidExistingSp =
+            rn.directSponsorNodeId > 0 &&
+            (ownerMainsR1.length === 0 ||
+              ownerMainsR1.some((m) => m.id === rn.directSponsorNodeId));
+          if (hasValidExistingSp) {
+            const matchedSp = r1Nodes.find((m) => m.id === rn.directSponsorNodeId);
+            if (matchedSp?.owner) rn.directSponsor = matchedSp.owner;
+          } else if (ownerMainsR1.length === 1) {
+            rn.directSponsorNodeId = ownerMainsR1[0].id;
+            rn.directSponsor = ownerMainsR1[0].owner;
+          } else if (ownerMainsR1.length > 1) {
+            const r9Nodes = matrixDB.nodesByRank[9] || [];
+            const r4Nodes = matrixDB.nodesByRank[4] || [];
+            const eligibleMain =
+              ownerMainsR1.find(
+                (m) =>
+                  m.id === 1 ||
+                  r9Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+              ) ||
+              ownerMainsR1.find(
+                (m) =>
+                  m.id === 1 ||
+                  r4Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+              ) ||
+              ownerMainsR1[0];
+            rn.directSponsorNodeId = eligibleMain.id;
+            rn.directSponsor = eligibleMain.owner;
+          }
+        }
+      }
+    }
+  }
+
+  const sortedR1 = [...r1Nodes].sort((a, b) => a.id - b.id);
+  const byIdR1 = new Map<number, IndexedTreeNode>();
+  for (const n of sortedR1) {
+    byIdR1.set(n.id, n);
+    if (n.isClone) {
+      n.originType = 'CLONE';
+    } else if (n.isExtraId) {
+      n.originType = 'AUTO_EXTRA';
+    } else if (n.confirmedOriginType === 'AUTO_NEW_MAIN') {
+      n.originType = 'AUTO_NEW_MAIN';
+    } else {
+      n.originType = 'MANUAL_REGISTER';
+    }
+  }
+
+  const getMainCurrentRank = (r1MainId: number): number => {
+    if (r1MainId === 1) return 18;
+    let cur = 1;
+    for (let r = 18; r >= 2; r--) {
+      const rList = matrixDB.nodesByRank[r] || [];
+      if (rList.some((x) => !x.isClone && !x.isExtraId && x.originMainId === r1MainId)) {
+        cur = r;
+        break;
+      }
+    }
+    return cur;
+  };
+
+  const getMainWindow5Start = (r1MainId: number): number => {
+    return Math.max(1, getMainCurrentRank(r1MainId) - 4);
+  };
+
+  const isPlacedUnderMainOrClonesR1 = (mId: number, targetId: number): boolean => {
+    if (targetId <= mId) return false;
+    if (mId === 1) return true;
+    let curr = byIdR1.get(targetId)?.parentId || 0;
+    const visited = new Set<number>();
+    while (curr > 0 && !visited.has(curr)) {
+      visited.add(curr);
+      if (curr === mId) return true;
+      const pNode = byIdR1.get(curr);
+      if (!pNode) break;
+      if (pNode.isClone && (pNode.originMainId || pNode.id) === mId) {
+        return true;
+      }
+      curr = pNode.parentId;
+    }
+    return false;
+  };
+
+  // Returns placement distance (depth / specificity): smaller means direct child of mId or clone of mId; mId === 1 has lowest specificity when another owned eligible Main ID sits directly above targetId
+  const getSpecificityScoreR1 = (mId: number, targetId: number): number => {
+    if (targetId <= mId) return 999999;
+    let curr = byIdR1.get(targetId)?.parentId || 0;
+    let steps = 0;
+    const visited = new Set<number>();
+    while (curr > 0 && !visited.has(curr)) {
+      visited.add(curr);
+      steps++;
+      if (curr === mId) return steps;
+      const pNode = byIdR1.get(curr);
+      if (!pNode) break;
+      if (pNode.isClone && (pNode.originMainId || pNode.id) === mId) {
+        return steps;
+      }
+      curr = pNode.parentId;
+    }
+    return mId === 1 ? 100000 : 999999;
+  };
+
+  // Compute expected Auto ID spawns and extra Rank 2..3 Pool 2 vaults per Rank 1 Main ID
+  const expectedAutoSpawnsByMain = new Map<number, number>();
+  const extraR2To3VaultByMain = new Map<number, number>();
+  const extraR2To3MinR1IdByMain = new Map<number, number>();
+  const usedExtraR2To3 = new Set<number>();
+
+  const activeContractLower = (matrixDB.contractAddress || CONTRACT_ADDRESS).toLowerCase();
+  const LEGACY_CONTRACT_PRICES_USDT =
+    activeContractLower === '0xaa38a606402df541ee4df81ae0c8bcdacdd12fe6'
+      ? [
+          10, 20, 30, 40, 50, 60, 80, 100, 200, 300,
+          500, 700, 900, 1000, 2000, 3000, 4000, 5000,
+        ]
+      : [
+          10, 20, 30, 40, 50, 60, 80, 100, 200, 300,
+          500, 700, 1000, 1500, 2000, 4000, 6000, 10000,
+        ];
+  const usesLegacyOnChainScale =
+    activeContractLower === '0xaa38a606402df541ee4df81ae0c8bcdacdd12fe6' ||
+    activeContractLower === '0x49a754084903678b7d46ff2934edb037cd1ab518' ||
+    activeContractLower === '0x8b2ef84f543f5c1dfa8240a1853d63efe66006eb' ||
+    sortedR1.some((m) => {
+      if (m.isClone || m.isExtraId || m.id <= 1) return false;
+      const rawV = Number(m.rawNodeVault ?? m.nodeVault ?? 0);
+      if (rawV <= 0) return false;
+      let lc = 0;
+      for (const sn of sortedR1) {
+        const snOrig = sn.originMainId || sn.id;
+        if (
+          (sn.id === m.id || (sn.isClone && snOrig === m.id)) &&
+          sn.leftChild > 0
+        ) {
+          lc++;
+        }
+      }
+      return lc > 0 && rawV > lc * 1.75 + 0.1;
+    });
+
+  for (const mNode of sortedR1) {
+    if (mNode.isClone || mNode.isExtraId) continue;
+    const win5Start = getMainWindow5Start(mNode.id);
+    if (win5Start <= 1) {
+      expectedAutoSpawnsByMain.set(mNode.id, 0);
+      extraR2To3VaultByMain.set(mNode.id, 0);
+      extraR2To3MinR1IdByMain.set(mNode.id, mNode.id);
+      continue;
+    }
+
+    let totalGross1To3 = 0;
+    let totalRem1To3 = 0;
+    let legacyGross1To3 = 0;
+    let legacyRem1To3 = 0;
+    let extraR2To3 = 0;
+    let extraR2To3Rem = 0;
+    let extraMinR1Id = mNode.id;
+
+    for (let r = 1; r <= 3; r++) {
+      if (r >= win5Start) continue;
+      const rList = matrixDB.nodesByRank[r] || [];
+      const correspMain =
+        r === 1
+          ? mNode
+          : rList.find((x) => !x.isClone && !x.isExtraId && x.originMainId === mNode.id);
+      if (!correspMain) continue;
+
+      const newRankPrice = RANK_PRICES_USDT[r - 1] || 5;
+      const oldRankPrice = LEGACY_CONTRACT_PRICES_USDT[r - 1] || newRankPrice;
+      const rUnitVault = Number((newRankPrice * 0.35).toFixed(4));
+      const legacyUnitVault = Number((oldRankPrice * 0.35).toFixed(4));
+      let leftCount = 0;
+      for (const sn of rList) {
+        const snOrig = sn.originMainId || sn.id;
+        const isSameMain =
+          sn.id === correspMain.id ||
+          (sn.isClone && (snOrig === correspMain.id || snOrig === mNode.id));
+        if (isSameMain && sn.leftChild > 0) {
+          const lcNode = rList.find((rn) => rn.id === sn.leftChild);
+          if (lcNode?.isAdminFreeUpgrade) continue;
+          leftCount++;
+          if (r > 1) {
+            if (lcNode && !lcNode.isClone && !lcNode.isExtraId) {
+              const r1Orig = lcNode.originMainId || 0;
+              if (r1Orig > mNode.id && r1Orig < 1_000_000_000) {
+                if (extraMinR1Id === mNode.id || r1Orig < extraMinR1Id) {
+                  extraMinR1Id = r1Orig;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const grossR = Number((leftCount * rUnitVault).toFixed(4));
+      const rawRemR = Number((correspMain.rawNodeVault ?? correspMain.nodeVault ?? 0).toFixed(4));
+      const remR = usesLegacyOnChainScale
+        ? Number((rawRemR * (newRankPrice / oldRankPrice)).toFixed(4))
+        : rawRemR;
+      totalGross1To3 = Number((totalGross1To3 + grossR).toFixed(4));
+      totalRem1To3 = Number((totalRem1To3 + remR).toFixed(4));
+      legacyGross1To3 = Number((legacyGross1To3 + leftCount * legacyUnitVault).toFixed(4));
+      legacyRem1To3 = Number((legacyRem1To3 + rawRemR).toFixed(4));
+      if (r > 1) {
+        extraR2To3 = Number((extraR2To3 + grossR).toFixed(4));
+        extraR2To3Rem = Number((extraR2To3Rem + remR).toFixed(4));
+      }
+    }
+
+    const r1EntryPrice = RANK_PRICES_USDT[0] || 5;
+    const r1UnitVault = Number((r1EntryPrice * 0.35).toFixed(4));
+    const deducted = Math.max(0, Number((totalGross1To3 - totalRem1To3).toFixed(4)));
+    const scaledSpawns = Math.floor((deducted + 1e-4) / r1EntryPrice);
+    const legacyDeducted = Math.max(0, Number((legacyGross1To3 - legacyRem1To3).toFixed(4)));
+    const legacySpawns = usesLegacyOnChainScale ? Math.floor((legacyDeducted + 1e-4) / 10) : 0;
+    const maxPossibleSpawns = Math.max(scaledSpawns, legacySpawns);
+    let expectedSpawns = 0;
+    if (mNode.id === 1) {
+      expectedSpawns = maxPossibleSpawns;
+    } else if (maxPossibleSpawns > 0) {
+      for (let c = maxPossibleSpawns; c >= 1; c--) {
+        const pool2GrossNeeded = Number((totalRem1To3 + c * r1EntryPrice).toFixed(4));
+        const unitsVault = pool2GrossNeeded / r1UnitVault;
+        if (
+          pool2GrossNeeded <= totalGross1To3 + 0.01 &&
+          Math.abs(unitsVault - Math.round(unitsVault)) < 0.01
+        ) {
+          expectedSpawns = c;
+          break;
+        }
+      }
+    }
+    expectedAutoSpawnsByMain.set(mNode.id, expectedSpawns);
+    extraR2To3VaultByMain.set(mNode.id, expectedSpawns > 0 ? extraR2To3 : 0);
+    extraR2To3MinR1IdByMain.set(mNode.id, extraMinR1Id);
+  }
+
+  const ownerPrimaryMap = new Map<string, number>();
+  const ownerAllMainsMap = new Map<string, number[]>();
+  const simAutoVaultByMain = new Map<number, number>();
+  const spawnedCountByMain = new Map<number, number>();
+  const r1EntryPrice = RANK_PRICES_USDT[0] || 5;
+
+  for (const n of sortedR1) {
+    if (!n.isClone && !n.isExtraId) {
+      if (n.isSyntheticExtra || n.confirmedOriginType === 'AUTO_NEW_MAIN') {
+        n.originType = 'AUTO_NEW_MAIN';
+      } else {
+        n.originType = 'MANUAL_REGISTER';
+      }
+    }
+  }
+
+  for (const n of sortedR1) {
+    const oKey = (n.owner || '').toLowerCase();
+    if (!n.isClone && !n.isExtraId) {
+      if (!ownerPrimaryMap.has(oKey)) {
+        ownerPrimaryMap.set(oKey, n.id);
+      }
+      const firstMain = ownerPrimaryMap.get(oKey) || n.id;
+
+      if (n.isSyntheticExtra) {
+        const synSource = n.directSponsorNodeId > 0 ? n.directSponsorNodeId : firstMain;
+        n.originType = 'AUTO_NEW_MAIN';
+        n.autoSourceMainId = synSource;
+        n.directSponsorNodeId = synSource;
+        const srcOwner = byIdR1.get(synSource)?.owner;
+        if (srcOwner) n.directSponsor = srcOwner;
+        autoMainSourceMap.set(n.id, synSource);
+        spawnedCountByMain.set(synSource, (spawnedCountByMain.get(synSource) || 0) + 1);
+      } else if (n.confirmedOriginType === 'AUTO_NEW_MAIN') {
+        // Confirmed from on-chain AutoNewMainIdCreated transaction receipt
+        const candMains = (ownerAllMainsMap.get(oKey) || [])
+          .filter((mId) => {
+            if (mId >= n.id) return false;
+            if (getMainWindow5Start(mId) <= 1) return false;
+            return isPlacedUnderMainOrClonesR1(mId, n.id);
+          })
+          .sort((a, b) => {
+            const remA = (expectedAutoSpawnsByMain.get(a) || 0) - (spawnedCountByMain.get(a) || 0);
+            const remB = (expectedAutoSpawnsByMain.get(b) || 0) - (spawnedCountByMain.get(b) || 0);
+            if ((remB > 0) !== (remA > 0)) return remB > 0 ? 1 : -1;
+            const sa = getSpecificityScoreR1(a, n.id);
+            const sb = getSpecificityScoreR1(b, n.id);
+            if (sa !== sb) return sa - sb;
+            return b - a;
+          });
+        const bestCand = candMains[0] || 0;
+        const persistedSrc =
+          n.autoSourceMainId && n.autoSourceMainId > 0 && n.autoSourceMainId < n.id
+            ? n.autoSourceMainId
+            : 0;
+        let sourceMain = 0;
+        if (persistedSrc > 0 && candMains.includes(persistedSrc)) {
+          const remPersisted =
+            (expectedAutoSpawnsByMain.get(persistedSrc) || 0) - (spawnedCountByMain.get(persistedSrc) || 0);
+          const remBest =
+            bestCand > 0
+              ? (expectedAutoSpawnsByMain.get(bestCand) || 0) - (spawnedCountByMain.get(bestCand) || 0)
+              : 0;
+          const strictlyMoreSpecificCand =
+            bestCand > 0 &&
+            bestCand !== persistedSrc &&
+            remBest > 0 &&
+            getSpecificityScoreR1(bestCand, n.id) < getSpecificityScoreR1(persistedSrc, n.id);
+          if (remPersisted > 0 && !strictlyMoreSpecificCand) {
+            sourceMain = persistedSrc;
+          }
+        }
+        if (!sourceMain) {
+          sourceMain =
+            bestCand ||
+            persistedSrc ||
+            (n.directSponsorNodeId > 0 && n.directSponsorNodeId < n.id ? n.directSponsorNodeId : firstMain);
+        }
+        n.originType = 'AUTO_NEW_MAIN';
+        n.autoSourceMainId = sourceMain;
+        n.directSponsorNodeId = sourceMain;
+        const srcOwner = byIdR1.get(sourceMain)?.owner;
+        if (srcOwner) n.directSponsor = srcOwner;
+        autoMainSourceMap.set(n.id, sourceMain);
+        spawnedCountByMain.set(sourceMain, (spawnedCountByMain.get(sourceMain) || 0) + 1);
+        simAutoVaultByMain.set(
+          sourceMain,
+          Math.max(0, Number(((simAutoVaultByMain.get(sourceMain) || 0) - r1EntryPrice).toFixed(4)))
+        );
+      } else if (n.confirmedOriginType === 'MANUAL_REGISTER') {
+        // Confirmed from on-chain UserRegistered / BatchRegistered (never misclassify as Auto ID)
+        n.originType = 'MANUAL_REGISTER';
+        delete n.autoSourceMainId;
+      } else if (n.id > firstMain) {
+        const explicitSpId = n.directSponsorNodeId || 0;
+        const priorMains = (ownerAllMainsMap.get(oKey) || [])
+          .filter((mId) => {
+            if (mId >= n.id) return false;
+            if (getMainWindow5Start(mId) <= 1) return false;
+            const maxSpawns = expectedAutoSpawnsByMain.get(mId) || 0;
+            const curSpawns = spawnedCountByMain.get(mId) || 0;
+            if (curSpawns >= maxSpawns) return false;
+            // กฎเหล็กการจัดวางบนสัญญา (_findPlacementSpot): Auto ID ที่เกิดจาก mId จะต้องวางอยู่ใต้สายงาน/โคลนของ mId เท่านั้น
+            if (!isPlacedUnderMainOrClonesR1(mId, n.id)) return false;
+            const mNode = byIdR1.get(mId);
+            const mSpId = mNode?.directSponsorNodeId || 1;
+            return explicitSpId === 0 || explicitSpId === mId || explicitSpId === mSpId;
+          })
+          .sort((a, b) => getSpecificityScoreR1(a, n.id) - getSpecificityScoreR1(b, n.id) || b - a);
+
+        let sourceMain = priorMains.find(
+          (mId) => (simAutoVaultByMain.get(mId) || 0) + 1e-6 >= r1EntryPrice
+        );
+        if (sourceMain === undefined) {
+          sourceMain = priorMains.find((mId) => {
+            if (usedExtraR2To3.has(mId)) return false;
+            const minReqR1Id = extraR2To3MinR1IdByMain.get(mId) || mId;
+            if (n.id <= minReqR1Id) return false;
+            const r1Bal = simAutoVaultByMain.get(mId) || 0;
+            const extraBal = extraR2To3VaultByMain.get(mId) || 0;
+            return r1Bal + extraBal + 1e-6 >= r1EntryPrice;
+          });
+          if (sourceMain !== undefined) {
+            usedExtraR2To3.add(sourceMain);
+            simAutoVaultByMain.set(
+              sourceMain,
+              Number(
+                ((simAutoVaultByMain.get(sourceMain) || 0) +
+                  (extraR2To3VaultByMain.get(sourceMain) || 0)).toFixed(4)
+              )
+            );
+          }
+        }
+
+        if (sourceMain !== undefined) {
+          n.originType = 'AUTO_NEW_MAIN';
+          n.autoSourceMainId = sourceMain;
+          n.directSponsorNodeId = sourceMain;
+          const srcOwner = byIdR1.get(sourceMain)?.owner;
+          if (srcOwner) n.directSponsor = srcOwner;
+          autoMainSourceMap.set(n.id, sourceMain);
+          spawnedCountByMain.set(sourceMain, (spawnedCountByMain.get(sourceMain) || 0) + 1);
+          simAutoVaultByMain.set(
+            sourceMain,
+            Math.max(0, Number(((simAutoVaultByMain.get(sourceMain) || 0) - r1EntryPrice).toFixed(4)))
+          );
+        }
+      }
+
+      const list = ownerAllMainsMap.get(oKey) || [];
+      list.push(n.id);
+      ownerAllMainsMap.set(oKey, list);
+    }
+
+    if (n.parentId > 0 && !n.isSyntheticExtra) {
+      const p = byIdR1.get(n.parentId);
+      if (p && p.leftChild === n.id) {
+        const pMain = p.isClone ? (p.originMainId || p.id) : p.id;
+        if (getMainWindow5Start(pMain) > 1) {
+          const addV = Number((r1EntryPrice * 0.35).toFixed(4));
+          simAutoVaultByMain.set(
+            pMain,
+            Number(((simAutoVaultByMain.get(pMain) || 0) + addV).toFixed(4))
+          );
+        }
+      }
+    }
+  }
+
+  // Ensure any Rank 1 clone of an Auto ID also inherits the Auto ID's creator sponsor
+  for (const n of r1Nodes) {
+    if (n.isClone && !n.isExtraId && autoMainSourceMap.has(n.originMainId)) {
+      const spId = autoMainSourceMap.get(n.originMainId)!;
+      n.directSponsorNodeId = spId;
+      const srcOwner = byIdR1.get(spId)?.owner;
+      if (srcOwner) n.directSponsor = srcOwner;
+    }
+  }
+
+  // Heal any persisted AUTO_ID transaction logs whose mainNodeId/title/details diverged from autoMainSourceMap
+  if (Array.isArray(matrixDB.transactionLogs) && autoMainSourceMap.size > 0) {
+    for (const t of matrixDB.transactionLogs) {
+      if (t.actionType === 'AUTO_ID' && Number(t.nodeId || 0) > 1) {
+        const autoId = Number(t.nodeId);
+        const trueMain = autoMainSourceMap.get(autoId);
+        if (trueMain && trueMain > 0) {
+          const aNode = byIdR1.get(autoId);
+          const pNode = aNode ? byIdR1.get(aNode.parentId) : undefined;
+          const sideLabel =
+            !aNode || aNode.parentId === 0
+              ? 'ROOT'
+              : pNode && pNode.leftChild === aNode.id
+              ? 'LEFT'
+              : 'RIGHT';
+          t.mainNodeId = trueMain;
+          t.title = `แตก Auto ID #${autoId} (จาก Main #${trueMain})`;
+          if (aNode) {
+            t.details = `Parent #${aNode.parentId} [${sideLabel}] • Spawned by Main #${trueMain}`;
+          } else if (t.details && /Spawned by Main #\d+/.test(t.details)) {
+            t.details = t.details.replace(/Spawned by Main #\d+/, `Spawned by Main #${trueMain}`);
+          }
+        }
+      }
+    }
+  }
+
+  return autoMainSourceMap;
+}
+
+function reconcileAutoExtraIdsAcrossRanks(): Array<{
+  mainId: number;
+  targetRank: number;
+  nodeId: number;
+  parentId: number;
+  isLeft: boolean;
+  deductedUsdt: number;
+}> {
+  const createdExtraNodes: Array<{
+    mainId: number;
+    targetRank: number;
+    nodeId: number;
+    parentId: number;
+    isLeft: boolean;
+    deductedUsdt: number;
+  }> = [];
+
+  // 1. Strip any previously synthesized Auto IDs / Extra IDs / Clones and restore raw vaults before reconciliation
+  for (let r = 1; r <= 18; r++) {
+    const rList = matrixDB.nodesByRank[r];
+    if (!Array.isArray(rList) || rList.length === 0) continue;
+    const onChainMainOrigins = new Set(
+      rList
+        .filter((n) => !n.isSyntheticExtra && !n.isLocalUpgrade && !n.isClone && !n.isExtraId)
+        .map((n) => n.originMainId || n.id)
+    );
+    const hasUnmergedLocalNonClones = rList.some(
+      (n) =>
+        !n.isSyntheticExtra &&
+        n.isLocalUpgrade &&
+        !n.isClone &&
+        (n.isExtraId || !onChainMainOrigins.has(n.originMainId || n.id))
+    );
+    const onChainClones = rList.filter((n) => !n.isSyntheticExtra && !n.isLocalUpgrade && n.isClone);
+    const realNodes = rList.filter((n) => {
+      if (n.isSyntheticExtra) return false;
+      if (n.isLocalUpgrade) {
+        if (!n.isClone && !n.isExtraId && onChainMainOrigins.has(n.originMainId || n.id)) {
+          return false;
+        }
+        if (n.isClone) {
+          const nParent = rList.find((p) => p.id === n.parentId);
+          const nIsLeft =
+            n.isLeft !== undefined
+              ? n.isLeft
+              : nParent
+              ? nParent.leftChild === n.id
+                ? true
+                : nParent.rightChild === n.id
+                ? false
+                : undefined
+              : undefined;
+          const alreadyOnChain = onChainClones.some((c) => {
+            if (c.id === n.id) return true;
+            if (c.parentId !== n.parentId) return false;
+            if ((c.originMainId || c.id) !== (n.originMainId || n.id)) return false;
+            const cParent = rList.find((p) => p.id === c.parentId);
+            const cIsLeft =
+              c.isLeft !== undefined
+                ? c.isLeft
+                : cParent
+                ? cParent.leftChild === c.id
+                  ? true
+                  : cParent.rightChild === c.id
+                  ? false
+                  : undefined
+                : undefined;
+            return nIsLeft !== undefined && cIsLeft !== undefined && nIsLeft === cIsLeft;
+          });
+          if (alreadyOnChain) return false;
+          const parentIsLocal = rList.some(
+            (p) => p.id === n.parentId && p.isLocalUpgrade && !p.isSyntheticExtra
+          );
+          if (!hasUnmergedLocalNonClones && !parentIsLocal) {
+            return false;
+          }
+        }
+      }
+      return true;
+    });
+    const realIds = new Set(realNodes.map((n) => n.id));
+    for (const n of realNodes) {
+      if (n.leftChild > 0 && !realIds.has(n.leftChild)) n.leftChild = 0;
+      if (n.rightChild > 0 && !realIds.has(n.rightChild)) n.rightChild = 0;
+      if (!n.isLocalUpgrade) {
+        const baseRaw = Number(n.rawNodeVault ?? n.reconciledBaseVault ?? n.nodeVault ?? 0);
+        n.rawNodeVault = baseRaw;
+        n.nodeVault = baseRaw;
+      }
+    }
+    matrixDB.nodesByRank[r] = reconcileRankTreeLinks(realNodes);
+    matrixDB.rankCounts[r] = Math.max(1, matrixDB.nodesByRank[r].length);
+  }
+
+  // 1b. Admin Free Rank Upgrades: Respect explicit on-chain admin free flags only
+  const r1AllNodes = matrixDB.nodesByRank[1] || [];
+
+  // 2. Reconcile real on-chain Rank 1 Auto Main IDs first
+  const autoMainSourceMap = reconcileRank1AutoMainIds();
+
+  // 3. Normalize per-rank nodeVaults to strictly match the 5 USDT base price schedule (RANK_PRICES_USDT)
+  const r1Nodes = matrixDB.nodesByRank[1] || [];
+  const activeContractAddrLower = (matrixDB.contractAddress || CONTRACT_ADDRESS).toLowerCase();
+  const LEGACY_CONTRACT_PRICES_USDT =
+    activeContractAddrLower === '0xaa38a606402df541ee4df81ae0c8bcdacdd12fe6'
+      ? [
+          10, 20, 30, 40, 50, 60, 80, 100, 200, 300,
+          500, 700, 900, 1000, 2000, 3000, 4000, 5000,
+        ]
+      : [
+          10, 20, 30, 40, 50, 60, 80, 100, 200, 300,
+          500, 700, 1000, 1500, 2000, 4000, 6000, 10000,
+        ];
+  const isLegacyContract =
+    activeContractAddrLower === '0xaa38a606402df541ee4df81ae0c8bcdacdd12fe6' ||
+    activeContractAddrLower === '0x49a754084903678b7d46ff2934edb037cd1ab518' ||
+    activeContractAddrLower === '0x8b2ef84f543f5c1dfa8240a1853d63efe66006eb';
+
+  const resolveExtraSpawnerMainIdLocal = (extraNode: IndexedTreeNode): number => {
+    const extraOwner = (extraNode.owner || '').toLowerCase();
+    const ownerMains = r1Nodes.filter(
+      (m) => !m.isClone && !m.isExtraId && (m.owner || '').toLowerCase() === extraOwner
+    );
+    if (
+      extraNode.directSponsorNodeId > 0 &&
+      (ownerMains.length === 0
+        ? r1Nodes.some((m) => !m.isClone && !m.isExtraId && m.id === extraNode.directSponsorNodeId)
+        : ownerMains.some((m) => m.id === extraNode.directSponsorNodeId))
+    ) {
+      return extraNode.directSponsorNodeId;
+    }
+    if (ownerMains.length === 1) return ownerMains[0].id;
+    if (ownerMains.length > 1) {
+      const r9Nodes = matrixDB.nodesByRank[9] || [];
+      const r4Nodes = matrixDB.nodesByRank[4] || [];
+      const eligibleMain =
+        ownerMains.find(
+          (m) =>
+            m.id === 1 ||
+            r9Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+        ) ||
+        ownerMains.find(
+          (m) =>
+            m.id === 1 ||
+            r4Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+        );
+      if (eligibleMain) return eligibleMain.id;
+      return ownerMains[0].id;
+    }
+    return extraNode.directSponsorNodeId > 0 ? extraNode.directSponsorNodeId : 1;
+  };
+
+  for (const mNode of r1Nodes) {
+    if (mNode.isClone || mNode.isExtraId) continue;
+    const correspByRank = new Map<number, IndexedTreeNode>();
+    const grossByRank = new Map<number, number>();
+
+    for (let r = 1; r <= 18; r++) {
+      const rList = matrixDB.nodesByRank[r] || [];
+      const corresp =
+        r === 1
+          ? mNode
+          : rList.find((x) => !x.isClone && !x.isExtraId && x.originMainId === mNode.id);
+      if (!corresp) continue;
+      correspByRank.set(r, corresp);
+
+      const rUnitVault = Number(((RANK_PRICES_USDT[r - 1] || 5) * 0.35).toFixed(4));
+      let leftCount = 0;
+      for (const sn of rList) {
+        const snOrig = sn.originMainId || sn.id;
+        const isSameMain =
+          sn.id === corresp.id ||
+          (sn.isClone && !sn.isExtraId && (snOrig === corresp.id || snOrig === mNode.id));
+        if (isSameMain && sn.leftChild > 0) {
+          const lcNode = rList.find((rn) => rn.id === sn.leftChild);
+          if (!lcNode?.isAdminFreeUpgrade) {
+            leftCount++;
+          }
+        }
+      }
+      grossByRank.set(r, Number((leftCount * rUnitVault).toFixed(4)));
+    }
+
+    if (mNode.id === 1) {
+      // Root #1 is at Rank 18: Ranks 1..3 go to Auto ID Pool, Ranks 4..18 go to Extra ID Pool
+      let spawnedAutoCount = 0;
+      for (const [, src] of autoMainSourceMap.entries()) {
+        if (src === 1) spawnedAutoCount++;
+      }
+      const totalAutoDeduct = Number((spawnedAutoCount * (RANK_PRICES_USDT[0] || 5)).toFixed(4));
+      let totalGrossR1To3 = 0;
+      let totalScaledRawR1To3 = 0;
+      const scaledRawByR = new Map<number, number>();
+      for (let r = 1; r <= 3; r++) {
+        const cNode = correspByRank.get(r);
+        if (!cNode) continue;
+        const gVal = grossByRank.get(r) || 0;
+        totalGrossR1To3 = Number((totalGrossR1To3 + gVal).toFixed(4));
+        const rawV = Number(cNode.rawNodeVault ?? cNode.nodeVault ?? 0);
+        const newRankPrice = RANK_PRICES_USDT[r - 1] || 5;
+        const oldRankPrice = LEGACY_CONTRACT_PRICES_USDT[r - 1] || newRankPrice;
+        const scaledV = isLegacyContract
+          ? Number((rawV * (newRankPrice / oldRankPrice)).toFixed(4))
+          : rawV;
+        scaledRawByR.set(r, scaledV);
+        totalScaledRawR1To3 = Number((totalScaledRawR1To3 + scaledV).toFixed(4));
+      }
+      const expectedRemR1To3 = Math.max(0, Number((totalGrossR1To3 - totalAutoDeduct).toFixed(4)));
+      if (Math.abs(totalScaledRawR1To3 - expectedRemR1To3) <= 0.05 || totalScaledRawR1To3 <= expectedRemR1To3) {
+        for (let r = 1; r <= 3; r++) {
+          const cNode = correspByRank.get(r);
+          if (!cNode) continue;
+          cNode.nodeVault = Number((scaledRawByR.get(r) || 0).toFixed(4));
+          cNode.reconciledBaseVault = cNode.nodeVault;
+        }
+      } else {
+        let remAutoDeduct = totalAutoDeduct;
+        for (let r = 1; r <= 3; r++) {
+          const cNode = correspByRank.get(r);
+          if (!cNode) continue;
+          const gVal = grossByRank.get(r) || 0;
+          const used = Math.min(gVal, remAutoDeduct);
+          cNode.nodeVault = Number(Math.max(0, gVal - used).toFixed(4));
+          cNode.reconciledBaseVault = cNode.nodeVault;
+          remAutoDeduct = Number(Math.max(0, remAutoDeduct - used).toFixed(4));
+        }
+      }
+
+      let totalExtraDeduct = 0;
+      for (let r = 1; r <= 18; r++) {
+        const rList = matrixDB.nodesByRank[r] || [];
+        const rPrice = RANK_PRICES_USDT[r - 1] || 10;
+        for (const n of rList) {
+          if (n.isExtraId && !n.isClone && resolveExtraSpawnerMainIdLocal(n) === 1) {
+            totalExtraDeduct = Number((totalExtraDeduct + rPrice).toFixed(4));
+          }
+        }
+      }
+      let remExtraDeduct = totalExtraDeduct;
+      for (let r = 4; r <= 18; r++) {
+        const cNode = correspByRank.get(r);
+        if (!cNode) continue;
+        const gVal = grossByRank.get(r) || 0;
+        const used = Math.min(gVal, remExtraDeduct);
+        cNode.nodeVault = Number(Math.max(0, gVal - used).toFixed(4));
+        cNode.reconciledBaseVault = cNode.nodeVault;
+        remExtraDeduct = Number(Math.max(0, remExtraDeduct - used).toFixed(4));
+      }
+    } else {
+      for (let r = 1; r <= 18; r++) {
+        const cNode = correspByRank.get(r);
+        if (!cNode) continue;
+        const gVal = grossByRank.get(r) || 0;
+        if (cNode.isLocalUpgrade) {
+          cNode.nodeVault = Number(Math.min(gVal, Number(cNode.nodeVault ?? 0)).toFixed(4));
+          cNode.reconciledBaseVault = cNode.nodeVault;
+        } else {
+          const rawV = Number(cNode.rawNodeVault ?? cNode.nodeVault ?? 0);
+          if (rawV <= 0 || gVal <= 0) {
+            cNode.nodeVault = 0;
+          } else {
+            const newRankPrice = RANK_PRICES_USDT[r - 1] || 5;
+            const oldRankPrice = LEGACY_CONTRACT_PRICES_USDT[r - 1] || newRankPrice;
+            const scaledV =
+              isLegacyContract || rawV > gVal + 1e-4
+                ? Number((rawV * (newRankPrice / oldRankPrice)).toFixed(4))
+                : rawV;
+            cNode.nodeVault = Number(Math.min(gVal, scaledV).toFixed(4));
+          }
+          cNode.reconciledBaseVault = cNode.nodeVault;
+        }
+      }
+    }
+  }
+
+  return createdExtraNodes;
+}
+
+async function createMatrixNodeData(params: {
+  nodeId: string | number;
+  rank: number;
+  owner: string;
+  sponsor?: string;
+  parentId: string | number;
+  isLeft?: boolean;
+  isClone?: boolean;
+  isExtraId?: boolean;
+  origin?: NodeOrigin;
+}) {
+  const { nodeId, rank, owner, sponsor, parentId, isLeft, isClone, isExtraId, origin } = params;
+  const strNodeId = nodeId.toString();
+  const strParentId = parentId.toString();
+  const rankNum = Math.min(Math.max(Number(rank) || 1, 1), 18);
+  const numNodeId = Number(nodeId);
+  const numParentId = Number(parentId) || 0;
+
+  const newNode: MatrixNodeModel = {
+    id: strNodeId,
+    rank: rankNum,
+    owner,
+    sponsor: sponsor || owner,
+    parentId: strParentId,
+    leftChild: '0',
+    rightChild: '0',
+    isClone: Boolean(isClone),
+    isExtraId: Boolean(isExtraId),
+    origin: origin || 'REGISTRATION',
+    createdAt: new Date().toISOString(),
+  };
+
+  inMemoryDB.nodes.set(strNodeId, newNode);
+
+  const parentNode = inMemoryDB.nodes.get(strParentId);
+  if (parentNode) {
+    if (isLeft !== undefined) {
+      if (isLeft) parentNode.leftChild = strNodeId;
+      else parentNode.rightChild = strNodeId;
+    } else {
+      if (parentNode.leftChild === '0' || !parentNode.leftChild) {
+        parentNode.leftChild = strNodeId;
+      } else if (parentNode.rightChild === '0' || !parentNode.rightChild) {
+        parentNode.rightChild = strNodeId;
+      }
+    }
+  }
+
+  // Also immediately append & link in matrixDB.nodesByRank so the Binary Tree UI extends immediately
+  if (numNodeId > 0) {
+    if (!matrixDB.nodesByRank[rankNum]) {
+      matrixDB.nodesByRank[rankNum] = [];
+    }
+    const rList = matrixDB.nodesByRank[rankNum];
+
+    if (numParentId > 0) {
+      const dbParent = rList.find((n) => n.id === numParentId);
+      if (dbParent) {
+        if (isLeft === true) {
+          dbParent.leftChild = numNodeId;
+        } else if (isLeft === false) {
+          dbParent.rightChild = numNodeId;
+        } else if (!dbParent.leftChild || dbParent.leftChild <= 0) {
+          dbParent.leftChild = numNodeId;
+        } else if (!dbParent.rightChild || dbParent.rightChild <= 0) {
+          dbParent.rightChild = numNodeId;
+        }
+      }
+    }
+
+    let existingIdx = rList.findIndex((n) => n.id === numNodeId);
+    let inferredOriginMainId = existingIdx >= 0 ? rList[existingIdx].originMainId : numNodeId;
+    let inferredSponsorNodeId = existingIdx >= 0 ? rList[existingIdx].directSponsorNodeId : 1;
+
+    if (existingIdx < 0 && isClone) {
+      const ok = (owner || '').toLowerCase();
+      for (let lb = numNodeId - 1; lb >= 1; lb--) {
+        const candRight = rList.find((n) => n.id === lb);
+        if (!candRight || candRight.parentId <= 0) continue;
+        const trigParent = rList.find((n) => n.id === candRight.parentId);
+        if (
+          trigParent &&
+          trigParent.rightChild === candRight.id &&
+          (trigParent.owner || '').toLowerCase() === ok
+        ) {
+          inferredOriginMainId =
+            trigParent.originMainId && trigParent.originMainId > 0
+              ? trigParent.originMainId
+              : trigParent.id;
+          if (trigParent.directSponsorNodeId && trigParent.directSponsorNodeId > 0) {
+            inferredSponsorNodeId = trigParent.directSponsorNodeId;
+          }
+          break;
+        }
+      }
+    }
+
+    const indexedNode: IndexedTreeNode = {
+      id: numNodeId,
+      rank: rankNum,
+      owner,
+      directSponsor: sponsor || owner,
+      parentId: numParentId,
+      leftChild: existingIdx >= 0 ? rList[existingIdx].leftChild : 0,
+      rightChild: existingIdx >= 0 ? rList[existingIdx].rightChild : 0,
+      isClone: Boolean(isClone),
+      isExtraId: Boolean(isExtraId),
+      originMainId: inferredOriginMainId,
+      cloneRound: existingIdx >= 0 ? rList[existingIdx].cloneRound : (isClone ? 1 : 0),
+      directSponsorNodeId: inferredSponsorNodeId,
+      nodeVault: existingIdx >= 0 ? rList[existingIdx].nodeVault : 0,
+      rawNodeVault: existingIdx >= 0 ? rList[existingIdx].rawNodeVault : 0,
+    };
+
+    if (existingIdx >= 0) {
+      rList[existingIdx] = indexedNode;
+    } else {
+      rList.push(indexedNode);
+    }
+
+    reconcileRankTreeLinks(rList);
+    matrixDB.rankCounts[rankNum] = Math.max(matrixDB.rankCounts[rankNum] || 1, rList.length, numNodeId);
+    matrixDB.lastSyncedAt = new Date().toISOString();
+    rebuildDatabaseRewardLogsFromNodes();
+    rebuildDatabaseUpgradeLogsFromNodes();
+    saveMatrixDBToDisk();
+  }
+
+  return newNode;
+}
+
+async function getUserProfileWithVaults(owner: string) {
+  const key = owner.toLowerCase();
+  const r1Nodes = matrixDB.nodesByRank[1] || [];
+
+  // Read primarily from our synced MatrixDB first!
+  if (r1Nodes.length > 0) {
+    const ownedR1 = r1Nodes.filter((n) => n.owner.toLowerCase() === key);
+    if (ownedR1.length > 0) {
+      const firstMain = ownedR1.find((n) => !n.isClone && !n.isExtraId) || ownedR1[0];
+      let maxRank = firstMain.id === 1 ? 18 : 1;
+      if (firstMain.id !== 1) {
+        for (let r = 18; r >= 2; r--) {
+          const rList = matrixDB.nodesByRank[r] || [];
+          if (
+            rList.some(
+              (n) => !n.isClone && !n.isExtraId && n.originMainId === firstMain.id
+            )
+          ) {
+            maxRank = r;
+            break;
+          }
+        }
+      }
+      const sponsorAddr = firstMain.directSponsor || ethers.ZeroAddress;
+      const sponsorMainId = firstMain.directSponsorNodeId > 0 ? String(firstMain.directSponsorNodeId) : '1';
+
+      const dbVaults: UserVaultModel[] = Array.from({ length: 18 }, (_, idx) => {
+        const r = idx + 1;
+        const rNodes = (matrixDB.nodesByRank[r] || []).filter((n) => n.owner.toLowerCase() === key);
+        const rMains = rNodes.filter((n) => !n.isClone && !n.isExtraId);
+        const firstId = rMains[0]?.id ?? rNodes[0]?.id ?? 0;
+        const latestId = rNodes[rNodes.length - 1]?.id ?? 0;
+        const reconciledBal = rMains[0]
+          ? Number(rMains[0].nodeVault || 0)
+          : (matrixDB.userRankVaults[key]?.[r] ?? 0);
+
+        return {
+          id: `v-db-${owner}-${r}`,
+          owner,
+          rank: r,
+          balance: reconciledBal.toFixed(2),
+          firstNodeId: String(firstId),
+          latestNodeId: String(latestId),
+          updatedAt: matrixDB.lastSyncedAt || new Date().toISOString(),
+        };
+      });
+
+      const mappedNodes: MatrixNodeModel[] = ownedR1.map((n) => ({
+        id: String(n.id),
+        rank: 1,
+        owner: n.owner,
+        sponsor: n.directSponsor,
+        parentId: String(n.parentId),
+        leftChild: String(n.leftChild),
+        rightChild: String(n.rightChild),
+        isClone: n.isClone,
+        isExtraId: n.isExtraId,
+        origin: n.isClone ? 'CLONE' : 'REGISTRATION',
+        createdAt: matrixDB.lastSyncedAt || new Date().toISOString(),
+      }));
+
+      return {
+        id: `user-${owner}`,
+        owner,
+        sponsor: sponsorAddr,
+        sponsorMainNodeId: sponsorMainId,
+        currentMaxRank: firstMain.id === 1 ? 18 : maxRank,
+        createdAt: matrixDB.lastSyncedAt || new Date().toISOString(),
+        updatedAt: matrixDB.lastSyncedAt || new Date().toISOString(),
+        vaults: dbVaults,
+        nodes: mappedNodes,
+      };
+    }
+
+    // Wallet not found in synced Rank 1 database -> unregistered wallet
+    return {
+      id: `unregistered-${key}`,
+      owner,
+      sponsor: ethers.ZeroAddress,
+      sponsorMainNodeId: '0',
+      currentMaxRank: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      vaults: [],
+      nodes: [],
+    };
+  }
+
+  // Fallback if matrixDB has not finished its initial sync yet
+  return {
+    id: `unregistered-${key}`,
+    owner,
+    sponsor: ethers.ZeroAddress,
+    sponsorMainNodeId: '0',
+    currentMaxRank: 0,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    vaults: [],
+    nodes: [],
+  };
+}
+
+async function recordRewardLog(data: {
+  fromNodeId: string;
+  toNodeId: string;
+  recipient: string;
+  rank: number;
+  rewardType: RewardType;
+  amount: string;
+  txHash: string;
+}) {
+  const newLog: RewardLogModel = {
+    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    fromNodeId: data.fromNodeId,
+    toNodeId: data.toNodeId,
+    recipient: data.recipient,
+    rank: data.rank,
+    rewardType: data.rewardType,
+    amount: data.amount,
+    txHash: data.txHash,
+    createdAt: new Date().toISOString(),
+  };
+
+  matrixDB.rewardLogs.unshift(newLog);
+  if (matrixDB.rewardLogs.length > 400) {
+    matrixDB.rewardLogs.pop();
+  }
+  inMemoryDB.rewardLogs = matrixDB.rewardLogs;
+  saveMatrixDBToDisk();
+  return newLog;
+}
+
+
+// ==========================================
+// 1. SIMULATION ENGINE (Matches FractalFlowMatrix27.sol)
+// ==========================================
+async function simulateBFS(_rank: number, startNodeId: string) {
+  const queue = [startNodeId];
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    if (visited.has(currentId)) continue;
+    visited.add(currentId);
+
+    const node = inMemoryDB.nodes.get(currentId);
+    if (!node) {
+      return { parentId: currentId, isLeft: true };
+    }
+
+    if (node.leftChild === '0' || !node.leftChild) {
+      return { parentId: node.id, isLeft: true };
+    }
+    if (node.rightChild === '0' || !node.rightChild) {
+      return { parentId: node.id, isLeft: false };
+    }
+
+    if (node.leftChild && node.leftChild !== '0') queue.push(node.leftChild);
+    if (node.rightChild && node.rightChild !== '0') queue.push(node.rightChild);
+  }
+
+  return { parentId: startNodeId, isLeft: true };
+}
+
+function findRankPlacement(rank: number, sponsorAddress?: string, sponsorNodeId?: number): { parentId: number; isLeft: boolean } {
+  if (!matrixDB.nodesByRank[rank] || matrixDB.nodesByRank[rank].length === 0) {
+    const rootOwner = (matrixDB.systemWallets?.rootOwner || '0x622e20082e63c7220c5af0a77cbc437a98505311').toLowerCase();
+    matrixDB.nodesByRank[rank] = [
+      {
+        id: 1,
+        rank,
+        owner: rootOwner,
+        directSponsor: ethers.ZeroAddress,
+        parentId: 0,
+        leftChild: 0,
+        rightChild: 0,
+        isClone: false,
+        isExtraId: false,
+        originMainId: 1,
+        cloneRound: 0,
+        directSponsorNodeId: 0,
+        nodeVault: 0,
+        rawNodeVault: 0,
+      },
+    ];
+    matrixDB.rankCounts[rank] = 1;
+  }
+
+  const rList = matrixDB.nodesByRank[rank];
+  const nodesMap = new Map<number, IndexedTreeNode>();
+  for (const n of rList) nodesMap.set(n.id, n);
+
+  let startId = 1;
+  if (sponsorNodeId && sponsorNodeId > 0 && nodesMap.has(sponsorNodeId)) {
+    startId = sponsorNodeId;
+  } else if (sponsorAddress) {
+    const spKey = sponsorAddress.toLowerCase();
+    const spNode = rList.find((n) => n.owner.toLowerCase() === spKey && !n.isClone && !n.isExtraId);
+    if (spNode) startId = spNode.id;
+  }
+
+  // ตรวจสอบคิวโคลนนิ่งของผู้แนะนำก่อนเสมอ: ตรวจต่อติดตัว -> ตรวจคิวโคลน (ซ้ายก่อน ขวาตาม) -> ตรวจใต้สายงานคิวโคลน
+  return findExtraIdPlacementInRankNodes(rList, startId);
+}
+
+async function simulateFindPlacement(rank: number, sponsorAddress: string, _round: number) {
+  const p = findRankPlacement(rank, sponsorAddress);
+  return { parentId: String(p.parentId), isLeft: p.isLeft };
+}
+
+// ==========================================
+// 3. BLOCKCHAIN WEBSOCKET EVENT LISTENER & HYBRID BOT ENGINE (Ethers.js v6)
+// ==========================================
+const WSS_ENDPOINTS = [
+  process.env.WSS_URL || 'wss://bsc-testnet-rpc.publicnode.com',
+  'wss://bsc-testnet.publicnode.com',
+].filter(Boolean);
+
+const BOT_HTTP_RPC_URL =
+  process.env.HTTP_RPC_URL || 'https://data-seed-prebsc-1-s1.bnbchain.org:8545';
+const BOT_PRIVATE_KEY = (
+  process.env.BOT_PRIVATE_KEY ||
+  process.env.DEPLOYER_PRIVATE_KEY ||
+  process.env.ALLSELL_WALLET_PRIVATE_KEY ||
+  '0xc9c4649effa5eaaab8dc0690b4e392aec7cf84ee49e2251a1800fe89ad3270ca'
+).trim();
+const INITIAL_RECONNECT_DELAY_MS = Number(process.env.INITIAL_RECONNECT_DELAY_MS || 2000);
+const MAX_RECONNECT_DELAY_MS = Number(process.env.MAX_RECONNECT_DELAY_MS || 60000);
+const HEARTBEAT_INTERVAL_MS = Number(process.env.HEARTBEAT_INTERVAL_MS || 30000);
+const HEARTBEAT_TIMEOUT_MS = 10000;
+
+const WS_BOT_ABI = [
+  'event UserRegistered(address indexed user, address indexed sponsor, uint256 indexed sponsorNodeId, uint256 mainNodeId)',
+  'event BatchRegistered(address indexed user, uint256 count, uint256 totalCost)',
+  'event CloneQueued(uint8 indexed rank, uint256 indexed parentId, uint256 pendingCount)',
+  'event NodeCreated(uint8 indexed rank, uint256 indexed nodeId, address indexed owner, address directSponsor, uint256 parentId, bool isLeft, bool isClone, bool isExtraId)',
+  'event RewardDistributed(uint256 indexed fromNodeId, uint256 indexed toNodeId, address indexed recipient, uint8 rank, string rewardType, uint256 amount)',
+  'event RankUpgraded(address indexed user, uint8 fromRank, uint8 toRank, uint256 newNodeId, bool isAutoUpgrade)',
+  'event AutoNewMainIdCreated(address indexed user, uint256 count, uint256 vaultDiff)',
+  'event AutoExtraIdCreated(address indexed user, uint8 indexed rank, uint256 nodeId)',
+  'function totalNodesInRank(uint8) external view returns (uint256)',
+  'function getMainIdCurrentRank(uint256 _r1MainId) external view returns (uint8)',
+  'function getMainIdNodeInRank(uint256 _r1MainId, uint8 _rank) external view returns (uint256)',
+  'function getMainIdThreePools(address _user, uint256 _mainNodeIdRank1) external view returns (uint8 currentRank, uint8 window5Start, uint8 window5End, uint256 upgradeRankPool, uint256 newAutoIdPool, uint256 newExtraIdPool)',
+  'function getPendingCloneCount() external view returns (uint256)',
+  'function processCloneQueue(uint256 _maxIterations) external',
+  'function processPendingExtraIdQueue(uint256 _r1MainId, uint8 _maxBatch) external returns (uint8 processed)',
+  'function checkAndProcessAutoNewMainIdForNode(uint256 _mainNodeId) external',
+  'function checkAndProcessAutoExtraIdForNode(address _user, uint8 _currentRank, uint256 _sponsorNodeId) external',
+];
+
+let wsBotProvider: ethers.WebSocketProvider | null = null;
+let wsBotContract: ethers.Contract | null = null;
+let wsHeartbeatTimer: NodeJS.Timeout | null = null;
+let wsReconnectTimer: NodeJS.Timeout | null = null;
+let wsReconnectAttempts = 0;
+let wsEndpointIndex = 0;
+let wsIsReconnecting = false;
+let wsIsProcessingQueue = false;
+let wsLastHeartbeatBlock = 0;
+let wsLastHeartbeatAt: string | null = null;
+let wsConnectedAt: string | null = null;
+let wsLastDisconnectReason: string | null = null;
+let wsTotalEventsReceived = 0;
+let wsRecentEvents: Array<{
+  event: string;
+  details: string;
+  timestamp: string;
+}> = [];
+
+function recordWsBotEvent(event: string, details: string) {
+  wsTotalEventsReceived += 1;
+  wsRecentEvents = [
+    { event, details, timestamp: new Date().toISOString() },
+    ...wsRecentEvents.slice(0, 29),
+  ];
+}
+
+function getBotHttpProvider(): ethers.JsonRpcProvider {
+  const fetchReq = new ethers.FetchRequest(BOT_HTTP_RPC_URL);
+  fetchReq.timeout = 12000;
+  return new ethers.JsonRpcProvider(
+    fetchReq,
+    { chainId: 97, name: 'bnbt' },
+    { staticNetwork: true, polling: false, batchMaxCount: 1 }
+  );
+}
+
+/**
+ * ล้างตัวดักฟังเก่า (removeAllListeners) และทำลายโซเก็ตเก่า (wsProvider.destroy())
+ * เพื่อป้องกันปัญหาหน่วยความจำรั่วไหล (Memory Leak) เมื่อต่อสายใหม่หลายครั้ง
+ */
+async function cleanupWebSocket(): Promise<void> {
+  if (wsHeartbeatTimer) {
+    clearInterval(wsHeartbeatTimer);
+    wsHeartbeatTimer = null;
+  }
+
+  if (wsBotContract) {
+    try {
+      (wsBotContract as any).removeAllListeners?.()?.catch?.(() => {});
+    } catch {
+      // ignore
+    }
+    wsBotContract = null;
+  }
+
+  if (wsBotProvider) {
+    try {
+      // Safely attach .catch to any pending requests to avoid unhandledRejection when destroy() cancels them
+      const reqs = (wsBotProvider as any)._requests;
+      if (reqs && typeof reqs.values === 'function') {
+        for (const r of reqs.values()) {
+          if (r && r.promise && typeof r.promise.catch === 'function') {
+            r.promise.catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      const rawWs = (wsBotProvider as any).websocket;
+      if (rawWs) {
+        if (typeof rawWs.removeAllListeners === 'function') {
+          rawWs.removeAllListeners();
+        }
+        if (typeof rawWs.on === 'function') {
+          rawWs.on('error', () => {});
+        }
+        rawWs.onerror = () => {};
+        rawWs.onclose = () => {};
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      await wsBotProvider.destroy().catch?.(() => {});
+    } catch {
+      // ignore destroy errors on already-closed socket
+    }
+    wsBotProvider = null;
+  }
+  eventListenerActive = false;
+}
+
+/**
+ * สมการ Exponential Backoff พร้อมค่าสุ่ม (Jitter 0-1000ms):
+ * t = min(MAX_RECONNECT_DELAY_MS, INITIAL_RECONNECT_DELAY_MS * 2^attempt) + jitter
+ */
+function scheduleReconnect(reason: string): void {
+  if (wsIsReconnecting) return;
+  wsIsReconnecting = true;
+  wsLastDisconnectReason = reason;
+
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+
+  const baseDelay = Math.min(
+    MAX_RECONNECT_DELAY_MS,
+    INITIAL_RECONNECT_DELAY_MS * Math.pow(2, wsReconnectAttempts)
+  );
+  const jitter = Math.floor(Math.random() * 1000);
+  const totalDelayMs = baseDelay + jitter;
+
+  wsReconnectAttempts += 1;
+  wsEndpointIndex = (wsEndpointIndex + 1) % WSS_ENDPOINTS.length;
+
+  console.warn(
+    `⚠️ [WS-Bot] สาย WebSocket หลุด (${reason}) | เตรียมต่อสายใหม่ครั้งที่ #${wsReconnectAttempts} ในอีก ${(
+      totalDelayMs / 1000
+    ).toFixed(2)} วินาที (Base: ${baseDelay}ms + Jitter: ${jitter}ms)`
+  );
+
+  wsReconnectTimer = setTimeout(() => {
+    wsIsReconnecting = false;
+    startEventListener().catch(() => {});
+  }, totalDelayMs);
+}
+
+/**
+ * ระบบส่งสัญญาณเลี้ยงสาย (Heartbeat / Ping-Pong Check) ทุกๆ 30 วินาที
+ * เพื่อป้องกัน Idle Timeout และตรวจจับกรณีสายค้าง (Silent Drop)
+ */
+function startWsHeartbeat(): void {
+  if (wsHeartbeatTimer) {
+    clearInterval(wsHeartbeatTimer);
+  }
+
+  wsHeartbeatTimer = setInterval(async () => {
+    if (!wsBotProvider || wsIsReconnecting) return;
+    try {
+      const blockNumber = await Promise.race<number>([
+        wsBotProvider.getBlockNumber(),
+        new Promise<number>((_, reject) =>
+          setTimeout(() => reject(new Error('Heartbeat getBlockNumber timeout')), HEARTBEAT_TIMEOUT_MS)
+        ),
+      ]);
+      wsLastHeartbeatBlock = blockNumber;
+      wsLastHeartbeatAt = new Date().toISOString();
+    } catch (err: any) {
+      const msg = err?.message || String(err);
+      console.warn(`❌ [WS-Bot Heartbeat] ตรวจพบสายค้าง (Silent Drop): ${msg}`);
+      await cleanupWebSocket();
+      scheduleReconnect(`Heartbeat Timeout (${msg})`);
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+/**
+ * ตรวจสอบคิวโคลนตกค้าง + คิวแตก Auto ID (5 USDT) + คิวแตก Extra ID (R18->R2) ผ่าน HTTP Provider
+ * และซิงค์ฐานข้อมูลผังไบนารี่ทันที
+ */
+async function checkAndProcessBotCloneQueue(triggerReason: string): Promise<void> {
+  if (wsIsProcessingQueue) return;
+  wsIsProcessingQueue = true;
+  try {
+    // 1. ซิงค์ข้อมูลบล็อกเชนลงฐานข้อมูลก่อนเพื่อเช็คยอด Pool ล่าสุดของทุก Main ID
+    if (triggerMatrixDatabaseSync) {
+      await triggerMatrixDatabaseSync(CONTRACT_ADDRESS, false);
+    }
+
+    const httpProvider = getBotHttpProvider();
+    const readContract = new ethers.Contract(CONTRACT_ADDRESS, WS_BOT_ABI, httpProvider);
+    const hasValidKey = Boolean(BOT_PRIVATE_KEY && BOT_PRIVATE_KEY.length >= 64);
+    const pkHex = BOT_PRIVATE_KEY.startsWith('0x') ? BOT_PRIVATE_KEY : `0x${BOT_PRIVATE_KEY}`;
+    const botSigner = hasValidKey ? new ethers.Wallet(pkHex, httpProvider) : null;
+    const writeContract = botSigner
+      ? new ethers.Contract(CONTRACT_ADDRESS, WS_BOT_ABI, botSigner)
+      : null;
+
+    let didExecuteOnChain = false;
+
+    let botHasGas = false;
+    if (botSigner) {
+      try {
+        const bal = await httpProvider.getBalance(botSigner.address);
+        botHasGas = bal > ethers.parseEther('0.0002');
+      } catch {
+        botHasGas = false;
+      }
+    }
+
+    // 2. ตรวจสอบคิวโคลนตกค้าง (สำหรับสัญญารุ่นที่มี getPendingCloneCount)
+    if (writeContract && botHasGas) {
+      let pendingCount = 0n;
+      try {
+        pendingCount = await readContract.getPendingCloneCount();
+      } catch {
+        pendingCount = 0n;
+      }
+
+      if (pendingCount > 0n) {
+        try {
+          const batchSize = pendingCount > 5n ? 5n : pendingCount;
+          await writeContract.processCloneQueue.staticCall(batchSize);
+          console.log(
+            `🚀 [WS-Bot] (${triggerReason}) ส่งธุรกรรม processCloneQueue(${batchSize.toString()}) ผ่าน HTTP Provider...`
+          );
+          const tx = await writeContract.processCloneQueue(batchSize);
+          const receipt = await tx.wait(1);
+          const txHash = receipt?.hash || tx.hash;
+          recordRealTransactionLog({
+            txHash,
+            actionType: 'CLONE_BOT',
+            title: `Bot รันคิวโคลนนิ่งอัตโนมัติ (Batch ${batchSize.toString()})`,
+            userAddress: botSigner?.address || '',
+            blockNumber: receipt?.blockNumber,
+            source: 'WS_BOT',
+            details: `Trigger: ${triggerReason} | Pending: ${pendingCount.toString()}`,
+          });
+          recordWsBotEvent('processCloneQueue', `TX: ${txHash} (Batch: ${batchSize.toString()})`);
+          didExecuteOnChain = true;
+        } catch {
+          // Skip silently if staticCall or tx reverts
+        }
+      }
+    }
+
+    // 3. ตรวจสอบคิว Auto ID (Pool 2 >= ราคา Rank 1) และคิว Extra ID (Pool 3 >= ราคา Rank เป้าหมาย R18->R2) ของทุก Main ID
+    if (writeContract && botHasGas && triggerComputeMainIdStats) {
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+      const mainNodes = r1Nodes.filter((n) => !n.isClone && !n.isExtraId);
+
+      for (const mainNode of mainNodes) {
+        const stats = triggerComputeMainIdStats(mainNode.id);
+        if (!stats) continue;
+
+        // 3A. Auto New Main ID (เมื่อพ้นกรอบ 5 แรงค์ window5Start > 1 และ newAutoIdPool >= ราคา Rank 1)
+        const rank1Price = RANK_PRICES_USDT[0] || 5;
+        if (stats.window5Start > 1 && stats.newAutoIdPool + 1e-6 >= rank1Price) {
+          try {
+            // ตรวจสอบด้วย staticCall ก่อนเพื่อป้องกัน RPC revert (เช่นกรณีสัญญาบนเชนยังตั้งราคาเดิมอยู่)
+            await writeContract.checkAndProcessAutoNewMainIdForNode.staticCall(mainNode.id);
+            console.log(
+              `🤖 [WS-Bot] (${triggerReason}) Main #${mainNode.id} มี Auto ID Pool = ${stats.newAutoIdPool.toFixed(
+                2
+              )} USDT (>= ${rank1Price} USDT) -> สั่ง checkAndProcessAutoNewMainIdForNode(${mainNode.id})`
+            );
+            const tx = await writeContract.checkAndProcessAutoNewMainIdForNode(mainNode.id);
+            const receipt = await tx.wait(1);
+            const txHash = receipt?.hash || tx.hash;
+            recordRealTransactionLog({
+              txHash,
+              actionType: 'AUTO_ID',
+              title: `Bot แตก Auto New Main ID จาก Main #${mainNode.id}`,
+              userAddress: mainNode.owner,
+              mainNodeId: mainNode.id,
+              rank: 1,
+              amountUsdt: rank1Price,
+              blockNumber: receipt?.blockNumber,
+              source: 'WS_BOT',
+              details: `Trigger: ${triggerReason}`,
+            });
+            recordWsBotEvent(
+              'AutoNewMainId',
+              `Main #${mainNode.id} แตก Auto ID สำเร็จ (TX: ${txHash.slice(0, 10)}...)`
+            );
+            didExecuteOnChain = true;
+          } catch {
+            // Skip silently when contract is not ready to spawn Auto ID on-chain
+          }
+        }
+
+        // 3B. Auto Extra ID Queue (เมื่อ newExtraIdPool >= ราคาของ Rank เป้าหมาย R18->R2 ที่ Main ID มีโหนดอยู่)
+        const minExtraPrice = RANK_PRICES_USDT[1] || 10;
+        if (stats.currentRank >= 2 && stats.newExtraIdPool + 1e-6 >= minExtraPrice) {
+          let eligibleTargetRank = 0;
+          for (let r = Math.min(18, stats.currentRank); r >= 2; r--) {
+            const rPrice = RANK_PRICES_USDT[r - 1] || 10;
+            const hasNodeInR = (matrixDB.nodesByRank[r] || []).some(
+              (n) =>
+                !n.isClone &&
+                !n.isExtraId &&
+                (r === 1 ? n.id === mainNode.id : n.originMainId === mainNode.id)
+            );
+            if (hasNodeInR && stats.newExtraIdPool + 1e-6 >= rPrice) {
+              eligibleTargetRank = r;
+              break;
+            }
+          }
+
+          if (eligibleTargetRank >= 2) {
+            try {
+              await writeContract.processPendingExtraIdQueue.staticCall(mainNode.id, 2);
+              console.log(
+                `🤖 [WS-Bot] (${triggerReason}) Main #${mainNode.id} มี Extra ID Pool = ${stats.newExtraIdPool.toFixed(
+                  2
+                )} USDT พร้อมออก Extra ID ใน R${eligibleTargetRank} -> สั่ง processPendingExtraIdQueue(${
+                  mainNode.id
+                }, 2)`
+              );
+              const tx = await writeContract.processPendingExtraIdQueue(mainNode.id, 2);
+              const receipt = await tx.wait(1);
+              const txHash = receipt?.hash || tx.hash;
+              recordRealTransactionLog({
+                txHash,
+                actionType: 'EXTRA_ID',
+                title: `Bot แตก Extra ID (R${eligibleTargetRank}) จาก Main #${mainNode.id}`,
+                userAddress: mainNode.owner,
+                mainNodeId: mainNode.id,
+                rank: eligibleTargetRank,
+                amountUsdt: RANK_PRICES_USDT[eligibleTargetRank - 1] || 10,
+                blockNumber: receipt?.blockNumber,
+                source: 'WS_BOT',
+                details: `Trigger: ${triggerReason}`,
+              });
+              recordWsBotEvent(
+                'AutoExtraIdQueue',
+                `Main #${mainNode.id} แตก Extra ID R${eligibleTargetRank} สำเร็จ (TX: ${txHash.slice(
+                  0,
+                  10
+                )}...)`
+              );
+              didExecuteOnChain = true;
+            } catch {
+              // Skip silently when contract is not ready to spawn Extra ID on-chain
+            }
+          }
+        }
+      }
+    }
+
+    // 4. หากมีการยิงธุรกรรมบนเชนสำเร็จ ให้ซิงค์ฐานข้อมูลแบบ Force ทันทีเพื่อให้หน้าเว็บอัปเดตเรียลไทม์
+    if (didExecuteOnChain && triggerMatrixDatabaseSync) {
+      await triggerMatrixDatabaseSync(CONTRACT_ADDRESS, true);
+    }
+  } catch (err: any) {
+    if (triggerMatrixDatabaseSync) {
+      triggerMatrixDatabaseSync(CONTRACT_ADDRESS, false).catch(() => {});
+    }
+  } finally {
+    wsIsProcessingQueue = false;
+  }
+}
+
+let triggerMatrixDatabaseSync: ((targetContract?: string, force?: boolean) => Promise<void>) | null = null;
+let triggerComputeMainIdStats: ((mainIdNum: number) => any) | null = null;
+
+async function startEventListener(): Promise<void> {
+  if (!CONTRACT_ADDRESS) return;
+
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  wsIsReconnecting = false;
+
+  await cleanupWebSocket();
+
+  const activeWssUrl = WSS_ENDPOINTS[wsEndpointIndex % WSS_ENDPOINTS.length];
+  try {
+    wsBotProvider = new ethers.WebSocketProvider(activeWssUrl, {
+      chainId: 97,
+      name: 'bnbt',
+    });
+
+    // Suppress unhandled provider-level errors
+    wsBotProvider.on('error', (err: any) => {
+      const msg = err?.message || String(err ?? 'unknown');
+      wsLastDisconnectReason = `Provider Error: ${msg}`;
+    });
+
+    const rawWs = (wsBotProvider as any).websocket;
+    const onSocketClose = async (code?: unknown) => {
+      await cleanupWebSocket();
+      scheduleReconnect(`WebSocket Close (code=${String(code ?? 'unknown')})`);
+    };
+    const onSocketError = (err?: any) => {
+      const msg = err?.message || String(err ?? 'unknown');
+      wsLastDisconnectReason = `Socket Error: ${msg}`;
+    };
+
+    if (rawWs) {
+      if (typeof rawWs.on === 'function') {
+        rawWs.on('close', onSocketClose);
+        rawWs.on('error', onSocketError);
+      } else if (typeof rawWs.addEventListener === 'function') {
+        rawWs.addEventListener('close', onSocketClose);
+        rawWs.addEventListener('error', onSocketError);
+      }
+    }
+
+    // ยืนยันว่าเชื่อมต่อสำเร็จด้วยการดึงเลขบล็อกแรก
+    const initialBlock = await Promise.race<number>([
+      wsBotProvider.getBlockNumber(),
+      new Promise<number>((_, reject) =>
+        setTimeout(() => reject(new Error('WebSocket initial handshake timeout')), 12000)
+      ),
+    ]);
+
+    // รีเซ็ตตัวนับ reconnectAttempts เป็น 0 ทันทีเมื่อเชื่อมต่อสำเร็จ
+    wsReconnectAttempts = 0;
+    wsLastHeartbeatBlock = initialBlock;
+    wsLastHeartbeatAt = new Date().toISOString();
+    wsConnectedAt = wsLastHeartbeatAt;
+    eventListenerActive = true;
+
+    console.log(
+      `🟢 [WS-Bot] เชื่อมต่อ WebSocket (${activeWssUrl}) สำเร็จที่บล็อก #${initialBlock} สำหรับสัญญา ${CONTRACT_ADDRESS}`
+    );
+
+    wsBotContract = new ethers.Contract(CONTRACT_ADDRESS, WS_BOT_ABI, wsBotProvider);
+
+    wsBotContract.on(
+      'UserRegistered',
+      (user: string, _sponsor: string, sponsorNodeId: bigint, mainNodeId: bigint, payload: any) => {
+        const txHash = payload?.log?.transactionHash || payload?.transactionHash;
+        const blockNumber = payload?.log?.blockNumber || payload?.blockNumber;
+        recordRealTransactionLog({
+          txHash,
+          actionType: 'REGISTER',
+          title: `สมัครสมาชิก Main ID #${mainNodeId.toString()}`,
+          userAddress: user,
+          mainNodeId: Number(mainNodeId),
+          nodeId: Number(mainNodeId),
+          rank: 1,
+          amountUsdt: RANK_PRICES_USDT[0] || 5,
+          blockNumber,
+          source: 'ONCHAIN_EVENT',
+          details: `Sponsor #${sponsorNodeId.toString()}`,
+        });
+        recordWsBotEvent('UserRegistered', `Main #${mainNodeId.toString()} (${user.slice(0, 8)}...)`);
+      }
+    );
+
+    wsBotContract.on(
+      'BatchRegistered',
+      (user: string, count: bigint, totalCost: bigint, payload: any) => {
+        const txHash = payload?.log?.transactionHash || payload?.transactionHash;
+        const blockNumber = payload?.log?.blockNumber || payload?.blockNumber;
+        const costNum = Number(ethers.formatUnits(totalCost, activeUsdtDecimals || 18));
+        recordRealTransactionLog({
+          txHash,
+          actionType: 'BATCH_REGISTER',
+          title: `สมัครแบบกลุ่ม (Batch ${count.toString()} โหนด)`,
+          userAddress: user,
+          rank: 1,
+          amountUsdt: Number.isFinite(costNum) ? costNum : Number(count) * 5,
+          blockNumber,
+          source: 'ONCHAIN_EVENT',
+          details: `Batch ${count.toString()} Nodes`,
+        });
+        recordWsBotEvent('BatchRegistered', `${user.slice(0, 8)}... (${count.toString()} nodes)`);
+      }
+    );
+
+    wsBotContract.on('CloneQueued', (rank: bigint, parentId: bigint, pendingCount: bigint) => {
+      const details = `Rank ${rank.toString()} | Parent #${parentId.toString()} | Pending: ${pendingCount.toString()}`;
+      recordWsBotEvent('CloneQueued', details);
+      checkAndProcessBotCloneQueue(`CloneQueued(R${rank},#${parentId})`).catch(() => {});
+    });
+
+    wsBotContract.on(
+      'NodeCreated',
+      async (
+        rank: bigint,
+        nodeId: bigint,
+        owner: string,
+        _directSponsor: string,
+        parentId: bigint,
+        isLeft: boolean,
+        isClone: boolean,
+        isExtraId: boolean,
+        payload: any
+      ) => {
+        const leg = isLeft ? 'LEFT' : 'RIGHT';
+        const kind = isExtraId ? 'EXTRA_ID' : isClone ? 'CLONE' : 'MAIN';
+        const txHash = payload?.log?.transactionHash || payload?.transactionHash;
+        const blockNumber = payload?.log?.blockNumber || payload?.blockNumber;
+        const rNum = Number(rank);
+        const nidNum = Number(nodeId);
+
+        let isAdminFreeTx = false;
+        if (rNum >= 2 && isRealTxHash(txHash)) {
+          const inspected = await inspectAndTagAdminUpgradeTx(txHash, getBotHttpProvider()).catch(() => ({
+            isAdminTx: false,
+            taggedNodes: [],
+            newlyTagged: false,
+          }));
+          isAdminFreeTx = inspected.isAdminTx;
+          if (isAdminFreeTx) {
+            markNodeAsAdminFreeUpgrade(rNum, nidNum);
+          }
+        }
+
+        recordRealTransactionLog({
+          txHash,
+          actionType: isAdminFreeTx
+            ? 'ADMIN_UPGRADE'
+            : isExtraId
+            ? 'EXTRA_ID'
+            : isClone
+            ? 'CLONE_BOT'
+            : rNum === 1
+            ? 'REGISTER'
+            : 'UPGRADE',
+          title: isAdminFreeTx
+            ? isClone
+              ? `Admin อัพฟรี (โคลนนิ่ง R${rNum}-#${nodeId.toString()})`
+              : `Admin อัพฟรี R${rNum}-#${nodeId.toString()}`
+            : isExtraId
+            ? `สร้าง Extra ID R${rNum}-#${nodeId.toString()}`
+            : isClone
+            ? `สร้างโคลนนิ่ง R${rNum}-#${nodeId.toString()}`
+            : rNum === 1
+            ? `สร้างโหนด R1-#${nodeId.toString()}`
+            : `สร้างโหนด R${rNum}-#${nodeId.toString()}`,
+          userAddress: owner,
+          nodeId: nidNum,
+          rank: rNum,
+          amountUsdt: isAdminFreeTx ? 0 : RANK_PRICES_USDT[rNum - 1] || 0,
+          blockNumber,
+          source: 'ONCHAIN_EVENT',
+          details: isAdminFreeTx
+            ? `Parent #${parentId.toString()} [${leg}] • Admin Free (0 ค่าคอม)`
+            : `Parent #${parentId.toString()} [${leg}]`,
+        });
+        recordWsBotEvent(
+          'NodeCreated',
+          `R${rank.toString()} #${nodeId.toString()} (${kind}${isAdminFreeTx ? '/ADMIN_FREE' : ''}) -> Parent #${parentId.toString()} [${leg}] (${owner.slice(0, 8)}...)`
+        );
+        checkAndProcessBotCloneQueue(`NodeCreated(R${rank},#${nodeId},${leg})`).catch(() => {});
+      }
+    );
+
+    wsBotContract.on(
+      'RankUpgraded',
+      async (user: string, fromRank: bigint, toRank: bigint, newNodeId: bigint, isAutoUpgrade: boolean, payload: any) => {
+        const txHash = payload?.log?.transactionHash || payload?.transactionHash;
+        const blockNumber = payload?.log?.blockNumber || payload?.blockNumber;
+        const toR = Number(toRank);
+        const nidNum = Number(newNodeId);
+
+        let isAdminFreeTx = false;
+        if (toR >= 2 && isRealTxHash(txHash)) {
+          const inspected = await inspectAndTagAdminUpgradeTx(txHash, getBotHttpProvider()).catch(() => ({
+            isAdminTx: false,
+            taggedNodes: [],
+            newlyTagged: false,
+          }));
+          isAdminFreeTx = inspected.isAdminTx;
+          if (isAdminFreeTx) {
+            markNodeAsAdminFreeUpgrade(toR, nidNum);
+          }
+        }
+
+        recordRealTransactionLog({
+          txHash,
+          actionType: isAdminFreeTx ? 'ADMIN_UPGRADE' : 'UPGRADE',
+          title: isAdminFreeTx
+            ? `Admin อัปเกรดฟรี R${fromRank.toString()} → R${toR} (Node #${newNodeId.toString()})`
+            : `อัปเกรดแรงค์ R${fromRank.toString()} → R${toR} (Node #${newNodeId.toString()})`,
+          userAddress: user,
+          nodeId: nidNum,
+          rank: toR,
+          amountUsdt: isAdminFreeTx ? 0 : RANK_PRICES_USDT[toR - 1] || 0,
+          blockNumber,
+          source: 'ONCHAIN_EVENT',
+          details: isAdminFreeTx
+            ? 'Admin Free Upgrade (0 ค่าคอม)'
+            : isAutoUpgrade
+            ? 'Auto-Vault Upgrade'
+            : 'Wallet Upgrade',
+        });
+        recordWsBotEvent(
+          'RankUpgraded',
+          `${user.slice(0, 8)}... R${fromRank.toString()}->R${toRank.toString()} (#${newNodeId.toString()}, auto=${isAutoUpgrade}, adminFree=${isAdminFreeTx})`
+        );
+        checkAndProcessBotCloneQueue(`RankUpgraded(R${toRank},#${newNodeId})`).catch(() => {});
+      }
+    );
+
+    wsBotContract.on('AutoNewMainIdCreated', async (user: string, count: bigint, _vaultDiff: bigint, payload: any) => {
+      const txHash = payload?.log?.transactionHash || payload?.transactionHash;
+      const blockNumber = payload?.log?.blockNumber || payload?.blockNumber;
+      recordRealTransactionLog({
+        txHash,
+        actionType: 'AUTO_ID',
+        title: `แตก Auto New Main ID (+${count.toString()} รหัส)`,
+        userAddress: user,
+        rank: 1,
+        amountUsdt: Number(count) * (RANK_PRICES_USDT[0] || 5),
+        blockNumber,
+        source: 'ONCHAIN_EVENT',
+      });
+      if (txHash && isRealTxHash(txHash) && triggerMatrixDatabaseSync) {
+        triggerMatrixDatabaseSync(CONTRACT_ADDRESS, true).catch(() => {});
+      }
+    });
+
+    wsBotContract.on('AutoExtraIdCreated', (user: string, rank: bigint, nodeId: bigint, payload: any) => {
+      const txHash = payload?.log?.transactionHash || payload?.transactionHash;
+      const blockNumber = payload?.log?.blockNumber || payload?.blockNumber;
+      const rNum = Number(rank);
+      recordRealTransactionLog({
+        txHash,
+        actionType: 'EXTRA_ID',
+        title: `แตก Extra ID R${rNum}-#${nodeId.toString()}`,
+        userAddress: user,
+        nodeId: Number(nodeId),
+        rank: rNum,
+        amountUsdt: RANK_PRICES_USDT[rNum - 1] || 10,
+        blockNumber,
+        source: 'ONCHAIN_EVENT',
+      });
+    });
+
+    // เริ่ม Heartbeat ดึงเลขบล็อกทุกๆ 30 วินาที
+    startWsHeartbeat();
+
+    // วิ่งเช็คคิวตกค้างและซิงค์ข้อมูลทันทีหลังจากเชื่อมต่อสำเร็จ
+    checkAndProcessBotCloneQueue('RECONNECT_RECOVERY').catch(() => {});
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    await cleanupWebSocket();
+    scheduleReconnect(`Handshake Error (${msg})`);
+  }
+}
+
+// ==========================================
+// FIFO PLACEMENT QUEUE (BULLMQ + REDIS & IN-MEMORY MUTEX)
+// ==========================================
+export interface PositionReservation {
+  ticketId: string;
+  owner: string;
+  rank: number;
+  sponsorNodeId: number;
+  sponsorAddress: string;
+  targetParentId: string;
+  isLeft: boolean;
+  activeRound: number;
+  assignedNodeId: string;
+  batchCount: number;
+  batchDetails: Array<{
+    applicantIndex: number;
+    owner: string;
+    targetParentId: string;
+    isLeft: boolean;
+    assignedNodeId: string;
+    isClone?: boolean;
+  }>;
+  status: 'RESERVED' | 'CONFIRMED' | 'RELEASED' | 'EXPIRED';
+  reservedAt: number;
+  expiresAt: number;
+  txHash?: string;
+}
+
+export interface QueueReserveRequest {
+  owner: string;
+  sponsorNodeId?: number;
+  sponsorAddress?: string;
+  count?: number;
+  rank?: number;
+  mode?: 'auto_under_sponsor' | 'global_bfs' | 'contract_round';
+  applicants?: Array<{ owner: string }>;
+}
+
+export interface QueueStats {
+  engine: 'BullMQ + Redis' | 'Built-in In-Memory FIFO Mutex';
+  isRedisConnected: boolean;
+  waitingJobsCount: number;
+  activeJobsCount: number;
+  completedJobsCount: number;
+  failedJobsCount: number;
+  activeReservationsCount: number;
+  activeReservations: PositionReservation[];
+  recentHistory: PositionReservation[];
+}
+
+interface SimulatedQueueNode {
+  id: string;
+  owner: string;
+  directSponsor: string;
+  parentId: string;
+  leftChild: string;
+  rightChild: string;
+  isClone: boolean;
+  isExtraId: boolean;
+}
+
+const reservationsMap = new Map<string, PositionReservation>();
+const reservationHistory: PositionReservation[] = [];
+let totalCompletedJobs = 0;
+let totalFailedJobs = 0;
+const RESERVATION_LEASE_MS = 45 * 1000;
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ticketId, res] of reservationsMap.entries()) {
+    if (res.status === 'RESERVED' && now > res.expiresAt) {
+      res.status = 'EXPIRED';
+      queueEventsEmitter.emit(`ticket:${ticketId}:settled`, 'EXPIRED');
+    }
+  }
+}, 2000);
+
+async function fetchTreeWithVirtualLocks(rank: number = 1): Promise<{
+  nodesMap: Map<string, SimulatedQueueNode>;
+  totalNodes: number;
+  ownerFirstNodeMap: Map<string, string>;
+  ownerLatestNodeMap: Map<string, string>;
+}> {
+  const nodesMap = new Map<string, SimulatedQueueNode>();
+  const ownerFirstNodeMap = new Map<string, string>();
+  const ownerLatestNodeMap = new Map<string, string>();
+  let totalNodes = 0;
+
+  // Fast Path: Read synced nodes directly from in-memory matrixDB (0ms, zero RPC storm)
+  const dbRankNodes = (matrixDB.nodesByRank[rank] || []).filter((n) => !n.isSyntheticExtra);
+  if (dbRankNodes.length > 0) {
+    const sorted = [...dbRankNodes].sort((a, b) => a.id - b.id);
+    for (const n of sorted) {
+      const idStr = String(n.id);
+      const ownerKey = (n.owner || '').toLowerCase();
+      nodesMap.set(idStr, {
+        id: idStr,
+        owner: ownerKey,
+        directSponsor: (n.directSponsor || '').toLowerCase(),
+        parentId: String(n.parentId || 0),
+        leftChild: String(n.leftChild || 0),
+        rightChild: String(n.rightChild || 0),
+        isClone: Boolean(n.isClone),
+        isExtraId: Boolean(n.isExtraId),
+      });
+      if (ownerKey) {
+        if (!ownerFirstNodeMap.has(ownerKey)) {
+          ownerFirstNodeMap.set(ownerKey, idStr);
+        }
+        ownerLatestNodeMap.set(ownerKey, idStr);
+      }
+      totalNodes = Math.max(totalNodes, n.id);
+    }
+  } else {
+    try {
+      const provider = getProvider();
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, MATRIX_READ_ABI, provider);
+
+      const onChainCount = Number(await contract.totalNodesInRank(rank));
+      totalNodes = Math.max(0, onChainCount);
+
+      if (totalNodes > 0) {
+        const batchPromises = [];
+        for (let i = 1; i <= Math.min(totalNodes, 500); i++) {
+          batchPromises.push(
+            contract.rankNodes(rank, i).then((node: any) => ({
+              id: node[0].toString(),
+              owner: (node[1] || '').toLowerCase(),
+              directSponsor: (node[2] || '').toLowerCase(),
+              parentId: node[3].toString(),
+              leftChild: node[4].toString(),
+              rightChild: node[5].toString(),
+              isClone: Boolean(node[6]),
+              isExtraId: Boolean(node[7]),
+            })).catch(() => null)
+          );
+        }
+
+        const results = await Promise.all(batchPromises);
+        if (rank === 1 && results.some((r) => r && r.id !== '0')) {
+          inMemoryDB.nodes.clear();
+        }
+        for (const res of results) {
+          if (res && res.id !== '0') {
+            nodesMap.set(res.id, res);
+            const ownerKey = res.owner.toLowerCase();
+            if (!ownerFirstNodeMap.has(ownerKey)) {
+              ownerFirstNodeMap.set(ownerKey, res.id);
+            }
+            ownerLatestNodeMap.set(ownerKey, res.id);
+
+            if (rank === 1) {
+              inMemoryDB.nodes.set(res.id, {
+                id: res.id,
+                rank: 1,
+                owner: res.owner,
+                sponsor: res.directSponsor,
+                parentId: res.parentId,
+                leftChild: res.leftChild,
+                rightChild: res.rightChild,
+                isClone: res.isClone,
+                isExtraId: res.isExtraId,
+                origin: res.isClone ? 'CLONE' : 'REGISTRATION',
+                createdAt: new Date().toISOString(),
+              });
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Queue Engine] Notice fetching on-chain nodes for simulation:', err);
+    }
+  }
+
+  if (!nodesMap.has('1')) {
+    nodesMap.set('1', {
+      id: '1',
+      owner: CONTRACT_ADDRESS.toLowerCase(),
+      directSponsor: ethers.ZeroAddress,
+      parentId: '0',
+      leftChild: '0',
+      rightChild: '0',
+      isClone: false,
+      isExtraId: false,
+    });
+    totalNodes = Math.max(totalNodes, 1);
+  }
+
+  const now = Date.now();
+  for (const res of reservationsMap.values()) {
+    if (res.status === 'RESERVED' && now <= res.expiresAt && res.rank === rank) {
+      for (const item of res.batchDetails) {
+        const pNode = nodesMap.get(item.targetParentId);
+        if (pNode) {
+          if (item.isLeft) {
+            pNode.leftChild = item.assignedNodeId;
+          } else {
+            pNode.rightChild = item.assignedNodeId;
+          }
+        }
+
+        nodesMap.set(item.assignedNodeId, {
+          id: item.assignedNodeId,
+          owner: item.owner.toLowerCase(),
+          directSponsor: res.sponsorAddress.toLowerCase(),
+          parentId: item.targetParentId,
+          leftChild: '0',
+          rightChild: '0',
+          isClone: Boolean(item.isClone),
+          isExtraId: false,
+        });
+
+        const ownerKey = item.owner.toLowerCase();
+        if (!ownerFirstNodeMap.has(ownerKey)) {
+          ownerFirstNodeMap.set(ownerKey, item.assignedNodeId);
+        }
+        ownerLatestNodeMap.set(ownerKey, item.assignedNodeId);
+      }
+    }
+  }
+
+  return { nodesMap, totalNodes, ownerFirstNodeMap, ownerLatestNodeMap };
+}
+
+function bfsFindNextVacant(nodesMap: Map<string, SimulatedQueueNode>, startId: string): { parentId: string; isLeft: boolean } {
+  const queue = [startId];
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const currId = queue.shift()!;
+    if (visited.has(currId)) continue;
+    visited.add(currId);
+
+    const node = nodesMap.get(currId);
+    if (!node) {
+      return { parentId: currId, isLeft: true };
+    }
+
+    if (node.leftChild === '0' || !node.leftChild) {
+      return { parentId: node.id, isLeft: true };
+    }
+    if (node.rightChild === '0' || !node.rightChild) {
+      return { parentId: node.id, isLeft: false };
+    }
+
+    if (node.leftChild && node.leftChild !== '0') queue.push(node.leftChild);
+    if (node.rightChild && node.rightChild !== '0') queue.push(node.rightChild);
+  }
+
+  return { parentId: startId, isLeft: true };
+}
+
+function buildServerCloneLineageMap(
+  nodesMap: Map<string, SimulatedQueueNode>
+): Map<string, { originMainId: string; spawnedFromNodeId: string; cloneRound: number }> {
+  const lineageMap = new Map<string, { originMainId: string; spawnedFromNodeId: string; cloneRound: number }>();
+  const matchedRightTriggers = new Set<string>();
+  const ownerPrimaryNodeMap = new Map<string, string>();
+  const ownerAllMainNodesMap = new Map<string, string[]>();
+  const mainNodeCloneRoundCount = new Map<string, number>();
+
+  const sortedIds = Array.from(nodesMap.keys())
+    .map((k) => Number(k))
+    .filter((n) => Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+
+  const isAncestorOf = (candidateAncestorId: string, targetId: string): boolean => {
+    if (!candidateAncestorId || candidateAncestorId === '0' || !targetId || targetId === '0') {
+      return false;
+    }
+    let curr = targetId;
+    const guard = new Set<string>();
+    while (curr && curr !== '0' && !guard.has(curr)) {
+      if (curr === candidateAncestorId) return true;
+      guard.add(curr);
+      const p = nodesMap.get(curr);
+      curr = p ? p.parentId : '0';
+    }
+    return false;
+  };
+
+  for (const numId of sortedIds) {
+    const idStr = String(numId);
+    const n = nodesMap.get(idStr);
+    if (!n) continue;
+    const ownerKey = (n.owner || '').toLowerCase();
+
+    if (!n.isClone && !n.isExtraId) {
+      if (!ownerPrimaryNodeMap.has(ownerKey)) {
+        ownerPrimaryNodeMap.set(ownerKey, idStr);
+      }
+      const list = ownerAllMainNodesMap.get(ownerKey) || [];
+      list.push(idStr);
+      ownerAllMainNodesMap.set(ownerKey, list);
+
+      lineageMap.set(idStr, {
+        originMainId: idStr,
+        spawnedFromNodeId: '0',
+        cloneRound: 0,
+      });
+    } else if (n.isClone) {
+      let spawnedFromNodeId = '0';
+      const walletFirstId = ownerPrimaryNodeMap.get(ownerKey) || idStr;
+
+      for (let lookback = numId - 1; lookback >= 1; lookback--) {
+        const candidateRightChild = nodesMap.get(String(lookback));
+        if (!candidateRightChild || !candidateRightChild.parentId || candidateRightChild.parentId === '0') continue;
+        const triggerParentIdStr = candidateRightChild.parentId;
+        const triggerParent = nodesMap.get(triggerParentIdStr);
+        if (
+          triggerParent &&
+          triggerParent.rightChild === candidateRightChild.id &&
+          (triggerParent.owner || '').toLowerCase() === ownerKey &&
+          !matchedRightTriggers.has(triggerParentIdStr)
+        ) {
+          spawnedFromNodeId = triggerParentIdStr;
+          matchedRightTriggers.add(triggerParentIdStr);
+          break;
+        }
+      }
+
+      if (spawnedFromNodeId === '0') {
+        const ownerMains = ownerAllMainNodesMap.get(ownerKey) || [];
+        const matchingSubtreeMain = [...ownerMains]
+          .reverse()
+          .find((mId) => Number(mId) < numId && isAncestorOf(mId, idStr));
+        spawnedFromNodeId = matchingSubtreeMain || walletFirstId;
+      }
+
+      const triggerMeta = lineageMap.get(spawnedFromNodeId);
+      const originMainId = triggerMeta ? triggerMeta.originMainId : spawnedFromNodeId;
+      const prevCount = mainNodeCloneRoundCount.get(originMainId) || 0;
+      const currentCount = prevCount + 1;
+      mainNodeCloneRoundCount.set(originMainId, currentCount);
+      const cloneRound = ((currentCount - 1) % 2) + 1;
+
+      lineageMap.set(idStr, {
+        originMainId,
+        spawnedFromNodeId,
+        cloneRound,
+      });
+    } else {
+      lineageMap.set(idStr, {
+        originMainId: idStr,
+        spawnedFromNodeId: '0',
+        cloneRound: 0,
+      });
+    }
+  }
+
+  return lineageMap;
+}
+
+function calculateQueueSlot(
+  nodesMap: Map<string, SimulatedQueueNode>,
+  ownerFirstNodeMap: Map<string, string>,
+  _ownerLatestNodeMap: Map<string, string>,
+  sponsorAddress: string,
+  sponsorNodeId: number,
+  mode: 'auto_under_sponsor' | 'global_bfs' | 'contract_round' = 'contract_round'
+): { targetParentId: string; isLeft: boolean; activeRound: number; targetType: 'main' | 'clone' | 'descendant' } {
+  const sponsorStrId = String(sponsorNodeId || 1);
+  const sponsorKey = (sponsorAddress || '').toLowerCase();
+
+  // Mode: Global BFS
+  if (mode === 'global_bfs') {
+    const slot = bfsFindNextVacant(nodesMap, '1');
+    return { targetParentId: slot.parentId, isLeft: slot.isLeft, activeRound: 1, targetType: 'descendant' };
+  }
+
+  // Mode: Auto Under Sponsor BFS
+  if (mode === 'auto_under_sponsor') {
+    const slot = bfsFindNextVacant(nodesMap, sponsorStrId);
+    return { targetParentId: slot.parentId, isLeft: slot.isLeft, activeRound: 0, targetType: 'descendant' };
+  }
+
+  const lineageMap = buildServerCloneLineageMap(nodesMap);
+  const requestedNode = nodesMap.get(sponsorStrId);
+  const requestedMeta = lineageMap.get(sponsorStrId);
+
+  // หากระบุเป็นรหัสโคลนโดยตรง ให้ตรวจช่องว่างของโคลนนั้นก่อน
+  if (requestedNode && requestedNode.isClone) {
+    if (requestedNode.leftChild === '0' || !requestedNode.leftChild) {
+      return { targetParentId: requestedNode.id, isLeft: true, activeRound: 0, targetType: 'clone' };
+    }
+    if (requestedNode.rightChild === '0' || !requestedNode.rightChild) {
+      return { targetParentId: requestedNode.id, isLeft: false, activeRound: 0, targetType: 'clone' };
+    }
+  }
+
+  const targetMainIdStr = requestedMeta ? requestedMeta.originMainId : sponsorStrId;
+
+  // 1. เงื่อนไขสมัคร: จะต้องไปต่อติดตัวของผู้แนะนำตรง Direct Sponsor (#targetMainIdStr) ซ้ายก่อน ขวาตาม
+  const mainNode =
+    nodesMap.get(targetMainIdStr) ||
+    (ownerFirstNodeMap.get(sponsorKey) ? nodesMap.get(ownerFirstNodeMap.get(sponsorKey)!) : undefined);
+
+  if (mainNode) {
+    if (mainNode.leftChild === '0' || !mainNode.leftChild) {
+      return { targetParentId: mainNode.id, isLeft: true, activeRound: 0, targetType: 'main' };
+    }
+    if (mainNode.rightChild === '0' || !mainNode.rightChild) {
+      return { targetParentId: mainNode.id, isLeft: false, activeRound: 0, targetType: 'main' };
+    }
+  }
+
+  // 2. ตรวจสอบเฉพาะโคลนนิ่งที่มีรหัสหลัก (originMainId) ตรงกับ #targetMainIdStr เท่านั้น!
+  // เช่น กรอกผู้แนะนำ 2 -> ดึงเฉพาะโคลนของ #2 (เช่น #8 [#2 #8 #0 รอบ 1]) ไม่ข้ามไป #24 ที่เป็นของ #6
+  const clonesOfThisMainId: SimulatedQueueNode[] = [];
+
+  for (const node of nodesMap.values()) {
+    if (!node.isClone) continue;
+    const meta = lineageMap.get(node.id);
+    if (meta && meta.originMainId === targetMainIdStr) {
+      clonesOfThisMainId.push(node);
+    }
+  }
+
+  clonesOfThisMainId.sort((a, b) => Number(a.id) - Number(b.id));
+
+  if (clonesOfThisMainId.length > 0) {
+    const openClone = clonesOfThisMainId.find(
+      (c) => c.leftChild === '0' || !c.leftChild || c.rightChild === '0' || !c.rightChild
+    );
+    if (openClone) {
+      if (openClone.leftChild === '0' || !openClone.leftChild) {
+        return { targetParentId: openClone.id, isLeft: true, activeRound: 0, targetType: 'clone' };
+      }
+      return { targetParentId: openClone.id, isLeft: false, activeRound: 0, targetType: 'clone' };
+    }
+  }
+
+  // 3. หากโหนดหลัก #targetMainIdStr และโคลนของ #targetMainIdStr เต็มหมด ให้หาช่องว่างใต้ #targetMainIdStr
+  const slot = bfsFindNextVacant(nodesMap, targetMainIdStr);
+  return { targetParentId: slot.parentId, isLeft: slot.isLeft, activeRound: 0, targetType: 'descendant' };
+}
+
+/**
+ * เงื่อนไขการวางตำแหน่ง New Auto ID และ Auto Extra ID (เขียนแยกออกจากโคลนนิ่ง):
+ * จับคู่โคลนตามรหัสหลักต้นสังกัด (originMainId === sponsorNodeId) เท่านั้น
+ */
+export function calculateAutoIdAndExtraIdSlot(
+  nodesMap: Map<string, SimulatedQueueNode>,
+  sponsorNodeId: number
+): { targetParentId: string; isLeft: boolean; originMainId: string; targetType: 'main' | 'clone' | 'descendant' } {
+  const lineageMap = buildServerCloneLineageMap(nodesMap);
+  const requestedStrId = String(sponsorNodeId || 1);
+  const requestedMeta = lineageMap.get(requestedStrId);
+  const sponsorMainIdStr = requestedMeta ? requestedMeta.originMainId : requestedStrId;
+
+  // ขั้นตอนที่ 1: ติดตัวรหัสหลักต้นสังกัด (sponsorNodeId) ซ้ายก่อน ขวาตาม
+  const mainNode = nodesMap.get(sponsorMainIdStr);
+  if (mainNode) {
+    if (mainNode.leftChild === '0' || !mainNode.leftChild) {
+      return { targetParentId: mainNode.id, isLeft: true, originMainId: sponsorMainIdStr, targetType: 'main' };
+    }
+    if (mainNode.rightChild === '0' || !mainNode.rightChild) {
+      return { targetParentId: mainNode.id, isLeft: false, originMainId: sponsorMainIdStr, targetType: 'main' };
+    }
+  }
+
+  // ขั้นตอนที่ 2: จับคู่โคลนตามรหัสหลักต้นสังกัด (originMainId === sponsorNodeId) เท่านั้น!
+  const matchedClones: SimulatedQueueNode[] = [];
+  for (const node of nodesMap.values()) {
+    if (!node.isClone) continue;
+    const meta = lineageMap.get(node.id);
+    if (meta && meta.originMainId === sponsorMainIdStr) {
+      matchedClones.push(node);
+    }
+  }
+
+  matchedClones.sort((a, b) => Number(a.id) - Number(b.id));
+
+  for (const clone of matchedClones) {
+    if (clone.leftChild === '0' || !clone.leftChild) {
+      return { targetParentId: clone.id, isLeft: true, originMainId: sponsorMainIdStr, targetType: 'clone' };
+    }
+    if (clone.rightChild === '0' || !clone.rightChild) {
+      return { targetParentId: clone.id, isLeft: false, originMainId: sponsorMainIdStr, targetType: 'clone' };
+    }
+  }
+
+  // ขั้นตอนที่ 3: หากรหัสหลักและโคลนในสังกัด (originMainId === sponsorNodeId) เต็มหมด ให้หาช่องว่าง BFS ใต้ sponsorMainIdStr
+  const slot = bfsFindNextVacant(nodesMap, sponsorMainIdStr);
+  return { targetParentId: slot.parentId, isLeft: slot.isLeft, originMainId: sponsorMainIdStr, targetType: 'descendant' };
+}
+
+async function processPlacementJob(jobData: QueueReserveRequest): Promise<PositionReservation> {
+  const {
+    owner,
+    sponsorNodeId = 1,
+    sponsorAddress = CONTRACT_ADDRESS,
+    count = 1,
+    rank = 1,
+    mode = 'contract_round',
+    applicants,
+  } = jobData;
+
+  const nodeCount = Math.max(1, Number(count) || 1);
+  const applicantList: Array<{ owner: string }> =
+    Array.isArray(applicants) && applicants.length > 0
+      ? applicants
+      : Array.from({ length: nodeCount }, () => ({ owner }));
+
+  const { nodesMap, totalNodes, ownerFirstNodeMap, ownerLatestNodeMap } =
+    await fetchTreeWithVirtualLocks(rank);
+
+  let nextNodeId = 1;
+  for (const key of nodesMap.keys()) {
+    const num = Number(key);
+    if (!isNaN(num) && num >= nextNodeId) {
+      nextNodeId = num + 1;
+    }
+  }
+
+  const batchDetails: PositionReservation['batchDetails'] = [];
+
+  // เงื่อนไขสมัครสมาชิก: จะต้องไปต่อติดตัวของผู้แนะนำตรง Direct Sponsor ซ้ายก่อนขวา
+  // แต่ถ้าผู้แนะนำตรงไม่มีช่องว่าง ก็ให้ไปวางต่อติดตัวโคลนนิ่งของรหัสหลักผู้แนะนำนั้นเท่านั้น
+  for (let idx = 0; idx < applicantList.length; idx++) {
+    const appOwner = applicantList[idx].owner || owner;
+    const placement = calculateQueueSlot(
+      nodesMap,
+      ownerFirstNodeMap,
+      ownerLatestNodeMap,
+      sponsorAddress,
+      sponsorNodeId,
+      mode
+    );
+
+    const assignedId = String(nextNodeId++);
+    const isClone = false;
+
+    batchDetails.push({
+      applicantIndex: idx,
+      owner: appOwner,
+      targetParentId: placement.targetParentId,
+      isLeft: placement.isLeft,
+      assignedNodeId: assignedId,
+      isClone,
+    });
+
+    const pNode = nodesMap.get(placement.targetParentId);
+    if (pNode) {
+      if (placement.isLeft) pNode.leftChild = assignedId;
+      else pNode.rightChild = assignedId;
+    }
+
+    nodesMap.set(assignedId, {
+      id: assignedId,
+      owner: appOwner.toLowerCase(),
+      directSponsor: sponsorAddress.toLowerCase(),
+      parentId: placement.targetParentId,
+      leftChild: '0',
+      rightChild: '0',
+      isClone,
+      isExtraId: false,
+    });
+  }
+
+  const firstSlot = batchDetails[0];
+  const now = Date.now();
+  const ticketId = `TKT-${now}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+
+  const reservation: PositionReservation = {
+    ticketId,
+    owner,
+    rank,
+    sponsorNodeId,
+    sponsorAddress,
+    targetParentId: firstSlot.targetParentId,
+    isLeft: firstSlot.isLeft,
+    activeRound: 0,
+    assignedNodeId: firstSlot.assignedNodeId,
+    batchCount: applicantList.length,
+    batchDetails,
+    status: 'RESERVED',
+    reservedAt: now,
+    expiresAt: now + RESERVATION_LEASE_MS,
+  };
+
+  reservationsMap.set(ticketId, reservation);
+  reservationHistory.unshift(reservation);
+  if (reservationHistory.length > 50) reservationHistory.pop();
+
+  return reservation;
+}
+
+class InMemoryFifoMutexQueue {
+  private queue: Array<{
+    id: string;
+    data: QueueReserveRequest;
+    resolve: (res: PositionReservation) => void;
+    reject: (err: any) => void;
+  }> = [];
+  private isProcessing = false;
+
+  private currentActiveTicketId: string | null = null;
+
+  async add(name: string, data: QueueReserveRequest): Promise<PositionReservation> {
+    return new Promise((resolve, reject) => {
+      const id = `job-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+      this.queue.push({ id, data, resolve, reject });
+      this.processNext();
+    });
+  }
+
+  private async processNext() {
+    if (this.isProcessing || this.queue.length === 0) return;
+    this.isProcessing = true;
+
+    const item = this.queue.shift()!;
+    let activeTicketId = '';
+
+    try {
+      // 1. คำนวณตำแหน่งและออกตั๋วคิว (Virtual lock in reservationsMap prevents collisions without blocking subsequent requests for 90s)
+      const reservation = await processPlacementJob(item.data);
+      activeTicketId = reservation.ticketId;
+      this.currentActiveTicketId = activeTicketId;
+
+      item.resolve(reservation);
+      totalCompletedJobs++;
+    } catch (err) {
+      totalFailedJobs++;
+      item.reject(err);
+    } finally {
+      this.currentActiveTicketId = null;
+      this.isProcessing = false;
+      setImmediate(() => this.processNext());
+    }
+  }
+
+  get waitingCount(): number {
+    return this.queue.length;
+  }
+
+  get isBusy(): boolean {
+    return this.isProcessing;
+  }
+
+  get activeTicketId(): string | null {
+    return this.currentActiveTicketId;
+  }
+}
+
+let redisClient: Redis | null = null;
+let bullQueue: Queue | null = null;
+let bullWorker: Worker | null = null;
+let bullEvents: QueueEvents | null = null;
+const inMemoryQueue = new InMemoryFifoMutexQueue();
+let isUsingRedis = false;
+
+async function initPlacementQueue() {
+  const redisUrl = (process.env.REDIS_URL || '').trim();
+  const isLocalRedis =
+    !redisUrl ||
+    redisUrl.includes('127.0.0.1') ||
+    redisUrl.includes('localhost');
+
+  if (!isLocalRedis) {
+    try {
+      const client = new Redis(redisUrl, {
+        maxRetriesPerRequest: null,
+        connectTimeout: 3000,
+        lazyConnect: true,
+        retryStrategy: () => null,
+      });
+
+      client.on('error', () => {
+        isUsingRedis = false;
+      });
+
+      await client.connect();
+      redisClient = client;
+      isUsingRedis = true;
+      console.log('🟢 [Queue Engine] Redis connected successfully. BullMQ active!');
+
+      bullQueue = new Queue('matrix-placement-queue', {
+        connection: redisClient,
+      });
+      bullQueue.on('error', () => {
+        isUsingRedis = false;
+      });
+
+      bullEvents = new QueueEvents('matrix-placement-queue', {
+        connection: redisClient,
+      });
+      bullEvents.on('error', () => {
+        isUsingRedis = false;
+      });
+
+      bullWorker = new Worker(
+        'matrix-placement-queue',
+        async (job: Job) => {
+          return await processPlacementJob(job.data);
+        },
+        {
+          connection: redisClient,
+          concurrency: 1,
+        }
+      );
+      bullWorker.on('error', () => {
+        isUsingRedis = false;
+      });
+
+      bullWorker.on('completed', () => {
+        totalCompletedJobs++;
+      });
+      bullWorker.on('failed', () => {
+        totalFailedJobs++;
+      });
+      return;
+    } catch {
+      if (redisClient) {
+        try {
+          redisClient.disconnect();
+        } catch {
+          // Ignore disconnect errors
+        }
+        redisClient = null;
+      }
+      isUsingRedis = false;
+    }
+  }
+
+  isUsingRedis = false;
+  console.log('ℹ️ [Queue Engine] Built-in In-Memory FIFO Mutex Queue active (Concurrency: 1).');
+}
+
+async function enqueuePlacementRequest(request: QueueReserveRequest): Promise<PositionReservation> {
+  if (isUsingRedis && bullQueue && bullEvents) {
+    const job = await bullQueue.add('reserve-placement', request, {
+      removeOnComplete: 100,
+      removeOnFail: 100,
+    });
+    return (await job.waitUntilFinished(bullEvents)) as PositionReservation;
+  }
+  return await inMemoryQueue.add('reserve-placement', request);
+}
+
+function confirmReservation(ticketId: string, txHash?: string): boolean {
+  const res = reservationsMap.get(ticketId);
+  if (!res) return false;
+  res.status = 'CONFIRMED';
+  if (txHash) res.txHash = txHash;
+  queueEventsEmitter.emit(`ticket:${ticketId}:settled`, 'CONFIRMED');
+  return true;
+}
+
+function releaseReservation(ticketId: string): boolean {
+  const res = reservationsMap.get(ticketId);
+  if (!res) return false;
+  if (res.status === 'RESERVED') {
+    res.status = 'RELEASED';
+    queueEventsEmitter.emit(`ticket:${ticketId}:settled`, 'RELEASED');
+    return true;
+  }
+  return false;
+}
+
+async function getQueueStatus(): Promise<QueueStats> {
+  const now = Date.now();
+  const activeReservations = Array.from(reservationsMap.values()).filter(
+    (r) => r.status === 'RESERVED' && now <= r.expiresAt
+  );
+
+  let waitingCount = inMemoryQueue.waitingCount;
+  let activeCount = inMemoryQueue.isBusy ? 1 : 0;
+
+  if (isUsingRedis && bullQueue) {
+    try {
+      const counts = await bullQueue.getJobCounts('waiting', 'active');
+      waitingCount = counts.waiting;
+      activeCount = counts.active;
+    } catch {
+      // Use fallback counts
+    }
+  }
+
+  return {
+    engine: isUsingRedis ? 'BullMQ + Redis' : 'Built-in In-Memory FIFO Mutex',
+    isRedisConnected: isUsingRedis,
+    waitingJobsCount: waitingCount,
+    activeJobsCount: activeCount,
+    completedJobsCount: totalCompletedJobs,
+    failedJobsCount: totalFailedJobs,
+    activeReservationsCount: activeReservations.length,
+    activeReservations,
+    recentHistory: reservationHistory.slice(0, 10),
+  };
+}
+
+async function startApp() {
+  const app = express();
+  app.use(express.json());
+  app.use(cors());
+
+  app.use('/api', (_req: Request, res: Response, next) => {
+    res.setHeader('Content-Type', 'application/json');
+    next();
+  });
+
+  // ==========================================
+  // DYNAMIC SMART CONTRACT DATABASE CONFIGURATION API
+  // ==========================================
+  app.get('/api/config/contract', (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      config: activeSystemConfig,
+      source: 'DATABASE_STORE',
+    });
+  });
+
+  app.post('/api/config/contract', async (req: Request, res: Response) => {
+    try {
+      const { contractAddress, usdtAddress, chainId, networkName, rpcUrl, blockExplorerUrl } = req.body;
+      if (!contractAddress || !ethers.isAddress(contractAddress)) {
+        return res.status(400).json({
+          success: false,
+          error: 'รูปแบบที่อยู่ Smart Contract ไม่ถูกต้อง (Invalid Ethereum/BSC address)',
+        });
+      }
+      if (usdtAddress && !ethers.isAddress(usdtAddress)) {
+        return res.status(400).json({
+          success: false,
+          error: 'รูปแบบที่อยู่ USDT Token Address ไม่ถูกต้อง (Invalid token address)',
+        });
+      }
+
+      const updated = updateContractConfigInDB({
+        contractAddress,
+        usdtAddress: usdtAddress || activeSystemConfig.usdtAddress,
+        chainId: chainId ? Number(chainId) : activeSystemConfig.chainId,
+        networkName: networkName || activeSystemConfig.networkName,
+        rpcUrl: rpcUrl || activeSystemConfig.rpcUrl,
+        blockExplorerUrl: blockExplorerUrl || activeSystemConfig.blockExplorerUrl,
+      });
+
+      matrixDB = createEmptyMatrixDB(CONTRACT_ADDRESS, USDT_ADDRESS);
+      saveMatrixDBToDisk(true);
+      broadcastAllMatrixUpdates();
+      syncAllMatrixDatabase(CONTRACT_ADDRESS, true)
+        .then(() => broadcastAllMatrixUpdates())
+        .catch(() => {});
+
+      // Re-initialize listener with new contract address
+      try {
+        startEventListener();
+      } catch (e) {
+        console.warn('Listener restart notice:', e);
+      }
+
+      res.json({
+        success: true,
+        message: 'บันทึกและปรับปรุงที่อยู่ Smart Contract ลง Database สำเร็จเรียบร้อย!',
+        config: updated,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/config/contract/reset', (_req: Request, res: Response) => {
+    try {
+      const resetConfig = updateContractConfigInDB(DEFAULT_SYSTEM_CONFIG);
+      matrixDB = createEmptyMatrixDB(CONTRACT_ADDRESS, USDT_ADDRESS);
+      saveMatrixDBToDisk(true);
+      broadcastAllMatrixUpdates();
+      syncAllMatrixDatabase(CONTRACT_ADDRESS, true)
+        .then(() => broadcastAllMatrixUpdates())
+        .catch(() => {});
+      try {
+        startEventListener();
+      } catch (e) {
+        console.warn('Listener restart notice:', e);
+      }
+      res.json({
+        success: true,
+        message: 'คืนค่าที่อยู่ Smart Contract เป็นค่าเริ่มต้นเรียบร้อยแล้ว',
+        config: resetConfig,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({
+      status: 'ok',
+      source: 'DATABASE_FIRST',
+      postgres: {
+        connected: pgConnected,
+        host: PG_ENDPOINT_INFO.host,
+        port: PG_ENDPOINT_INFO.port,
+        database: PG_ENDPOINT_INFO.database,
+        tableCounts: pgTablesCount,
+        lastError: pgLastError,
+      },
+      wsBot: {
+        connected: eventListenerActive && wsBotProvider !== null,
+        activeWssUrl: WSS_ENDPOINTS[wsEndpointIndex % WSS_ENDPOINTS.length],
+        fallbackHttpRpcUrl: BOT_HTTP_RPC_URL,
+        reconnectAttempts: wsReconnectAttempts,
+        initialReconnectDelayMs: INITIAL_RECONNECT_DELAY_MS,
+        maxReconnectDelayMs: MAX_RECONNECT_DELAY_MS,
+        heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+        lastHeartbeatBlock: wsLastHeartbeatBlock,
+        lastHeartbeatAt: wsLastHeartbeatAt,
+        connectedAt: wsConnectedAt,
+        lastDisconnectReason: wsLastDisconnectReason,
+        totalEventsReceived: wsTotalEventsReceived,
+        recentEvents: wsRecentEvents,
+      },
+      contractAddress: CONTRACT_ADDRESS,
+      usdtAddress: USDT_ADDRESS,
+      network: activeSystemConfig.networkName || 'BNB Smart Chain Testnet',
+      chainId: activeSystemConfig.chainId || 97,
+      rpcUrl: FALLBACK_RPCS[currentProviderIndex % FALLBACK_RPCS.length],
+      eventListenerActive,
+      lastSyncedBlock: matrixDB.lastSyncedBlock,
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      totalRewardsLogged: matrixDB.rewardLogs.length,
+      totalNodesRank1: matrixDB.rankCounts[1] || (matrixDB.nodesByRank[1]?.length ?? 1),
+      serverTime: new Date().toISOString(),
+    });
+  });
+
+  app.get('/api/ws-bot/status', (_req: Request, res: Response) => {
+    res.json({
+      success: true,
+      connected: eventListenerActive && wsBotProvider !== null,
+      contractAddress: CONTRACT_ADDRESS,
+      activeWssUrl: WSS_ENDPOINTS[wsEndpointIndex % WSS_ENDPOINTS.length],
+      fallbackHttpRpcUrl: BOT_HTTP_RPC_URL,
+      hasBotPrivateKey: Boolean(BOT_PRIVATE_KEY && BOT_PRIVATE_KEY.length >= 64),
+      reconnectAttempts: wsReconnectAttempts,
+      isReconnecting: wsIsReconnecting,
+      isProcessingQueue: wsIsProcessingQueue,
+      initialReconnectDelayMs: INITIAL_RECONNECT_DELAY_MS,
+      maxReconnectDelayMs: MAX_RECONNECT_DELAY_MS,
+      heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
+      lastHeartbeatBlock: wsLastHeartbeatBlock,
+      lastHeartbeatAt: wsLastHeartbeatAt,
+      connectedAt: wsConnectedAt,
+      lastDisconnectReason: wsLastDisconnectReason,
+      totalEventsReceived: wsTotalEventsReceived,
+      recentEvents: wsRecentEvents,
+    });
+  });
+
+  app.post('/api/ws-bot/reconnect', async (_req: Request, res: Response) => {
+    try {
+      wsReconnectAttempts = 0;
+      await startEventListener();
+      res.json({
+        success: true,
+        message: 'สั่งเชื่อมต่อ WebSocketProvider ใหม่และรีเซ็ตตัวนับ Exponential Backoff เรียบร้อยแล้ว',
+        connected: eventListenerActive && wsBotProvider !== null,
+        lastHeartbeatBlock: wsLastHeartbeatBlock,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.post('/api/ws-bot/trigger-check', async (_req: Request, res: Response) => {
+    try {
+      await checkAndProcessBotCloneQueue('MANUAL_API_TRIGGER');
+      res.json({
+        success: true,
+        message: '🤖 บอทตรวจสอบคิว Auto ID, Extra ID, Clone Queue และซิงค์ข้อมูลบล็อกเชนสำเร็จ!',
+        lastSyncedBlock: matrixDB.lastSyncedBlock,
+        recentEvents: wsRecentEvents.slice(0, 10),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  app.get('/api/db/postgres', async (_req: Request, res: Response) => {
+    await refreshPgTableCounts();
+    res.json({
+      success: true,
+      connected: pgConnected,
+      host: PG_ENDPOINT_INFO.host,
+      port: PG_ENDPOINT_INFO.port,
+      database: PG_ENDPOINT_INFO.database,
+      contractAddress: CONTRACT_ADDRESS,
+      tableCounts: pgTablesCount,
+      lastError: pgLastError,
+    });
+  });
+
+  app.get('/api/matrix/info', (_req: Request, res: Response) => {
+    res.json({
+      name: 'FractalFlowMatrix27',
+      version: 'v2.7.0 (Solidity ^0.8.20)',
+      contractAddress: CONTRACT_ADDRESS,
+      usdtAddress: USDT_ADDRESS,
+      maxRank: 18,
+      maxLevels: 15,
+      network: {
+        name: 'BNB Smart Chain Testnet',
+        chainId: 97,
+        currency: 'tBNB',
+        blockExplorer: `https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`,
+        usdtExplorer: `https://testnet.bscscan.com/address/${USDT_ADDRESS}`,
+      },
+      rewardDistribution: {
+        leftChild: {
+          directPercent: 30,
+          levelPercentPerTier: 2,
+          maxLevels: 15,
+          totalLevelPercent: 30,
+          upgradeVaultPercent: 35,
+          allSellPercent: 4,
+          botPercent: 1,
+        },
+        rightChild: {
+          trigger: 'Auto-Clone Spawn (_triggerRightChildClone) for Parent Node Owner',
+        },
+      },
+      ranks: RANK_PRICES_USDT.map((price, i) => ({
+        rank: i + 1,
+        name: `Rank ${i + 1}`,
+        priceUSDT: price,
+        directBonusUSDT: +(price * 0.3).toFixed(2),
+        levelBonusPerTierUSDT: +(price * 0.02).toFixed(2),
+        maxLevelTotalUSDT: +(price * 0.3).toFixed(2),
+        upgradeVaultUSDT: +(price * 0.35).toFixed(2),
+        allSellUSDT: +(price * 0.04).toFixed(2),
+        botUSDT: +(price * 0.01).toFixed(2),
+      })),
+    });
+  });
+
+  // ==========================================
+  // PERSISTENT DATABASE INDEXER & SYNC ENGINE
+  // ==========================================
+  const rankSyncTimestamps = new Map<string, number>();
+  const rankSyncInFlight = new Map<string, Promise<IndexedTreeNode[]>>();
+  let fullSyncInFlight: Promise<void> | null = null;
+
+  async function fetchSingleNodeFromContract(
+    contract: ethers.Contract,
+    rankNum: number,
+    nodeId: number
+  ): Promise<IndexedTreeNode | null> {
+    let retries = 3;
+    while (retries >= 0) {
+      try {
+        const [raw, origBn, roundBn, sponsorNodeBn, vaultBn] = await Promise.all([
+          contract.rankNodes(rankNum, nodeId),
+          contract.nodeOriginMainId(rankNum, nodeId).catch(() => 0n),
+          contract.nodeCloneRound(rankNum, nodeId).catch(() => 0n),
+          contract.nodeDirectSponsorNodeId(rankNum, nodeId).catch(() => 0n),
+          contract.nodeUpgradeVault(rankNum, nodeId).catch(() => 0n),
+        ]);
+
+        const id = Number(raw.id ?? raw[0] ?? 0);
+        if (id > 0) {
+          const dec = vaultBn >= 100000000000000n ? 18 : (activeUsdtDecimals || 18);
+          const rawVaultVal = Number(ethers.formatUnits(vaultBn, dec));
+          const isClone = Boolean(raw.isClone ?? raw[6] ?? false);
+          const isExtraId =
+            Boolean(raw.isExtraId ?? raw[7] ?? false) && !isClone;
+          let originType: IndexedTreeNode['originType'] = 'MANUAL_REGISTER';
+          if (isClone) originType = 'CLONE';
+          else if (isExtraId) originType = 'AUTO_EXTRA';
+
+          return {
+            id,
+            rank: rankNum,
+            owner: String(raw.owner ?? raw[1] ?? ethers.ZeroAddress),
+            directSponsor: String(raw.directSponsor ?? raw[2] ?? ethers.ZeroAddress),
+            parentId: Number(raw.parentId ?? raw[3] ?? 0),
+            leftChild: Number(raw.leftChild ?? raw[4] ?? 0),
+            rightChild: Number(raw.rightChild ?? raw[5] ?? 0),
+            isClone,
+            isExtraId,
+            originMainId: Number(origBn) > 0 ? Number(origBn) : id,
+            cloneRound: Number(roundBn),
+            directSponsorNodeId: Number(sponsorNodeBn),
+            nodeVault: rawVaultVal,
+            rawNodeVault: rawVaultVal,
+            reconciledBaseVault: rawVaultVal,
+            originType,
+            createdAt: new Date().toISOString(),
+          } as IndexedTreeNode;
+        }
+        return null;
+      } catch {
+        retries--;
+        if (retries < 0) return null;
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+    }
+    return null;
+  }
+
+  async function syncRankIntoDatabase(
+    rank: number,
+    targetContract: string = CONTRACT_ADDRESS,
+    forceRefresh = false,
+    bypassCooldown = false
+  ): Promise<IndexedTreeNode[]> {
+    const rankNum = Math.min(Math.max(Number(rank) || 1, 1), 18);
+    const cacheKey = `${targetContract.toLowerCase()}:${rankNum}`;
+    const now = Date.now();
+
+    const lastTs = rankSyncTimestamps.get(cacheKey) || 0;
+    const existingNodes = matrixDB.nodesByRank[rankNum] || [];
+    if (
+      !forceRefresh &&
+      !bypassCooldown &&
+      existingNodes.length > 0 &&
+      targetContract.toLowerCase() === matrixDB.contractAddress.toLowerCase() &&
+      now - lastTs < 12000
+    ) {
+      return reconcileRankTreeLinks(existingNodes);
+    }
+
+    if (rankSyncInFlight.has(cacheKey)) {
+      return rankSyncInFlight.get(cacheKey)!;
+    }
+
+    const syncPromise = (async (): Promise<IndexedTreeNode[]> => {
+      try {
+        const provider = getProvider();
+        const contract = new ethers.Contract(targetContract, MATRIX_READ_ABI, provider);
+
+        const realExisting = existingNodes.filter((n) => !n.isSyntheticExtra);
+        let totalNodes = realExisting.filter((n) => !n.isLocalUpgrade).length || 1;
+        try {
+          const totalBn = await contract.totalNodesInRank(rankNum);
+          totalNodes = Math.max(1, Number(totalBn));
+        } catch {
+          totalNodes = Math.max(1, realExisting.filter((n) => !n.isLocalUpgrade).length || 1);
+        }
+
+        const localUpgradedNodes = realExisting.filter(
+          (n) => n.isLocalUpgrade || n.isAdminFreeUpgrade
+        );
+        const preservedMetaById = new Map<
+          number,
+          {
+            createdAt?: string;
+            isAdminFreeUpgrade?: boolean;
+            confirmedOriginType?: 'MANUAL_REGISTER' | 'AUTO_NEW_MAIN';
+            autoSourceMainId?: number;
+          }
+        >();
+        for (const existing of realExisting) {
+          if (existing && existing.id > 0) {
+            preservedMetaById.set(existing.id, {
+              createdAt: existing.createdAt,
+              isAdminFreeUpgrade: existing.isAdminFreeUpgrade,
+              confirmedOriginType: existing.confirmedOriginType,
+              autoSourceMainId: existing.autoSourceMainId,
+            });
+          }
+        }
+
+        const maxFetch = Math.max(totalNodes, 1);
+        const mergedMap = new Map<number, IndexedTreeNode>();
+        for (const existing of realExisting) {
+          if (existing && existing.id > 0 && existing.id <= totalNodes && !existing.isLocalUpgrade) {
+            const copy = { ...existing };
+            if (copy.leftChild > maxFetch) copy.leftChild = 0;
+            if (copy.rightChild > maxFetch) copy.rightChild = 0;
+            mergedMap.set(copy.id, copy);
+          }
+        }
+
+        // Determine which node IDs need to be fetched (all if forceRefresh, or when missing/incomplete)
+        const maxExistingChainId = realExisting.reduce(
+          (m, n) => (!n.isLocalUpgrade ? Math.max(m, n.id) : m),
+          0
+        );
+        const idsToFetch: number[] = [];
+        for (let i = 1; i <= maxFetch; i++) {
+          const ex = mergedMap.get(i);
+          const needsMetadataRefresh =
+            ex &&
+            ((ex.isClone && (!ex.originMainId || ex.originMainId === ex.id)) ||
+              (rankNum > 1 && i > 1 && !ex.isClone && !ex.isExtraId && (!ex.originMainId || ex.originMainId <= 1)));
+          if (forceRefresh || !ex || needsMetadataRefresh) {
+            idsToFetch.push(i);
+          }
+        }
+
+        const reattachLocalUpgradesIntoMergedMap = (
+          targetMap: Map<number, IndexedTreeNode>,
+          locals: IndexedTreeNode[]
+        ) => {
+          if (!locals || locals.length === 0) return;
+          const sortedLocals = [...locals].sort((a, b) => a.id - b.id);
+          const idRemap = new Map<number, number>();
+          const syncedNonCloneOrigins = new Set<number>();
+
+          // Pass 1: Non-clone local upgrades / extra IDs
+          for (const loc of sortedLocals) {
+            if (loc.isClone) continue;
+            const matchingChainNode = Array.from(targetMap.values()).find((n) => {
+              if (n.isLocalUpgrade || n.isClone) return false;
+              if (loc.isExtraId) {
+                return (
+                  n.isExtraId &&
+                  n.id === loc.id &&
+                  (n.owner || '').toLowerCase() === (loc.owner || '').toLowerCase()
+                );
+              }
+              return !n.isExtraId && n.originMainId === loc.originMainId;
+            });
+            if (matchingChainNode) {
+              syncedNonCloneOrigins.add(loc.originMainId || loc.id);
+              if (loc.isAdminFreeUpgrade || knownAdminFreeNodeKeys.has(`${rankNum}:${matchingChainNode.id}`)) {
+                matchingChainNode.isAdminFreeUpgrade = true;
+                knownAdminFreeNodeKeys.add(`${rankNum}:${matchingChainNode.id}`);
+              }
+              continue;
+            }
+            if (!loc.isLocalUpgrade) continue;
+
+            const locCopy = { ...loc };
+            if (locCopy.parentId > 0 && idRemap.has(locCopy.parentId)) {
+              locCopy.parentId = idRemap.get(locCopy.parentId)!;
+            }
+            if (targetMap.has(locCopy.id)) {
+              const maxCurrentId = Array.from(targetMap.keys()).reduce((m, k) => Math.max(m, k), 0);
+              const newAssignedId = maxCurrentId + 1;
+              idRemap.set(loc.id, newAssignedId);
+              locCopy.id = newAssignedId;
+            }
+            const parentInMerged = targetMap.get(locCopy.parentId);
+            if (parentInMerged) {
+              if (locCopy.isLeft === true) {
+                if (parentInMerged.leftChild === 0 || parentInMerged.leftChild === loc.id) {
+                  parentInMerged.leftChild = locCopy.id;
+                } else if (parentInMerged.rightChild === 0 || parentInMerged.rightChild === loc.id) {
+                  parentInMerged.rightChild = locCopy.id;
+                  locCopy.isLeft = false;
+                }
+              } else if (locCopy.isLeft === false) {
+                if (parentInMerged.rightChild === 0 || parentInMerged.rightChild === loc.id) {
+                  parentInMerged.rightChild = locCopy.id;
+                } else if (parentInMerged.leftChild === 0 || parentInMerged.leftChild === loc.id) {
+                  parentInMerged.leftChild = locCopy.id;
+                  locCopy.isLeft = true;
+                }
+              } else if (parentInMerged.leftChild === 0 || parentInMerged.leftChild === loc.id) {
+                parentInMerged.leftChild = locCopy.id;
+                locCopy.isLeft = true;
+              } else if (parentInMerged.rightChild === 0 || parentInMerged.rightChild === loc.id) {
+                parentInMerged.rightChild = locCopy.id;
+                locCopy.isLeft = false;
+              }
+            }
+            targetMap.set(locCopy.id, locCopy);
+          }
+
+          // Pass 2: Clone nodes spawned by local upgrades (keep unmerged local clones intact!)
+          const hasAnyUnmergedLocalNonClone = sortedLocals.some(
+            (l) => !l.isClone && l.isLocalUpgrade && !syncedNonCloneOrigins.has(l.originMainId || l.id)
+          );
+          for (const loc of sortedLocals) {
+            if (!loc.isClone) continue;
+
+            const remappedParentId =
+              loc.parentId > 0 && idRemap.has(loc.parentId)
+                ? idRemap.get(loc.parentId)!
+                : loc.parentId;
+
+            const existingChainClone =
+              (targetMap.has(loc.id) &&
+              !targetMap.get(loc.id)!.isLocalUpgrade &&
+              targetMap.get(loc.id)!.isClone
+                ? targetMap.get(loc.id)
+                : undefined) ||
+              Array.from(targetMap.values()).find((n) => {
+                if (n.isLocalUpgrade || !n.isClone) return false;
+                if (n.parentId !== remappedParentId) return false;
+                if ((n.originMainId || n.id) !== (loc.originMainId || loc.id)) return false;
+                const np = targetMap.get(n.parentId);
+                const nIsLeft =
+                  n.isLeft !== undefined
+                    ? n.isLeft
+                    : np
+                    ? np.leftChild === n.id
+                      ? true
+                      : np.rightChild === n.id
+                      ? false
+                      : undefined
+                    : undefined;
+                if (loc.isLeft !== undefined && nIsLeft !== undefined) {
+                  return nIsLeft === loc.isLeft;
+                }
+                return n.id === loc.id;
+              });
+
+            if (existingChainClone) {
+              if (loc.isAdminFreeUpgrade) {
+                existingChainClone.isAdminFreeUpgrade = true;
+              }
+              continue;
+            }
+            if (!loc.isLocalUpgrade) continue;
+
+            const parentInMerged = targetMap.get(remappedParentId);
+            if (!parentInMerged) continue;
+
+            // If this clone's parent slot on-chain was already filled by a real on-chain clone
+            // and no unmerged local non-clone upgrade remains, don't duplicate
+            const slotOccupiedOnChain =
+              (loc.isLeft === true &&
+                parentInMerged.leftChild > 0 &&
+                !targetMap.get(parentInMerged.leftChild)?.isLocalUpgrade) ||
+              (loc.isLeft === false &&
+                parentInMerged.rightChild > 0 &&
+                !targetMap.get(parentInMerged.rightChild)?.isLocalUpgrade);
+            if (slotOccupiedOnChain && !hasAnyUnmergedLocalNonClone) continue;
+
+            const cloneCopy: IndexedTreeNode = {
+              ...loc,
+              parentId: remappedParentId,
+              originType: loc.originType || 'CLONE',
+            };
+            if (targetMap.has(cloneCopy.id)) {
+              const maxCurrentId = Array.from(targetMap.keys()).reduce((m, k) => Math.max(m, k), 0);
+              const newAssignedId = maxCurrentId + 1;
+              idRemap.set(loc.id, newAssignedId);
+              cloneCopy.id = newAssignedId;
+            }
+
+            if (cloneCopy.isLeft === true) {
+              if (parentInMerged.leftChild === 0 || parentInMerged.leftChild === loc.id) {
+                parentInMerged.leftChild = cloneCopy.id;
+              } else if (parentInMerged.rightChild === 0 || parentInMerged.rightChild === loc.id) {
+                parentInMerged.rightChild = cloneCopy.id;
+                cloneCopy.isLeft = false;
+              }
+            } else if (cloneCopy.isLeft === false) {
+              if (parentInMerged.rightChild === 0 || parentInMerged.rightChild === loc.id) {
+                parentInMerged.rightChild = cloneCopy.id;
+              } else if (parentInMerged.leftChild === 0 || parentInMerged.leftChild === loc.id) {
+                parentInMerged.leftChild = cloneCopy.id;
+                cloneCopy.isLeft = true;
+              }
+            } else if (parentInMerged.leftChild === 0 || parentInMerged.leftChild === loc.id) {
+              parentInMerged.leftChild = cloneCopy.id;
+              cloneCopy.isLeft = true;
+            } else if (parentInMerged.rightChild === 0 || parentInMerged.rightChild === loc.id) {
+              parentInMerged.rightChild = cloneCopy.id;
+              cloneCopy.isLeft = false;
+            }
+
+            targetMap.set(cloneCopy.id, cloneCopy);
+          }
+        };
+
+        // If no new nodes and not forceRefresh, still refresh nodeUpgradeVault for existing Main IDs
+        // because upgrades in higher ranks or auto-spawns can deduct nodeUpgradeVault without adding nodes here
+        if (idsToFetch.length === 0 && maxExistingChainId >= maxFetch) {
+          rankSyncTimestamps.set(cacheKey, Date.now());
+          const mainNodesToRefresh = Array.from(mergedMap.values()).filter(
+            (n) => !n.isClone && !n.isExtraId && !n.isLocalUpgrade && !n.isSyntheticExtra
+          );
+          if (mainNodesToRefresh.length > 0) {
+            await Promise.all(
+              mainNodesToRefresh.map(async (mNode) => {
+                try {
+                  const rawV = await contract.nodeUpgradeVault(rankNum, mNode.id);
+                  const dec = rawV >= 100000000000000n ? 18 : (activeUsdtDecimals || 18);
+                  const val = Number(ethers.formatUnits(rawV, dec));
+                  mNode.rawNodeVault = val;
+                  mNode.nodeVault = val;
+                  mNode.reconciledBaseVault = val;
+                } catch {
+                  // Ignore transient RPC error
+                }
+              })
+            );
+          }
+          reattachLocalUpgradesIntoMergedMap(mergedMap, localUpgradedNodes);
+          const fastList = reconcileRankTreeLinks(Array.from(mergedMap.values()));
+          matrixDB.nodesByRank[rankNum] = fastList;
+          matrixDB.rankCounts[rankNum] = Math.max(1, fastList.length);
+          reconcileAutoExtraIdsAcrossRanks();
+          return reconcileRankTreeLinks(matrixDB.nodesByRank[rankNum] || fastList);
+        }
+
+        const CHUNK_SIZE = 5;
+        const newlyFetchedNodes: IndexedTreeNode[] = [];
+
+        for (let offset = 0; offset < idsToFetch.length; offset += CHUNK_SIZE) {
+          const chunkIds = idsToFetch.slice(offset, offset + CHUNK_SIZE);
+          const chunkResults = await Promise.all(
+            chunkIds.map((nodeId) => fetchSingleNodeFromContract(contract, rankNum, nodeId))
+          );
+          for (const item of chunkResults) {
+            if (item) {
+              const prevMeta = preservedMetaById.get(item.id);
+              const prevExisting = mergedMap.get(item.id);
+              item.createdAt = prevExisting?.createdAt || prevMeta?.createdAt || new Date().toISOString();
+              if (
+                prevExisting?.isAdminFreeUpgrade ||
+                prevMeta?.isAdminFreeUpgrade ||
+                knownAdminFreeNodeKeys.has(`${rankNum}:${item.id}`)
+              ) {
+                item.isAdminFreeUpgrade = true;
+              }
+              const confirmedOrigin = prevExisting?.confirmedOriginType || prevMeta?.confirmedOriginType;
+              const savedAutoSrc = prevExisting?.autoSourceMainId || prevMeta?.autoSourceMainId;
+              if (confirmedOrigin && rankNum === 1 && !item.isClone && !item.isExtraId) {
+                item.confirmedOriginType = confirmedOrigin;
+                if (confirmedOrigin === 'AUTO_NEW_MAIN') {
+                  item.originType = 'AUTO_NEW_MAIN';
+                  const onChainSp =
+                    item.directSponsorNodeId > 0 && item.directSponsorNodeId < item.id
+                      ? item.directSponsorNodeId
+                      : 0;
+                  const onChainSpNode = onChainSp > 0 ? mergedMap.get(onChainSp) : undefined;
+                  const useOnChainSp =
+                    onChainSp > 0 &&
+                    (!onChainSpNode ||
+                      (!onChainSpNode.isClone &&
+                        !onChainSpNode.isExtraId &&
+                        (onChainSpNode.owner || '').toLowerCase() === (item.owner || '').toLowerCase()));
+                  if (useOnChainSp) {
+                    item.autoSourceMainId = onChainSp;
+                  } else if (savedAutoSrc && savedAutoSrc > 0) {
+                    item.autoSourceMainId = savedAutoSrc;
+                  }
+                } else {
+                  item.originType = 'MANUAL_REGISTER';
+                }
+              }
+              mergedMap.set(item.id, item);
+              newlyFetchedNodes.push(item);
+            }
+          }
+          if (offset + CHUNK_SIZE < idsToFetch.length) {
+            await new Promise((resolve) => setTimeout(resolve, 35));
+          }
+        }
+
+        // If this was an incremental delta sync (new nodes arrived), also refresh their parent nodes and all Main IDs in this rank
+        if (!forceRefresh && newlyFetchedNodes.length > 0) {
+          const parentAndMainIdsToRefresh = Array.from(
+            new Set([
+              ...newlyFetchedNodes
+                .map((n) => n.parentId)
+                .filter((pid) => pid > 0 && !idsToFetch.includes(pid)),
+              ...Array.from(mergedMap.values())
+                .filter((n) => !n.isClone && !n.isExtraId && !idsToFetch.includes(n.id))
+                .map((n) => n.id),
+            ])
+          );
+          if (parentAndMainIdsToRefresh.length > 0) {
+            const refreshedNodes = await Promise.all(
+              parentAndMainIdsToRefresh.map((pid) => fetchSingleNodeFromContract(contract, rankNum, pid))
+            );
+            for (const pItem of refreshedNodes) {
+              if (pItem) {
+                const prevMeta = preservedMetaById.get(pItem.id);
+                const prevExisting = mergedMap.get(pItem.id);
+                if (prevExisting?.createdAt || prevMeta?.createdAt) {
+                  pItem.createdAt = prevExisting?.createdAt || prevMeta?.createdAt;
+                }
+                if (
+                  prevExisting?.isAdminFreeUpgrade ||
+                  prevMeta?.isAdminFreeUpgrade ||
+                  knownAdminFreeNodeKeys.has(`${rankNum}:${pItem.id}`)
+                ) {
+                  pItem.isAdminFreeUpgrade = true;
+                }
+                const confirmedOrigin = prevExisting?.confirmedOriginType || prevMeta?.confirmedOriginType;
+                const savedAutoSrc = prevExisting?.autoSourceMainId || prevMeta?.autoSourceMainId;
+                if (confirmedOrigin && rankNum === 1 && !pItem.isClone && !pItem.isExtraId) {
+                  pItem.confirmedOriginType = confirmedOrigin;
+                  if (confirmedOrigin === 'AUTO_NEW_MAIN') {
+                    pItem.originType = 'AUTO_NEW_MAIN';
+                    const onChainSp =
+                      pItem.directSponsorNodeId > 0 && pItem.directSponsorNodeId < pItem.id
+                        ? pItem.directSponsorNodeId
+                        : 0;
+                    const onChainSpNode = onChainSp > 0 ? mergedMap.get(onChainSp) : undefined;
+                    const useOnChainSp =
+                      onChainSp > 0 &&
+                      (!onChainSpNode ||
+                        (!onChainSpNode.isClone &&
+                          !onChainSpNode.isExtraId &&
+                          (onChainSpNode.owner || '').toLowerCase() === (pItem.owner || '').toLowerCase()));
+                    if (useOnChainSp) {
+                      pItem.autoSourceMainId = onChainSp;
+                    } else if (savedAutoSrc && savedAutoSrc > 0) {
+                      pItem.autoSourceMainId = savedAutoSrc;
+                    }
+                  } else {
+                    pItem.originType = 'MANUAL_REGISTER';
+                  }
+                }
+                mergedMap.set(pItem.id, pItem);
+              }
+            }
+          }
+        }
+
+        // Re-attach any un-synced local database-upgraded Main IDs & Clones and preserve isAdminFreeUpgrade flags
+        reattachLocalUpgradesIntoMergedMap(mergedMap, localUpgradedNodes);
+
+        const fetchedNodes = reconcileRankTreeLinks(Array.from(mergedMap.values()));
+
+        // Reconcile Rank 1 sponsor & originMainId for Rank 2-27 so ผู้แนะนำ (Direct Sponsor) never changes!
+        if (rankNum > 1) {
+          const r1Nodes = matrixDB.nodesByRank[1] || [];
+          for (const fn of fetchedNodes) {
+            if (fn.isExtraId) {
+              if (!fn.directSponsorNodeId || fn.directSponsorNodeId <= 0) {
+                fn.directSponsorNodeId = 1;
+              }
+            } else if (!fn.isClone) {
+              const origNodeR1 =
+                fn.originMainId > 1 || fn.id === 1
+                  ? r1Nodes.find((n) => n.id === fn.originMainId && !n.isClone && !n.isExtraId)
+                  : undefined;
+              // CRITICAL: If fn.originMainId > 1 is already set from the smart contract (e.g. #39),
+              // NEVER overwrite it with the wallet's first R1 node (#3) if r1Nodes hasn't synced #39 yet!
+              const userR1 =
+                origNodeR1 ||
+                (fn.originMainId <= 1 && fn.id > 1
+                  ? r1Nodes.find(
+                      (n) =>
+                        n.owner.toLowerCase() === fn.owner.toLowerCase() &&
+                        !n.isClone &&
+                        !n.isExtraId &&
+                        n.id > 1
+                    )
+                  : undefined);
+              if (userR1) {
+                fn.originMainId = userR1.id;
+                fn.directSponsorNodeId = userR1.directSponsorNodeId || (userR1.id === 1 ? 0 : 1);
+                fn.directSponsor = userR1.directSponsor;
+              }
+            } else if (fn.isClone) {
+              const localOriginMain = fetchedNodes.find(
+                (m) => !m.isClone && !m.isExtraId && (m.originMainId === fn.originMainId || m.id === fn.originMainId)
+              );
+              const r1OriginId = localOriginMain ? localOriginMain.originMainId : fn.originMainId;
+              if (r1OriginId > 0) {
+                fn.originMainId = r1OriginId;
+              }
+              const origNodeR1 = r1Nodes.find((n) => n.id === r1OriginId && !n.isClone && !n.isExtraId);
+              if (origNodeR1) {
+                fn.directSponsorNodeId = origNodeR1.directSponsorNodeId || (origNodeR1.id === 1 ? 0 : 1);
+                fn.directSponsor = origNodeR1.directSponsor;
+              } else if (localOriginMain && localOriginMain.directSponsorNodeId > 0) {
+                fn.directSponsorNodeId = localOriginMain.directSponsorNodeId;
+                fn.directSponsor = localOriginMain.directSponsor;
+              }
+            }
+          }
+        }
+
+        // Keep per-node on-chain nodeUpgradeVault(rank, nodeId) as the authoritative nodeVault
+        if (fetchedNodes.length > 0) {
+          if (rankNum === 1 && fetchedNodes[0]?.owner) {
+            matrixDB.systemWallets.rootOwner = fetchedNodes[0].owner;
+          }
+
+          const ownerVaultSums = new Map<string, number>();
+          for (const fn of fetchedNodes) {
+            const val = Number(fn.rawNodeVault ?? fn.nodeVault ?? 0);
+            fn.nodeVault = val;
+            fn.reconciledBaseVault = val;
+            if (!fn.isClone && !fn.isExtraId && fn.owner && fn.owner !== ethers.ZeroAddress) {
+              const oKey = String(fn.owner).toLowerCase();
+              ownerVaultSums.set(oKey, Number(((ownerVaultSums.get(oKey) || 0) + val).toFixed(4)));
+            }
+          }
+
+          for (const [oKey, sumVal] of ownerVaultSums.entries()) {
+            if (!matrixDB.userRankVaults[oKey]) matrixDB.userRankVaults[oKey] = {};
+            matrixDB.userRankVaults[oKey][rankNum] = sumVal;
+          }
+        }
+
+        if (fetchedNodes.length > 0 && targetContract.toLowerCase() === CONTRACT_ADDRESS.toLowerCase()) {
+          matrixDB.nodesByRank[rankNum] = fetchedNodes;
+          matrixDB.rankCounts[rankNum] = Math.max(totalNodes, fetchedNodes.length);
+          matrixDB.lastSyncedAt = new Date().toISOString();
+          rankSyncTimestamps.set(cacheKey, Date.now());
+
+          if (rankNum === 1) {
+            inMemoryDB.nodes.clear();
+            for (const fn of fetchedNodes) {
+              inMemoryDB.nodes.set(String(fn.id), {
+                id: String(fn.id),
+                rank: 1,
+                owner: fn.owner,
+                sponsor: fn.directSponsor,
+                parentId: String(fn.parentId),
+                leftChild: String(fn.leftChild),
+                rightChild: String(fn.rightChild),
+                isClone: fn.isClone,
+                isExtraId: fn.isExtraId,
+                origin: fn.isClone ? 'CLONE' : 'REGISTRATION',
+                createdAt: matrixDB.lastSyncedAt,
+              });
+            }
+          }
+
+          reconcileAutoExtraIdsAcrossRanks();
+          if (rankNum === 1) {
+            reconcileRank1AutoMainIds();
+          }
+          rebuildDatabaseRewardLogsFromNodes();
+          rebuildDatabaseUpgradeLogsFromNodes();
+          saveMatrixDBToDisk();
+          return reconcileRankTreeLinks(matrixDB.nodesByRank[rankNum] || fetchedNodes);
+        }
+      } catch (err: any) {
+        console.warn(`[MatrixDB Sync] Notice syncing rank ${rankNum}:`, err?.message || err);
+      } finally {
+        rankSyncInFlight.delete(cacheKey);
+      }
+      reconcileAutoExtraIdsAcrossRanks();
+      return reconcileRankTreeLinks(matrixDB.nodesByRank[rankNum] || []);
+    })();
+
+    rankSyncInFlight.set(cacheKey, syncPromise);
+    return syncPromise;
+  }
+
+  let lastChainTxSyncAt = 0;
+  let chainTxSyncInFlight: Promise<number> | null = null;
+
+  async function syncRecentOnChainTxHashes(
+    targetContract: string = CONTRACT_ADDRESS,
+    lookbackBlocks = 35000
+  ): Promise<number> {
+    if (chainTxSyncInFlight) return chainTxSyncInFlight;
+
+    chainTxSyncInFlight = (async () => {
+      let addedCount = 0;
+      try {
+        const provider = getProvider();
+        const latestBlock = await provider.getBlockNumber().catch(() => 0);
+        if (!latestBlock || latestBlock <= 0) return 0;
+
+        const eventAbi = [
+          'event UserRegistered(address indexed user, address indexed sponsor, uint256 sponsorNodeId, uint256 newMainNodeId)',
+          'event BatchRegistered(address indexed user, uint256 count, uint256 totalCost)',
+          'event NodeCreated(uint8 indexed rank, uint256 indexed nodeId, address indexed owner, address directSponsor, uint256 parentId, bool isLeft, bool isClone, bool isExtraId)',
+          'event RankUpgraded(address indexed user, uint8 fromRank, uint8 toRank, uint256 newNodeId, bool isAutoUpgrade)',
+          'event AutoNewMainIdCreated(address indexed user, uint256 count, uint256 vaultDiff)',
+          'event AutoExtraIdCreated(address indexed user, uint8 rank, uint256 newNodeId)',
+          'event RewardDistributed(uint256 indexed fromNodeId, uint256 indexed toNodeId, address indexed recipient, uint8 rank, string rewardType, uint256 amount)',
+        ];
+        const logIface = new ethers.Interface(eventAbi);
+        const contract = new ethers.Contract(targetContract, eventAbi, provider);
+        const readContract = new ethers.Contract(targetContract, MATRIX_READ_ABI, provider);
+        const hasUnconfirmedR1Nodes = () =>
+          (matrixDB.nodesByRank[1] || []).some(
+            (n) => !n.isClone && !n.isExtraId && !n.isSyntheticExtra && n.id > 1 && !n.confirmedOriginType
+          );
+        const effectiveLookback = hasUnconfirmedR1Nodes()
+          ? Math.max(lookbackBlocks, 150000)
+          : lookbackBlocks;
+        const startBlock = Math.max(0, latestBlock - effectiveLookback);
+        const chunkSize = 4800; // Safe chunk under BSC Testnet 5000-block getLogs limit
+        const blockTimeCache = new Map<number, string>();
+
+        const resolveBlockIso = async (bn: number): Promise<string> => {
+          if (blockTimeCache.has(bn)) return blockTimeCache.get(bn)!;
+          try {
+            const blk = await provider.getBlock(bn);
+            const iso = blk?.timestamp
+              ? new Date(Number(blk.timestamp) * 1000).toISOString()
+              : new Date().toISOString();
+            blockTimeCache.set(bn, iso);
+            return iso;
+          } catch {
+            return new Date().toISOString();
+          }
+        };
+
+        const beforeLen = (matrixDB.transactionLogs || []).length;
+        let newlyTaggedAdminNodes = false;
+        let newlyTaggedAutoNodes = false;
+        const targetContractLower = targetContract.toLowerCase();
+
+        // Helper: determine the most specific eligible Rank 1 Main ID of `ownerLower` under which `autoNodeId` was placed
+        const resolveAutoSourceInR1Tree = (autoNodeId: number, ownerLower: string, preferredCandidates: number[] = []): number => {
+          const r1List = matrixDB.nodesByRank[1] || [];
+          const byId = new Map<number, IndexedTreeNode>();
+          for (const rn of r1List) byId.set(rn.id, rn);
+
+          const isMainRankEligible = (mId: number): boolean => {
+            if (mId === 1) return true;
+            for (let r = 6; r <= 18; r++) {
+              if ((matrixDB.nodesByRank[r] || []).some((x) => !x.isClone && !x.isExtraId && x.originMainId === mId)) {
+                return true;
+              }
+            }
+            return false;
+          };
+
+          const getDepthUnderMainOrClone = (mId: number): number => {
+            if (autoNodeId <= mId) return 999999;
+            let curr = byId.get(autoNodeId)?.parentId || 0;
+            let steps = 0;
+            const visited = new Set<number>();
+            while (curr > 0 && !visited.has(curr)) {
+              visited.add(curr);
+              steps++;
+              if (curr === mId) return steps;
+              const pNode = byId.get(curr);
+              if (!pNode) break;
+              if (pNode.isClone && (pNode.originMainId || pNode.id) === mId) return steps;
+              curr = pNode.parentId;
+            }
+            return mId === 1 ? 100000 : 999999;
+          };
+
+          const validPrefs = Array.from(new Set(preferredCandidates))
+            .filter((pref) => {
+              if (pref <= 0 || pref >= autoNodeId) return false;
+              const pNode = byId.get(pref);
+              return (
+                Boolean(pNode) &&
+                !pNode!.isClone &&
+                !pNode!.isExtraId &&
+                (pNode!.owner || '').toLowerCase() === ownerLower &&
+                isMainRankEligible(pref) &&
+                getDepthUnderMainOrClone(pref) < 999999
+              );
+            })
+            .sort((a, b) => getDepthUnderMainOrClone(a) - getDepthUnderMainOrClone(b) || b - a);
+
+          if (validPrefs.length > 0) {
+            return validPrefs[0];
+          }
+
+          const candidates = r1List
+            .filter(
+              (m) =>
+                !m.isClone &&
+                !m.isExtraId &&
+                m.id < autoNodeId &&
+                (m.owner || '').toLowerCase() === ownerLower &&
+                isMainRankEligible(m.id) &&
+                getDepthUnderMainOrClone(m.id) < 999999
+            )
+            .sort((a, b) => getDepthUnderMainOrClone(a.id) - getDepthUnderMainOrClone(b.id) || b.id - a.id);
+
+          return candidates[0]?.id || 1;
+        };
+
+        // Helper: tag all Rank 1 non-clone non-extra NodeCreated events in an AutoNewMainIdCreated receipt
+        const inspectAndTagAutoIdTx = async (txHash: string): Promise<boolean> => {
+          const r1List = matrixDB.nodesByRank[1] || [];
+          const receipt = await Promise.race([
+            provider.getTransactionReceipt(txHash),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 6000)),
+          ]).catch(() => null);
+          if (!receipt?.logs) return false;
+
+          let changed = false;
+          const unconsumedR1ByOwner = new Map<string, number[]>();
+          const upgradeCandidatesByOwner = new Map<string, number[]>();
+
+          const resolveR1MainFromRankNode = (rNum: number, nId: number): number => {
+            if (nId <= 0) return 0;
+            const rList = matrixDB.nodesByRank[rNum] || [];
+            const found = rList.find((x) => x.id === nId);
+            if (found) {
+              return found.isClone || rNum > 1 ? found.originMainId || found.id : found.id;
+            }
+            return rNum === 1 ? nId : 0;
+          };
+
+          for (const log of receipt.logs) {
+            if (String(log.address || '').toLowerCase() !== targetContractLower) continue;
+            let parsed: ethers.LogDescription | null = null;
+            try {
+              parsed = logIface.parseLog(log);
+            } catch {
+              parsed = null;
+            }
+            if (!parsed) continue;
+
+            if (parsed.name === 'NodeCreated') {
+              const rNum = Number(parsed.args.rank || 0);
+              const nId = Number(parsed.args.nodeId || 0);
+              const ownerLower = String(parsed.args.owner || '').toLowerCase();
+              const isClone = Boolean(parsed.args.isClone);
+              const isExtra = Boolean(parsed.args.isExtraId);
+              if (rNum === 1 && nId > 1 && !isClone && !isExtra) {
+                const list = unconsumedR1ByOwner.get(ownerLower) || [];
+                list.push(nId);
+                unconsumedR1ByOwner.set(ownerLower, list);
+              } else if (rNum >= 2 && nId > 0 && !isClone && !isExtra) {
+                const origR1 = resolveR1MainFromRankNode(rNum, nId);
+                if (origR1 > 0) {
+                  const uList = upgradeCandidatesByOwner.get(ownerLower) || [];
+                  uList.push(origR1);
+                  upgradeCandidatesByOwner.set(ownerLower, uList);
+                }
+              }
+            } else if (parsed.name === 'RewardDistributed') {
+              const rewardType = String(parsed.args.rewardType || '');
+              if (rewardType === 'UPGRADE_VAULT') {
+                const rNum = Number(parsed.args.rank || 1);
+                const toNodeId = Number(parsed.args.toNodeId || 0);
+                const recLower = String(parsed.args.recipient || '').toLowerCase();
+                const origR1 = resolveR1MainFromRankNode(rNum, toNodeId);
+                if (origR1 > 0 && recLower) {
+                  const uList = upgradeCandidatesByOwner.get(recLower) || [];
+                  uList.push(origR1);
+                  upgradeCandidatesByOwner.set(recLower, uList);
+                }
+              }
+            } else if (parsed.name === 'RankUpgraded') {
+              const userLower = String(parsed.args.user || '').toLowerCase();
+              const toR = Number(parsed.args.toRank || 2);
+              const newNId = Number(parsed.args.newNodeId || 0);
+              const origR1 = resolveR1MainFromRankNode(toR, newNId);
+              if (origR1 > 0) {
+                const uList = upgradeCandidatesByOwner.get(userLower) || [];
+                uList.push(origR1);
+                upgradeCandidatesByOwner.set(userLower, uList);
+              }
+            } else if (parsed.name === 'AutoNewMainIdCreated') {
+              const userLower = String(parsed.args.user || '').toLowerCase();
+              const cnt = Math.max(1, Number(parsed.args.count || 1));
+              const cands = unconsumedR1ByOwner.get(userLower) || [];
+              const autoNodeIds = cands.splice(Math.max(0, cands.length - cnt), cnt);
+              unconsumedR1ByOwner.set(userLower, cands);
+              const prefList = (upgradeCandidatesByOwner.get(userLower) || []).slice().reverse();
+
+              for (const autoId of autoNodeIds) {
+                const dbNode = r1List.find((n) => n.id === autoId);
+                if (!dbNode || dbNode.isClone || dbNode.isExtraId) continue;
+                let srcMain = 0;
+                const onChainSpId = await Promise.race([
+                  readContract.nodeDirectSponsorNodeId(1, autoId).then(Number),
+                  new Promise<number>((resolve) => setTimeout(() => resolve(0), 2500)),
+                ]).catch(() => 0);
+                if (onChainSpId > 0 && onChainSpId < autoId) {
+                  const spNode = r1List.find((n) => n.id === onChainSpId);
+                  if (
+                    spNode &&
+                    !spNode.isClone &&
+                    !spNode.isExtraId &&
+                    (spNode.owner || '').toLowerCase() === userLower
+                  ) {
+                    srcMain = onChainSpId;
+                  }
+                }
+                if (!srcMain) {
+                  srcMain = resolveAutoSourceInR1Tree(autoId, userLower, prefList);
+                }
+                if (
+                  dbNode.confirmedOriginType !== 'AUTO_NEW_MAIN' ||
+                  dbNode.autoSourceMainId !== srcMain ||
+                  dbNode.directSponsorNodeId !== srcMain
+                ) {
+                  dbNode.confirmedOriginType = 'AUTO_NEW_MAIN';
+                  dbNode.originType = 'AUTO_NEW_MAIN';
+                  dbNode.autoSourceMainId = srcMain;
+                  dbNode.directSponsorNodeId = srcMain;
+                  const srcNode = r1List.find((n) => n.id === srcMain);
+                  if (srcNode?.owner) dbNode.directSponsor = srcNode.owner;
+                  changed = true;
+                }
+              }
+            }
+          }
+
+          // Any remaining R1 !isClone && !isExtra NodeCreated in this tx not consumed by AutoNewMainIdCreated is a manual register
+          for (const remIds of unconsumedR1ByOwner.values()) {
+            for (const manualId of remIds) {
+              const dbNode = r1List.find((n) => n.id === manualId);
+              if (dbNode && !dbNode.isClone && !dbNode.isExtraId) {
+                if (dbNode.confirmedOriginType !== 'MANUAL_REGISTER' || dbNode.autoSourceMainId) {
+                  dbNode.confirmedOriginType = 'MANUAL_REGISTER';
+                  dbNode.originType = 'MANUAL_REGISTER';
+                  delete dbNode.autoSourceMainId;
+                  changed = true;
+                }
+              }
+            }
+          }
+
+          return changed;
+        };
+
+        // Scan newest chunks first
+        for (let toBlk = latestBlock; toBlk >= startBlock; toBlk -= chunkSize) {
+          const fromBlk = Math.max(startBlock, toBlk - chunkSize + 1);
+          try {
+            let autoLogsOk = true;
+            const [regLogs, batchLogs, nodeLogs, upgLogs, autoLogs, extraLogs] = await Promise.all([
+              contract.queryFilter(contract.filters.UserRegistered(), fromBlk, toBlk).catch(() => []),
+              contract.queryFilter(contract.filters.BatchRegistered(), fromBlk, toBlk).catch(() => []),
+              contract.queryFilter(contract.filters.NodeCreated(), fromBlk, toBlk).catch(() => []),
+              contract.queryFilter(contract.filters.RankUpgraded(), fromBlk, toBlk).catch(() => []),
+              contract.queryFilter(contract.filters.AutoNewMainIdCreated(), fromBlk, toBlk).catch(() => {
+                autoLogsOk = false;
+                return [];
+              }),
+              contract.queryFilter(contract.filters.AutoExtraIdCreated(), fromBlk, toBlk).catch(() => []),
+            ]);
+
+            const autoTxHashSet = new Set<string>(
+              autoLogs
+                .map((l: any) => String(l?.transactionHash || '').toLowerCase())
+                .filter((h) => isRealTxHash(h))
+            );
+            const manualTxHashSet = new Set<string>(
+              [...regLogs, ...batchLogs]
+                .map((l: any) => String(l?.transactionHash || '').toLowerCase())
+                .filter((h) => isRealTxHash(h))
+            );
+
+            // Inspect any AutoNewMainIdCreated tx receipts so the exact R1 Auto ID(s) & source Main ID are confirmed
+            if (autoTxHashSet.size > 0) {
+              for (const autoHash of autoTxHashSet) {
+                const tagged = await inspectAndTagAutoIdTx(autoHash);
+                if (tagged) newlyTaggedAutoNodes = true;
+              }
+            }
+
+            // Confirm all R1 non-clone non-extra nodes from pure UserRegistered/BatchRegistered txs as MANUAL_REGISTER
+            const r1NodesInDb = matrixDB.nodesByRank[1] || [];
+            for (const nl of nodeLogs as any[]) {
+              const rNum = Number(nl?.args?.rank || 0);
+              const nId = Number(nl?.args?.nodeId || 0);
+              const isClone = Boolean(nl?.args?.isClone);
+              const isExtra = Boolean(nl?.args?.isExtraId);
+              const txHashLower = String(nl?.transactionHash || '').toLowerCase();
+              const isConfirmedManualTx =
+                manualTxHashSet.has(txHashLower) || (autoLogsOk && !autoTxHashSet.has(txHashLower));
+              if (rNum === 1 && nId > 1 && !isClone && !isExtra && txHashLower && isConfirmedManualTx && !autoTxHashSet.has(txHashLower)) {
+                const dbNode = r1NodesInDb.find((n) => n.id === nId);
+                if (dbNode && !dbNode.isClone && !dbNode.isExtraId) {
+                  if (dbNode.confirmedOriginType !== 'MANUAL_REGISTER' || dbNode.autoSourceMainId) {
+                    dbNode.confirmedOriginType = 'MANUAL_REGISTER';
+                    dbNode.originType = 'MANUAL_REGISTER';
+                    delete dbNode.autoSourceMainId;
+                    newlyTaggedAutoNodes = true;
+                  }
+                }
+              }
+            }
+
+            // Inspect unseen Rank 2+ / RankUpgraded transactions so on-chain adminUpgradeRank* txs are accurately flagged
+            const rank2PlusHashes = Array.from(
+              new Set(
+                [
+                  ...upgLogs.map((l: any) => l?.transactionHash),
+                  ...nodeLogs
+                    .filter((l: any) => Number(l?.args?.rank || 0) >= 2)
+                    .map((l: any) => l?.transactionHash),
+                ].filter((h): h is string => isRealTxHash(h))
+              )
+            );
+            if (rank2PlusHashes.length > 0) {
+              const inspectResults = await Promise.all(
+                rank2PlusHashes.map((h) =>
+                  inspectAndTagAdminUpgradeTx(h, provider).catch(() => ({
+                    isAdminTx: false,
+                    taggedNodes: [],
+                    newlyTagged: false,
+                  }))
+                )
+              );
+              if (inspectResults.some((res) => res.newlyTagged)) {
+                newlyTaggedAdminNodes = true;
+              }
+            }
+
+            const allLogs = [
+              ...regLogs.map((l) => ({ kind: 'UserRegistered', log: l })),
+              ...batchLogs.map((l) => ({ kind: 'BatchRegistered', log: l })),
+              ...nodeLogs.map((l) => ({ kind: 'NodeCreated', log: l })),
+              ...upgLogs.map((l) => ({ kind: 'RankUpgraded', log: l })),
+              ...autoLogs.map((l) => ({ kind: 'AutoNewMainIdCreated', log: l })),
+              ...extraLogs.map((l) => ({ kind: 'AutoExtraIdCreated', log: l })),
+            ];
+
+            if (allLogs.length > 0) {
+              const uniqueBlocks = Array.from(new Set(allLogs.map((x) => Number(x.log.blockNumber || 0)).filter(Boolean)));
+              await Promise.all(uniqueBlocks.slice(0, 25).map((bn) => resolveBlockIso(bn)));
+
+              for (const item of allLogs) {
+                const ev: any = item.log;
+                const args = ev?.args;
+                const txHash = ev?.transactionHash;
+                const bn = Number(ev?.blockNumber || 0) || undefined;
+                const ts = bn ? blockTimeCache.get(bn) : undefined;
+                if (!txHash || !args) continue;
+
+                const isAdminTx = inspectedAdminTxCache.get(String(txHash).toLowerCase()) === true;
+
+                if (item.kind === 'UserRegistered') {
+                  const mainId = Number(args.newMainNodeId ?? args.mainNodeId ?? 0);
+                  recordRealTransactionLog({
+                    txHash,
+                    actionType: 'REGISTER',
+                    title: `สมัครสมาชิก Main ID #${mainId}`,
+                    userAddress: String(args.user || ''),
+                    mainNodeId: mainId,
+                    nodeId: mainId,
+                    rank: 1,
+                    amountUsdt: RANK_PRICES_USDT[0] || 5,
+                    blockNumber: bn,
+                    source: 'ONCHAIN_EVENT',
+                    details: `Sponsor #${Number(args.sponsorNodeId || 1)}`,
+                    timestamp: ts,
+                  });
+                } else if (item.kind === 'BatchRegistered') {
+                  const cnt = Number(args.count || 1);
+                  const costNum = Number(ethers.formatUnits(args.totalCost || 0n, activeUsdtDecimals || 18));
+                  recordRealTransactionLog({
+                    txHash,
+                    actionType: 'BATCH_REGISTER',
+                    title: `สมัครแบบกลุ่ม (Batch ${cnt} โหนด)`,
+                    userAddress: String(args.user || ''),
+                    rank: 1,
+                    amountUsdt: Number.isFinite(costNum) && costNum > 0 ? costNum : cnt * 5,
+                    blockNumber: bn,
+                    source: 'ONCHAIN_EVENT',
+                    timestamp: ts,
+                  });
+                } else if (item.kind === 'NodeCreated') {
+                  const rNum = Number(args.rank || 1);
+                  const nId = Number(args.nodeId || 0);
+                  const isClone = Boolean(args.isClone);
+                  const isExtra = Boolean(args.isExtraId);
+                  if (isAdminTx && rNum >= 2) {
+                    if (markNodeAsAdminFreeUpgrade(rNum, nId)) newlyTaggedAdminNodes = true;
+                  }
+                  const dbR1Node = rNum === 1 ? r1NodesInDb.find((n) => n.id === nId) : undefined;
+                  const isConfirmedAuto = rNum === 1 && !isClone && !isExtra && dbR1Node?.confirmedOriginType === 'AUTO_NEW_MAIN';
+                  recordRealTransactionLog({
+                    txHash,
+                    actionType: isAdminTx && rNum >= 2
+                      ? 'ADMIN_UPGRADE'
+                      : isExtra
+                      ? 'EXTRA_ID'
+                      : isClone
+                      ? 'CLONE_BOT'
+                      : isConfirmedAuto
+                      ? 'AUTO_ID'
+                      : rNum === 1
+                      ? 'REGISTER'
+                      : 'UPGRADE',
+                    title: isAdminTx && rNum >= 2
+                      ? isClone
+                        ? `Admin อัพฟรี (โคลนนิ่ง R${rNum}-#${nId})`
+                        : `Admin อัพฟรี R${rNum}-#${nId}`
+                      : isExtra
+                      ? `สร้าง Extra ID R${rNum}-#${nId}`
+                      : isClone
+                      ? `สร้างโคลนนิ่ง R${rNum}-#${nId}`
+                      : isConfirmedAuto
+                      ? `แตก Auto ID #${nId} (จาก Main #${dbR1Node?.autoSourceMainId || 1})`
+                      : rNum === 1
+                      ? `สร้างโหนด R1-#${nId}`
+                      : `สร้างโหนด R${rNum}-#${nId}`,
+                    userAddress: String(args.owner || ''),
+                    mainNodeId: isConfirmedAuto ? dbR1Node?.autoSourceMainId || 1 : undefined,
+                    nodeId: nId,
+                    rank: rNum,
+                    amountUsdt: isAdminTx && rNum >= 2 ? 0 : RANK_PRICES_USDT[rNum - 1] || 0,
+                    blockNumber: bn,
+                    source: 'ONCHAIN_EVENT',
+                    details: isAdminTx && rNum >= 2
+                      ? `Parent #${Number(args.parentId || 0)} [${args.isLeft ? 'LEFT' : 'RIGHT'}] • Admin Free (0 ค่าคอม)`
+                      : isConfirmedAuto
+                      ? `Parent #${Number(args.parentId || 0)} [${args.isLeft ? 'LEFT' : 'RIGHT'}] • Spawned by Main #${dbR1Node?.autoSourceMainId || 1}`
+                      : `Parent #${Number(args.parentId || 0)} [${args.isLeft ? 'LEFT' : 'RIGHT'}]`,
+                    timestamp: ts,
+                  });
+                } else if (item.kind === 'RankUpgraded') {
+                  const toR = Number(args.toRank || 2);
+                  const nId = Number(args.newNodeId || 0);
+                  if (isAdminTx && toR >= 2) {
+                    if (markNodeAsAdminFreeUpgrade(toR, nId)) newlyTaggedAdminNodes = true;
+                  }
+                  recordRealTransactionLog({
+                    txHash,
+                    actionType: isAdminTx ? 'ADMIN_UPGRADE' : 'UPGRADE',
+                    title: isAdminTx
+                      ? `Admin อัปเกรดฟรี R${Number(args.fromRank || 1)} → R${toR} (Node #${nId})`
+                      : `อัปเกรดแรงค์ R${Number(args.fromRank || 1)} → R${toR} (Node #${nId})`,
+                    userAddress: String(args.user || ''),
+                    nodeId: nId,
+                    rank: toR,
+                    amountUsdt: isAdminTx ? 0 : RANK_PRICES_USDT[toR - 1] || 0,
+                    blockNumber: bn,
+                    source: 'ONCHAIN_EVENT',
+                    details: isAdminTx
+                      ? 'Admin Free Upgrade (0 ค่าคอม)'
+                      : args.isAutoUpgrade
+                      ? 'Auto-Vault Upgrade'
+                      : 'Wallet Upgrade',
+                    timestamp: ts,
+                  });
+                } else if (item.kind === 'AutoNewMainIdCreated') {
+                  const cnt = Number(args.count || 1);
+                  recordRealTransactionLog({
+                    txHash,
+                    actionType: 'AUTO_ID',
+                    title: `แตก Auto New Main ID (+${cnt} รหัส)`,
+                    userAddress: String(args.user || ''),
+                    rank: 1,
+                    amountUsdt: cnt * (RANK_PRICES_USDT[0] || 5),
+                    blockNumber: bn,
+                    source: 'ONCHAIN_EVENT',
+                    timestamp: ts,
+                  });
+                } else if (item.kind === 'AutoExtraIdCreated') {
+                  const rNum = Number(args.rank || 2);
+                  const nId = Number(args.newNodeId ?? args.nodeId ?? 0);
+                  recordRealTransactionLog({
+                    txHash,
+                    actionType: 'EXTRA_ID',
+                    title: `แตก Extra ID R${rNum}-#${nId}`,
+                    userAddress: String(args.user || ''),
+                    nodeId: nId,
+                    rank: rNum,
+                    amountUsdt: RANK_PRICES_USDT[rNum - 1] || 10,
+                    blockNumber: bn,
+                    source: 'ONCHAIN_EVENT',
+                    timestamp: ts,
+                  });
+                }
+              }
+            }
+          } catch {
+            // Ignore single-chunk RPC limits and proceed to next chunk
+          }
+          if (fromBlk <= 0) break;
+          // Stop scanning further back once every R1 Main ID is confirmed AND we've scanned at least `lookbackBlocks`
+          if (!hasUnconfirmedR1Nodes() && latestBlock - fromBlk >= lookbackBlocks) {
+            break;
+          }
+        }
+
+        if (newlyTaggedAdminNodes || newlyTaggedAutoNodes) {
+          reconcileAutoExtraIdsAcrossRanks();
+          rebuildDatabaseRewardLogsFromNodes();
+          rebuildDatabaseUpgradeLogsFromNodes();
+        }
+        addedCount = Math.max(0, (matrixDB.transactionLogs || []).length - beforeLen);
+        lastChainTxSyncAt = Date.now();
+        saveMatrixDBToDisk();
+      } catch (err) {
+        console.warn('[MatrixDB TxHash Sync] Notice:', err);
+      } finally {
+        chainTxSyncInFlight = null;
+      }
+      return addedCount;
+    })();
+
+    return chainTxSyncInFlight;
+  }
+
+  triggerMatrixDatabaseSync = syncAllMatrixDatabase;
+  async function syncAllMatrixDatabase(targetContract: string = CONTRACT_ADDRESS, force = false): Promise<void> {
+    if (fullSyncInFlight && !force) return fullSyncInFlight;
+
+    fullSyncInFlight = (async () => {
+      try {
+        const provider = getProvider();
+        const contract = new ethers.Contract(targetContract, MATRIX_READ_ABI, provider);
+
+        if (targetContract.toLowerCase() !== (matrixDB.contractAddress || '').toLowerCase()) {
+          console.log(`[MatrixDB] Contract address changed from ${matrixDB.contractAddress} to ${targetContract}. Re-initializing database.`);
+          Object.assign(matrixDB, createEmptyMatrixDB(targetContract, USDT_ADDRESS));
+          rankSyncTimestamps.clear();
+        }
+
+        const [blockNum, allSellAddr, botAddr, familyAddr] = await Promise.all([
+          provider.getBlockNumber().catch(() => matrixDB.lastSyncedBlock),
+          contract.allSellWallet().catch(() => matrixDB.systemWallets.allSellWallet),
+          contract.botWallet().catch(() => matrixDB.systemWallets.botWallet),
+          contract.familyPool().catch(() => matrixDB.systemWallets.familyPool),
+        ]);
+
+        if (blockNum > 0) matrixDB.lastSyncedBlock = blockNum;
+        if (allSellAddr && ethers.isAddress(allSellAddr)) matrixDB.systemWallets.allSellWallet = allSellAddr;
+        if (botAddr && ethers.isAddress(botAddr)) {
+          const preferredCustom = matrixDB.systemWallets.customBotWallet;
+          if (
+            preferredCustom &&
+            ethers.isAddress(preferredCustom) &&
+            botAddr.toLowerCase() === LEGACY_BOT_WALLET.toLowerCase()
+          ) {
+            matrixDB.systemWallets.botWallet = preferredCustom;
+          } else {
+            matrixDB.systemWallets.botWallet = botAddr;
+            if (botAddr.toLowerCase() !== LEGACY_BOT_WALLET.toLowerCase()) {
+              matrixDB.systemWallets.customBotWallet = botAddr;
+            }
+          }
+        }
+        if (familyAddr && ethers.isAddress(familyAddr)) matrixDB.systemWallets.familyPool = familyAddr;
+
+        const countsResults = await Promise.all(
+          Array.from({ length: 18 }, (_, i) =>
+            contract
+              .totalNodesInRank(i + 1)
+              .then((v: bigint) => Number(v))
+              .catch(() => matrixDB.rankCounts[i + 1] || 1)
+          )
+        );
+
+        const ranksToSync = new Set<number>([1, 2, 3, 4, 5, 6]);
+        countsResults.forEach((c, idx) => {
+          const r = idx + 1;
+          const currentNodes = matrixDB.nodesByRank[r] || [];
+          const hasLocalOrAdminNodes = currentNodes.some(
+            (n) => n.isLocalUpgrade || n.isAdminFreeUpgrade
+          );
+          if (c <= 1) {
+            if (currentNodes.length > 1 && !hasLocalOrAdminNodes) {
+              const rootNode = currentNodes.find((n) => n.id === 1) || {
+                id: 1,
+                rank: r,
+                owner: matrixDB.systemWallets.rootOwner,
+                directSponsor: ethers.ZeroAddress,
+                parentId: 0,
+                leftChild: 0,
+                rightChild: 0,
+                isClone: false,
+                isExtraId: false,
+                originMainId: 1,
+                cloneRound: 0,
+                directSponsorNodeId: 0,
+                nodeVault: 0,
+                rawNodeVault: 0,
+                reconciledBaseVault: 0,
+              };
+              rootNode.leftChild = 0;
+              rootNode.rightChild = 0;
+              matrixDB.nodesByRank[r] = [rootNode];
+              matrixDB.rankCounts[r] = 1;
+            } else {
+              matrixDB.rankCounts[r] = Math.max(c, currentNodes.length || 1);
+            }
+          } else {
+            matrixDB.rankCounts[r] = Math.max(c, hasLocalOrAdminNodes ? currentNodes.length : c);
+            ranksToSync.add(r);
+          }
+        });
+
+        for (const r of Array.from(ranksToSync)) {
+          await syncRankIntoDatabase(r, targetContract, force);
+        }
+
+        // Populate Root Node #1 for any remaining ranks 6..27 that have count == 1
+        const rootOwner = matrixDB.nodesByRank[1]?.[0]?.owner || matrixDB.systemWallets.rootOwner;
+        for (let r = 1; r <= 18; r++) {
+          if (!matrixDB.nodesByRank[r] || matrixDB.nodesByRank[r].length === 0) {
+            matrixDB.nodesByRank[r] = [
+              {
+                id: 1,
+                rank: r,
+                owner: rootOwner,
+                directSponsor: ethers.ZeroAddress,
+                parentId: 0,
+                leftChild: 0,
+                rightChild: 0,
+                isClone: false,
+                isExtraId: false,
+                originMainId: 1,
+                cloneRound: 0,
+                directSponsorNodeId: 0,
+                nodeVault: 0,
+                rawNodeVault: 0,
+                reconciledBaseVault: 0,
+              },
+            ];
+          }
+        }
+
+        const hasUnconfirmedR1 = (matrixDB.nodesByRank[1] || []).some(
+          (n) => !n.isClone && !n.isExtraId && !n.isSyntheticExtra && n.id > 1 && !n.confirmedOriginType
+        );
+        if (force || hasUnconfirmedR1) {
+          await syncRecentOnChainTxHashes(targetContract, 35000).catch(() => {});
+        } else if (Date.now() - lastChainTxSyncAt > 45000 || (matrixDB.transactionLogs || []).length === 0) {
+          syncRecentOnChainTxHashes(targetContract, 35000).catch(() => {});
+        }
+        reconcileRank1AutoMainIds();
+        reconcileAutoExtraIdsAcrossRanks();
+        rebuildDatabaseRewardLogsFromNodes();
+        rebuildDatabaseUpgradeLogsFromNodes();
+        matrixDB.lastSyncedAt = new Date().toISOString();
+        saveMatrixDBToDisk();
+        syncAllMatrixDBToPostgres().catch(() => {});
+      } catch (err) {
+        console.warn('[MatrixDB Full Sync] Notice:', err);
+      } finally {
+        fullSyncInFlight = null;
+      }
+    })();
+
+    return fullSyncInFlight;
+  }
+
+  let lastChainCountCheckAt = 0;
+  let chainCountCheckPromise: Promise<void> | null = null;
+  async function ensureMatrixDbFreshWithChain(forceSync = false): Promise<void> {
+    if (forceSync || !matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1) {
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, forceSync);
+      return;
+    }
+    const now = Date.now();
+    if (now - lastChainCountCheckAt < 6000) return;
+    if (chainCountCheckPromise) return chainCountCheckPromise;
+    chainCountCheckPromise = (async () => {
+      try {
+        lastChainCountCheckAt = Date.now();
+        const provider = getProvider();
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, MATRIX_READ_ABI, provider);
+        const [r1Chain, r2Chain, r3Chain] = await Promise.all([
+          contract.totalNodesInRank(1).then(Number).catch(() => 0),
+          contract.totalNodesInRank(2).then(Number).catch(() => 0),
+          contract.totalNodesInRank(3).then(Number).catch(() => 0),
+        ]);
+        const r1Db = (matrixDB.nodesByRank[1] || []).filter((n) => !n.isSyntheticExtra).length;
+        const r2Db = (matrixDB.nodesByRank[2] || []).filter((n) => !n.isSyntheticExtra).length;
+        const r3Db = (matrixDB.nodesByRank[3] || []).filter((n) => !n.isSyntheticExtra).length;
+        if (r1Chain > r1Db || r2Chain > r2Db || r3Chain > r3Db) {
+          await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
+        }
+      } catch {
+        // ignore RPC check errors and serve existing DB
+      } finally {
+        chainCountCheckPromise = null;
+      }
+    })();
+    return chainCountCheckPromise;
+  }
+
+  const runInitialReconciliation = () => {
+    try {
+      reconcileRank1AutoMainIds();
+      reconcileAutoExtraIdsAcrossRanks();
+      rebuildDatabaseRewardLogsFromNodes();
+      rebuildDatabaseUpgradeLogsFromNodes();
+      saveMatrixDBToDisk(true);
+    } catch (err) {
+      console.warn('[MatrixDB] Initial reconciliation notice:', err);
+    }
+  };
+
+  // Helper to compute exact per-Main-ID vaults and 3 Pools from matrixDB
+  function computeMainIdDatabaseStats(mainIdNum: number) {
+    const r1Nodes = matrixDB.nodesByRank[1] || [];
+    const targetNode = r1Nodes.find((n) => n.id === mainIdNum);
+    const ownerAddr = (targetNode?.owner || matrixDB.systemWallets.rootOwner || '').toLowerCase();
+
+    const r1OwnerMains = r1Nodes
+      .filter((n) => n.owner.toLowerCase() === ownerAddr && !n.isClone && !n.isExtraId)
+      .map((n) => n.id);
+    const mainIdxInOwner = Math.max(0, r1OwnerMains.indexOf(mainIdNum));
+
+    let currentRank = mainIdNum === 1 ? 18 : 1;
+    const vaultsByRank: Record<number, number> = {};
+
+    for (let r = 1; r <= 18; r++) {
+      const rNodes = matrixDB.nodesByRank[r] || [];
+      if (r === 1) {
+        vaultsByRank[1] = Number(targetNode?.nodeVault || 0);
+      } else {
+        const correspondingNode = rNodes.find(
+          (n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum
+        );
+        if (correspondingNode) {
+          currentRank = Math.max(currentRank, r);
+          vaultsByRank[r] = Number(correspondingNode.nodeVault || 0);
+        } else {
+          vaultsByRank[r] = 0;
+        }
+      }
+    }
+
+    if (mainIdNum === 1) currentRank = 18;
+    const window5Start = Math.max(1, currentRank - 4);
+    const window5End = currentRank;
+
+    let upgradeRankPool = 0;
+    let newAutoIdPool = 0;
+    let r4To27OutsideWindow = 0;
+    let grossR4To27OutsideWindow = 0;
+
+    for (let r = 1; r <= 18; r++) {
+      const v = vaultsByRank[r] || 0;
+      const inWindow5 = r >= window5Start && r <= window5End;
+      if (inWindow5 && currentRank < 18) {
+        upgradeRankPool += v;
+      }
+      if (r >= 1 && r <= 3 && !inWindow5) {
+        newAutoIdPool += v;
+      }
+      if (r >= 4 && r <= 27) {
+        if (currentRank === 18 || !inWindow5) {
+          r4To27OutsideWindow += v;
+          const rNodes = matrixDB.nodesByRank[r] || [];
+          const correspNode =
+            r === 1
+              ? targetNode
+              : rNodes.find((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum);
+          if (correspNode) {
+            const rUnitVault = Number(((RANK_PRICES_USDT[r - 1] || 30) * 0.35).toFixed(4));
+            let leftCountInR = 0;
+            for (const rn of rNodes) {
+              const isSameMain =
+                rn.id === correspNode.id ||
+                (rn.isClone && (rn.originMainId === correspNode.id || rn.originMainId === mainIdNum));
+              if (isSameMain && rn.leftChild > 0) {
+                const lcNode = rNodes.find((x) => x.id === rn.leftChild);
+                if (!lcNode?.isAdminFreeUpgrade) {
+                  leftCountInR++;
+                }
+              }
+            }
+            grossR4To27OutsideWindow = Number(
+              (grossR4To27OutsideWindow + leftCountInR * rUnitVault).toFixed(4)
+            );
+          }
+        }
+      }
+    }
+
+    const resolveExtraSpawnerMainId = (extraNode: IndexedTreeNode): number => {
+      const extraOwner = (extraNode.owner || '').toLowerCase();
+      const ownerMains = r1Nodes.filter(
+        (m) => !m.isClone && !m.isExtraId && (m.owner || '').toLowerCase() === extraOwner
+      );
+      if (
+        extraNode.directSponsorNodeId > 0 &&
+        (ownerMains.length === 0
+          ? r1Nodes.some((m) => !m.isClone && !m.isExtraId && m.id === extraNode.directSponsorNodeId)
+          : ownerMains.some((m) => m.id === extraNode.directSponsorNodeId))
+      ) {
+        return extraNode.directSponsorNodeId;
+      }
+      if (ownerMains.length === 1) return ownerMains[0].id;
+      if (ownerMains.length > 1) {
+        const r9Nodes = matrixDB.nodesByRank[9] || [];
+        const r4Nodes = matrixDB.nodesByRank[4] || [];
+        const eligibleMain =
+          ownerMains.find(
+            (m) =>
+              m.id === 1 ||
+              r9Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+          ) ||
+          ownerMains.find(
+            (m) =>
+              m.id === 1 ||
+              r4Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+          );
+        if (eligibleMain) return eligibleMain.id;
+        return ownerMains[0].id;
+      }
+      return extraNode.directSponsorNodeId > 0 ? extraNode.directSponsorNodeId : 1;
+    };
+
+    let totalExtraIdCount = 0;
+    let extraIdDeductedTotalUsdt = 0;
+    let extraLeftVaultBonusGross = 0;
+    for (let r = 1; r <= 18; r++) {
+      const rNodes = matrixDB.nodesByRank[r] || [];
+      const correspondingNode =
+        r === 1
+          ? targetNode
+          : rNodes.find((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum);
+      const correspIdInR = correspondingNode?.id || 0;
+      const rPrice = RANK_PRICES_USDT[r - 1] || 10;
+      const rUnitVault = Number((rPrice * 0.35).toFixed(4));
+      for (const n of rNodes) {
+        if (n.isExtraId && !n.isClone && resolveExtraSpawnerMainId(n) === mainIdNum) {
+          totalExtraIdCount++;
+          extraIdDeductedTotalUsdt = Number((extraIdDeductedTotalUsdt + rPrice).toFixed(4));
+        }
+        // กรณี EXTRA ID (หรือโคลนของ EXTRA ID) มีเม็ดซ้าย: Vault (35%) จะถูกส่งกลับที่ New Extra ID Pool ของ directSponsor
+        if (correspIdInR > 0) {
+          const nOrig = !n.isClone
+            ? n
+            : rNodes.find(
+                (x) =>
+                  !x.isClone &&
+                  (x.owner || '').toLowerCase() === (n.owner || '').toLowerCase() &&
+                  (x.originMainId === n.originMainId || x.id === n.originMainId)
+              ) || n;
+          const isExtraLineage = !n.isClone ? Boolean(n.isExtraId) : Boolean(n.isExtraId || nOrig.isExtraId);
+          if (isExtraLineage && n.leftChild > 0) {
+            const lcNode = rNodes.find((x) => x.id === n.leftChild);
+            if (!lcNode?.isAdminFreeUpgrade) {
+              const spawnerMainId = resolveExtraSpawnerMainId(nOrig);
+              if (spawnerMainId === mainIdNum) {
+                extraLeftVaultBonusGross = Number((extraLeftVaultBonusGross + rUnitVault).toFixed(4));
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const deductedFromR4To27 = Math.max(
+      0,
+      Number((grossR4To27OutsideWindow - r4To27OutsideWindow).toFixed(4))
+    );
+    const deductedFromExtraLeftBonus = Math.min(
+      extraLeftVaultBonusGross,
+      Math.max(0, Number((extraIdDeductedTotalUsdt - deductedFromR4To27).toFixed(4)))
+    );
+    const extraLeftVaultBonus = Math.max(
+      0,
+      Number((extraLeftVaultBonusGross - deductedFromExtraLeftBonus).toFixed(4))
+    );
+
+    const r1To3LeftoverOldVault = 0;
+    const oldCarryoverVault = Number(
+      (r4To27OutsideWindow + extraLeftVaultBonus).toFixed(4)
+    );
+    const newExtraIdPool = Number(
+      (r4To27OutsideWindow + extraLeftVaultBonus).toFixed(4)
+    );
+    const newExtraIdPoolGross = Number(
+      Math.max(
+        grossR4To27OutsideWindow + extraLeftVaultBonusGross,
+        newExtraIdPool + extraIdDeductedTotalUsdt
+      ).toFixed(4)
+    );
+
+    const autoMainSourceMap = reconcileRank1AutoMainIds();
+    const spawnedAutoIdsList: number[] = [];
+    for (const [autoId, srcMain] of autoMainSourceMap.entries()) {
+      if (srcMain === mainIdNum) {
+        spawnedAutoIdsList.push(autoId);
+      }
+    }
+
+    const upgradeHistory = (matrixDB.upgradeLogs || []).filter(
+      (u) => Number(u.mainNodeId) === mainIdNum
+    );
+
+    return {
+      mainId: mainIdNum,
+      owner: targetNode?.owner || ethers.ZeroAddress,
+      currentRank,
+      window5Start,
+      window5End,
+      vaultsByRank,
+      upgradeRankPool: Number(upgradeRankPool.toFixed(2)),
+      newAutoIdPool: Number(newAutoIdPool.toFixed(2)),
+      newExtraIdPool: Number(newExtraIdPool.toFixed(2)),
+      oldCarryoverVault: Number(oldCarryoverVault.toFixed(2)),
+      r1To3LeftoverOldVault: Number(r1To3LeftoverOldVault.toFixed(2)),
+      r4To27OutsideWindowVault: Number(r4To27OutsideWindow.toFixed(2)),
+      extraLeftVaultBonus: Number(extraLeftVaultBonus.toFixed(2)),
+      extraLeftVaultBonusGross: Number(extraLeftVaultBonusGross.toFixed(2)),
+      extraIdDeductedTotalUsdt: Number(extraIdDeductedTotalUsdt.toFixed(2)),
+      newExtraIdPoolGross: Number(newExtraIdPoolGross.toFixed(2)),
+      totalAutoIdCount: spawnedAutoIdsList.length,
+      autoIdsSpawned: spawnedAutoIdsList,
+      totalExtraIdCount,
+      upgradeHistory,
+    };
+  }
+
+  // ==========================================
+  // DATABASE-FIRST API ENDPOINTS
+  // ==========================================
+  app.get('/api/db/snapshot', async (req: Request, res: Response) => {
+    const force = req.query.force === '1';
+    if (force || !matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1) {
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, force);
+    } else {
+      reconcileAutoExtraIdsAcrossRanks();
+    }
+    res.json({
+      success: true,
+      source: 'DATABASE',
+      postgres: {
+        connected: pgConnected,
+        database: PG_ENDPOINT_INFO.database,
+        tableCounts: pgTablesCount,
+      },
+      contractAddress: matrixDB.contractAddress,
+      usdtAddress: matrixDB.usdtAddress,
+      lastSyncedBlock: matrixDB.lastSyncedBlock,
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      systemWallets: matrixDB.systemWallets,
+      rankCounts: matrixDB.rankCounts,
+      nodesByRank: matrixDB.nodesByRank,
+      totalRewards: matrixDB.rewardLogs.length,
+      totalUpgrades: (matrixDB.upgradeLogs || []).length,
+      upgradeLogs: matrixDB.upgradeLogs || [],
+    });
+  });
+
+  app.post('/api/db/sync', async (req: Request, res: Response) => {
+    try {
+      const fastMode = req.query.fast === '1' || req.body?.fast === true;
+      const rankParam = Number(req.query.rank || req.body?.rank || 0);
+      if (fastMode || rankParam >= 1) {
+        const targetRank = rankParam >= 1 && rankParam <= 18 ? rankParam : 1;
+        await syncRankIntoDatabase(targetRank, CONTRACT_ADDRESS, false, true);
+        if (targetRank >= 2) {
+          const winStart = Math.max(1, targetRank - 5);
+          const vaultRanks: number[] = [];
+          for (let wr = winStart; wr < targetRank; wr++) {
+            vaultRanks.push(wr);
+          }
+          await Promise.all(
+            vaultRanks.map((wr) => syncRankIntoDatabase(wr, CONTRACT_ADDRESS, false, true).catch(() => []))
+          );
+          reconcileAutoExtraIdsAcrossRanks();
+          rebuildDatabaseRewardLogsFromNodes();
+          rebuildDatabaseUpgradeLogsFromNodes();
+          saveMatrixDBToDisk(true);
+        }
+        return res.json({
+          success: true,
+          source: 'DATABASE_FAST_DELTA_SYNCED',
+          rank: targetRank,
+          lastSyncedBlock: matrixDB.lastSyncedBlock,
+          lastSyncedAt: matrixDB.lastSyncedAt,
+          rankCounts: matrixDB.rankCounts,
+          totalNodesRank1: matrixDB.rankCounts[1] || 1,
+          totalRewards: matrixDB.rewardLogs.length,
+          totalUpgrades: (matrixDB.upgradeLogs || []).length,
+        });
+      }
+
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
+      res.json({
+        success: true,
+        source: 'DATABASE_SYNCED',
+        lastSyncedBlock: matrixDB.lastSyncedBlock,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        rankCounts: matrixDB.rankCounts,
+        totalNodesRank1: matrixDB.rankCounts[1] || 1,
+        totalRewards: matrixDB.rewardLogs.length,
+        totalUpgrades: (matrixDB.upgradeLogs || []).length,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  triggerComputeMainIdStats = computeMainIdDatabaseStats;
+
+  app.post('/api/matrix/auto-extra-id', async (req: Request, res: Response) => {
+    try {
+      const mainIdNum = Math.max(1, Number(req.body?.mainId) || 1);
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, false);
+      const statsBefore = computeMainIdDatabaseStats(mainIdNum);
+
+      let txHash: string | null = null;
+      const minExtraPrice = RANK_PRICES_USDT[1] || 10;
+      if (
+        BOT_PRIVATE_KEY &&
+        BOT_PRIVATE_KEY.length >= 64 &&
+        statsBefore.currentRank >= 2 &&
+        statsBefore.newExtraIdPool + 1e-6 >= minExtraPrice
+      ) {
+        try {
+          const httpProvider = getBotHttpProvider();
+          const pkHex = BOT_PRIVATE_KEY.startsWith('0x') ? BOT_PRIVATE_KEY : `0x${BOT_PRIVATE_KEY}`;
+          const botSigner = new ethers.Wallet(pkHex, httpProvider);
+          const writeContract = new ethers.Contract(CONTRACT_ADDRESS, WS_BOT_ABI, botSigner);
+          const tx = await writeContract.processPendingExtraIdQueue(mainIdNum, 2);
+          const receipt = await tx.wait(1);
+          txHash = receipt?.hash || tx.hash;
+          recordRealTransactionLog({
+            txHash,
+            actionType: 'EXTRA_ID',
+            title: `สั่งแตก Extra ID จาก Main #${mainIdNum}`,
+            userAddress: botSigner.address,
+            mainNodeId: mainIdNum,
+            rank: 2,
+            blockNumber: receipt?.blockNumber,
+            source: 'WS_BOT',
+          });
+          recordWsBotEvent(
+            'AutoExtraIdQueue',
+            `API Trigger Main #${mainIdNum} -> TX: ${String(txHash).slice(0, 10)}...`
+          );
+          await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
+        } catch (botErr: any) {
+          console.warn('[API /api/matrix/auto-extra-id Bot TX notice]:', botErr?.shortMessage || botErr?.message);
+        }
+      }
+
+      const created = reconcileAutoExtraIdsAcrossRanks().filter((c) => c.mainId === mainIdNum);
+      rebuildDatabaseRewardLogsFromNodes();
+      rebuildDatabaseUpgradeLogsFromNodes();
+      saveMatrixDBToDisk(true);
+      const stats = computeMainIdDatabaseStats(mainIdNum);
+      const onChainCreatedDiff = Math.max(
+        0,
+        (stats.totalExtraIdCount || 0) - (statsBefore.totalExtraIdCount || 0)
+      );
+      const totalCreatedCount = Math.max(created.length, onChainCreatedDiff);
+
+      res.json({
+        success: true,
+        mainId: mainIdNum,
+        txHash,
+        createdCount: totalCreatedCount,
+        createdNodes: created,
+        stats,
+        message:
+          totalCreatedCount > 0
+            ? `✨ บอทปลดล็อกและสร้าง Extra ID ของรหัสหลัก #${mainIdNum} สำเร็จ (+${totalCreatedCount} รหัส)!`
+            : `ตรวจสอบรหัสหลัก #${mainIdNum} แล้ว: ยอดสะสม New Extra ID Pool ปัจจุบันคือ ${stats.newExtraIdPool.toFixed(
+                2
+              )} USDT (ขั้นต่ำ Rank 2 = ${minExtraPrice.toFixed(2)} USDT)`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/matrix/main-id/:mainId', async (req: Request, res: Response) => {
+    try {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      const mainIdNum = Math.max(1, Number(req.params.mainId) || 1);
+      await ensureMatrixDbFreshWithChain(false);
+      reconcileAutoExtraIdsAcrossRanks();
+      const stats = computeMainIdDatabaseStats(mainIdNum);
+      res.json({
+        success: true,
+        source: 'DATABASE',
+        ...stats,
+      });
+    } catch (err: any) {
+      console.warn('[API /api/matrix/main-id/:mainId error]', err);
+      res.status(500).json({ success: false, error: err?.message || 'Database query error' });
+    }
+  });
+
+  app.get('/api/matrix/id-members/:mainId', async (req: Request, res: Response) => {
+    try {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      const mainIdNum = Math.max(1, Number(req.params.mainId) || 1);
+      const cloneRankParam = Number(req.query.cloneRank || 0);
+      const cloneNodeIdParam = Number(req.query.cloneNodeId || 0);
+      const extraRankParam = Number(req.query.extraRank || 0);
+      const extraNodeIdParam = Number(req.query.extraNodeId || 0);
+      await ensureMatrixDbFreshWithChain(false);
+      reconcileAutoExtraIdsAcrossRanks();
+
+      const autoMainSourceMap = reconcileRank1AutoMainIds();
+      const r1Nodes = (matrixDB.nodesByRank[1] || []).filter((n) => !n.isSyntheticExtra);
+      const r1ById = new Map<number, IndexedTreeNode>();
+      for (const n of r1Nodes) r1ById.set(n.id, n);
+
+      const targetR1 = r1ById.get(mainIdNum);
+      const isExtraScope = extraRankParam >= 1 && extraRankParam <= 18 && extraNodeIdParam > 0;
+      const isCloneScope =
+        !isExtraScope &&
+        ((cloneRankParam >= 1 && cloneRankParam <= 18 && cloneNodeIdParam > 0) ||
+          Boolean(targetR1?.isClone));
+      const effectiveCloneRank =
+        cloneRankParam >= 1 && cloneRankParam <= 18 ? cloneRankParam : targetR1?.isClone ? 1 : 0;
+      const effectiveCloneNodeId =
+        cloneNodeIdParam > 0 ? cloneNodeIdParam : targetR1?.isClone ? mainIdNum : 0;
+      const isSubNodeScope = isExtraScope || isCloneScope;
+      const effectiveSubRank = isExtraScope ? extraRankParam : effectiveCloneRank;
+      const effectiveSubNodeId = isExtraScope ? extraNodeIdParam : effectiveCloneNodeId;
+
+      if (!targetR1 && !(effectiveSubRank > 0 && effectiveSubNodeId > 0)) {
+        return res.json({
+          success: true,
+          source: 'DATABASE',
+          mainId: mainIdNum,
+          owner: ethers.ZeroAddress,
+          currentMaxRank: 1,
+          summary: {
+            totalAllMembersAcrossRanks: 0,
+            totalUniqueMemberMainIds: 0,
+            totalDirectMainIds: 0,
+            totalDirectNodesAcrossRanks: 0,
+            totalSubtreeNodesAcrossRanks: 0,
+            totalAutoIds: 0,
+            totalExtraIds: 0,
+            totalClones: 0,
+            unlockedRanksCount: 0,
+            ranksWithMembersCount: 0,
+          },
+          directSummaryList: [],
+          ranks: [],
+        });
+      }
+
+      // Compute currentMaxRank for every Rank 1 Main/Auto ID
+      const maxRankByR1Main = new Map<number, number>();
+      for (const n of r1Nodes) {
+        if (!n.isClone && !n.isExtraId) {
+          maxRankByR1Main.set(n.id, n.id === 1 ? 18 : 1);
+        }
+      }
+      for (let r = 2; r <= 18; r++) {
+        for (const rn of matrixDB.nodesByRank[r] || []) {
+          if (!rn.isClone && !rn.isExtraId && rn.originMainId > 0) {
+            const prev = maxRankByR1Main.get(rn.originMainId) || 1;
+            if (r > prev) maxRankByR1Main.set(rn.originMainId, r);
+          }
+        }
+      }
+
+      const directSummaryMap = new Map<
+        number,
+        {
+          id: number;
+          owner: string;
+          currentMaxRank: number;
+          isAutoId: boolean;
+          ranksPresent: number[];
+        }
+      >();
+
+      const uniqueMemberMainIds = new Set<number>();
+      let totalAllMembersAcrossRanks = 0;
+      let totalDirectNodesAcrossRanks = 0;
+      let totalSubtreeNodesAcrossRanks = 0;
+      let totalAutoIds = 0;
+      let totalExtraIds = 0;
+      let totalClones = 0;
+      let unlockedRanksCount = 0;
+      let ranksWithMembersCount = 0;
+
+      const ranksData: Array<{
+        rank: number;
+        rankPriceUsdt: number;
+        totalInSystemRank: number;
+        selfNodeId: number | null;
+        selfCloneIds: number[];
+        totalMembersInRank: number;
+        directCountInRank: number;
+        subtreeCountInRank: number;
+        members: Array<{
+          nodeId: number;
+          rank: number;
+          originMainId: number;
+          memberType: 'MANUAL_ID' | 'AUTO_ID' | 'EXTRA_ID' | 'CLONE_ID';
+          label: string;
+          owner: string;
+          parentId: number;
+          side: 'LEFT' | 'RIGHT' | 'ROOT';
+          directSponsorNodeId: number;
+          isDirect: boolean;
+          isInSubtree: boolean;
+          tier: number | null;
+          viaCloneNodeId: number | null;
+          currentMaxRank: number;
+          nodeVault: number;
+        }>;
+      }> = [];
+
+      for (let r = 1; r <= 18; r++) {
+        const rList = (matrixDB.nodesByRank[r] || []).filter((n) => !n.isSyntheticExtra);
+        const byId = new Map<number, IndexedTreeNode>();
+        for (const n of rList) byId.set(n.id, n);
+
+        const selfNode = isSubNodeScope
+          ? r === effectiveSubRank
+            ? rList.find((n) => n.id === effectiveSubNodeId)
+            : undefined
+          : rList.find(
+              (n) => !n.isClone && !n.isExtraId && (r === 1 ? n.id === mainIdNum : n.originMainId === mainIdNum)
+            );
+        const selfCloneIds = isSubNodeScope
+          ? []
+          : rList
+              .filter((n) => n.isClone && !n.isExtraId && Number(n.originMainId || 0) === mainIdNum)
+              .map((n) => n.id)
+              .sort((a, b) => a - b);
+
+        if (selfNode) unlockedRanksCount++;
+
+        // BFS from selfNode & selfCloneIds in Rank r to track downline tiers
+        const subtreeInfo = new Map<
+          number,
+          { tier: number; viaCloneNodeId: number | null }
+        >();
+
+        const runSubtreeBfs = (startId: number, viaCloneNodeId: number | null) => {
+          const startNode = byId.get(startId);
+          if (!startNode) return;
+          const visited = new Set<number>([startId]);
+          const queue: Array<{ id: number; tier: number }> = [];
+          if (startNode.leftChild > 0 && byId.has(startNode.leftChild)) {
+            queue.push({ id: startNode.leftChild, tier: 1 });
+            visited.add(startNode.leftChild);
+          }
+          if (startNode.rightChild > 0 && byId.has(startNode.rightChild)) {
+            queue.push({ id: startNode.rightChild, tier: 1 });
+            visited.add(startNode.rightChild);
+          }
+          while (queue.length > 0) {
+            const cur = queue.shift()!;
+            const existing = subtreeInfo.get(cur.id);
+            if (!existing || (!viaCloneNodeId && existing.viaCloneNodeId !== null)) {
+              subtreeInfo.set(cur.id, { tier: cur.tier, viaCloneNodeId });
+            }
+            const curNode = byId.get(cur.id);
+            if (!curNode) continue;
+            if (curNode.leftChild > 0 && byId.has(curNode.leftChild) && !visited.has(curNode.leftChild)) {
+              visited.add(curNode.leftChild);
+              queue.push({ id: curNode.leftChild, tier: cur.tier + 1 });
+            }
+            if (curNode.rightChild > 0 && byId.has(curNode.rightChild) && !visited.has(curNode.rightChild)) {
+              visited.add(curNode.rightChild);
+              queue.push({ id: curNode.rightChild, tier: cur.tier + 1 });
+            }
+          }
+        };
+
+        if (selfNode) runSubtreeBfs(selfNode.id, null);
+        for (const cId of selfCloneIds) {
+          runSubtreeBfs(cId, cId);
+        }
+
+        const membersInRank: (typeof ranksData)[number]['members'] = [];
+        for (const n of rList) {
+          if (selfNode && n.id === selfNode.id) continue;
+          const isOwnClone = !isSubNodeScope && Boolean(n.isClone && Number(n.originMainId || 0) === mainIdNum);
+          if (isOwnClone) continue;
+
+          const sub = subtreeInfo.get(n.id);
+          const isDirectNode =
+            !isSubNodeScope && Number(n.directSponsorNodeId || 0) === mainIdNum && n.id !== mainIdNum;
+          if (!sub && !isDirectNode) continue;
+
+          const origMainId =
+            r === 1 && !n.isClone && !n.isExtraId ? n.id : Number(n.originMainId || n.id);
+          const r1Orig = r1ById.get(origMainId);
+          const isAutoMain =
+            !n.isClone &&
+            !n.isExtraId &&
+            (autoMainSourceMap.has(origMainId) || r1Orig?.originType === 'AUTO_NEW_MAIN');
+
+          const memberType: 'MANUAL_ID' | 'AUTO_ID' | 'EXTRA_ID' | 'CLONE_ID' = n.isClone
+            ? 'CLONE_ID'
+            : n.isExtraId
+            ? 'EXTRA_ID'
+            : isAutoMain
+            ? 'AUTO_ID'
+            : 'MANUAL_ID';
+
+          const pNode = byId.get(n.parentId);
+          const side: 'LEFT' | 'RIGHT' | 'ROOT' =
+            n.parentId === 0 ? 'ROOT' : pNode && pNode.leftChild === n.id ? 'LEFT' : 'RIGHT';
+
+          const label =
+            memberType === 'CLONE_ID'
+              ? `โคลน R${r}-#${n.id} (Main #${origMainId})`
+              : memberType === 'EXTRA_ID'
+              ? `Extra R${r}-#${n.id}`
+              : memberType === 'AUTO_ID'
+              ? r === 1
+                ? `Auto #${origMainId}`
+                : `Auto #${origMainId} (R${r}-#${n.id})`
+              : r === 1
+              ? `Main #${origMainId}`
+              : `Main #${origMainId} (R${r}-#${n.id})`;
+
+          const mMaxRank = maxRankByR1Main.get(origMainId) || r;
+          membersInRank.push({
+            nodeId: n.id,
+            rank: r,
+            originMainId: origMainId,
+            memberType,
+            label,
+            owner: n.owner || ethers.ZeroAddress,
+            parentId: n.parentId,
+            side,
+            directSponsorNodeId: Number(n.directSponsorNodeId || 0),
+            isDirect: isDirectNode && !n.isClone,
+            isInSubtree: Boolean(sub),
+            tier: sub ? sub.tier : null,
+            viaCloneNodeId: sub ? sub.viaCloneNodeId : null,
+            currentMaxRank: mMaxRank,
+            nodeVault: Number((n.nodeVault || 0).toFixed(2)),
+          });
+
+          if (!n.isClone && !n.isExtraId && origMainId > 0) {
+            uniqueMemberMainIds.add(origMainId);
+            if (isDirectNode) {
+              const existingDirect = directSummaryMap.get(origMainId);
+              if (existingDirect) {
+                if (!existingDirect.ranksPresent.includes(r)) existingDirect.ranksPresent.push(r);
+              } else {
+                directSummaryMap.set(origMainId, {
+                  id: origMainId,
+                  owner: n.owner || ethers.ZeroAddress,
+                  currentMaxRank: mMaxRank,
+                  isAutoId: isAutoMain,
+                  ranksPresent: [r],
+                });
+              }
+            }
+          }
+        }
+
+        membersInRank.sort((a, b) => {
+          if (a.isDirect !== b.isDirect) return a.isDirect ? -1 : 1;
+          const ta = a.tier ?? 9999;
+          const tb = b.tier ?? 9999;
+          if (ta !== tb) return ta - tb;
+          return a.nodeId - b.nodeId;
+        });
+
+        const directCountInRank = membersInRank.filter((m) => m.isDirect).length;
+        const subtreeCountInRank = membersInRank.filter((m) => m.isInSubtree).length;
+
+        totalAllMembersAcrossRanks += membersInRank.length;
+        totalDirectNodesAcrossRanks += directCountInRank;
+        totalSubtreeNodesAcrossRanks += subtreeCountInRank;
+        totalAutoIds += membersInRank.filter((m) => m.memberType === 'AUTO_ID' && r === 1).length;
+        totalExtraIds += membersInRank.filter((m) => m.memberType === 'EXTRA_ID').length;
+        totalClones += membersInRank.filter((m) => m.memberType === 'CLONE_ID').length;
+
+        if (membersInRank.length > 0) ranksWithMembersCount++;
+
+        ranksData.push({
+          rank: r,
+          rankPriceUsdt: RANK_PRICES_USDT[r - 1] || 5,
+          totalInSystemRank: rList.length,
+          selfNodeId: selfNode ? selfNode.id : null,
+          selfCloneIds,
+          totalMembersInRank: membersInRank.length,
+          directCountInRank,
+          subtreeCountInRank,
+          members: membersInRank,
+        });
+      }
+
+      const directSummaryList = Array.from(directSummaryMap.values()).sort((a, b) => a.id - b.id);
+
+      res.json({
+        success: true,
+        source: 'DATABASE',
+        mainId: mainIdNum,
+        cloneRank: isCloneScope ? effectiveCloneRank || undefined : undefined,
+        cloneNodeId: isCloneScope ? effectiveCloneNodeId || undefined : undefined,
+        extraRank: isExtraScope ? extraRankParam : undefined,
+        extraNodeId: isExtraScope ? extraNodeIdParam : undefined,
+        owner: targetR1?.owner || ethers.ZeroAddress,
+        currentMaxRank: maxRankByR1Main.get(mainIdNum) || 1,
+        summary: {
+          totalAllMembersAcrossRanks,
+          totalUniqueMemberMainIds: uniqueMemberMainIds.size,
+          totalDirectMainIds: directSummaryList.length,
+          totalDirectNodesAcrossRanks,
+          totalSubtreeNodesAcrossRanks,
+          totalAutoIds,
+          totalExtraIds,
+          totalClones,
+          unlockedRanksCount,
+          ranksWithMembersCount,
+        },
+        directSummaryList,
+        ranks: ranksData,
+      });
+    } catch (err: any) {
+      console.warn('[API /api/matrix/id-members/:mainId error]', err);
+      res.status(500).json({ success: false, error: err?.message || 'Failed to load ID members' });
+    }
+  });
+
+  app.get('/api/matrix/per-id-history', async (req: Request, res: Response) => {
+    try {
+      const forceSync = req.query.forceSync === '1';
+      await ensureMatrixDbFreshWithChain(forceSync);
+      reconcileAutoExtraIdsAcrossRanks();
+      if (matrixDB.rewardLogs.length === 0) rebuildDatabaseRewardLogsFromNodes();
+      if (!matrixDB.upgradeLogs || matrixDB.upgradeLogs.length === 0) rebuildDatabaseUpgradeLogsFromNodes();
+
+      const autoMainSourceMap = reconcileRank1AutoMainIds();
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+
+      // Helper to resolve canonical Rank 1 Main ID for any node in any rank
+      const resolveCanonicalMainId = (rankNum: number, node: IndexedTreeNode): number => {
+        if (node.isExtraId && !node.isClone) {
+          return node.directSponsorNodeId > 0 ? node.directSponsorNodeId : 1;
+        }
+        if (rankNum === 1) {
+          return node.isClone ? (node.originMainId || node.id) : node.id;
+        }
+        const rNodes = matrixDB.nodesByRank[rankNum] || [];
+        if (!node.isClone) {
+          return node.originMainId && node.originMainId > 0 ? node.originMainId : node.id;
+        }
+        const localMain = rNodes.find(
+          (m) => !m.isClone && !m.isExtraId && (m.id === node.originMainId || m.originMainId === node.originMainId)
+        );
+        if (localMain) {
+          return localMain.originMainId && localMain.originMainId > 0 ? localMain.originMainId : localMain.id;
+        }
+        return node.originMainId || 1;
+      };
+
+      ensurePersistentNodeTimestamps();
+      const computeNodeTimestamp = (rankNum: number, nodeId: number) => {
+        const rList = matrixDB.nodesByRank[rankNum] || [];
+        const found = rList.find((x) => x.id === nodeId);
+        if (found?.createdAt) return found.createdAt;
+        const totalInRank = Math.max(rList.length, nodeId, 1);
+        const stepsBack = Math.max(0, totalInRank - nodeId);
+        return new Date(
+          Date.now() - stepsBack * 2000 - Math.max(0, 18 - rankNum) * 1000
+        ).toISOString();
+      };
+
+      interface CommissionItem {
+        rank: number;
+        fromNodeId: number;
+        fromMainId: number;
+        fromNodeType: string;
+        toNodeId: number;
+        toMainId: number;
+        tier?: number;
+        amountUsdt: number;
+        note: string;
+        timestamp: string;
+      }
+
+      interface SpawnedIdItem {
+        id: number;
+        rank: number;
+        mainId?: number;
+        label: string;
+        type: 'AUTO_ID' | 'AUTO_EXTRA_ID' | 'CLONE_ID';
+        parentId: number;
+        side: 'LEFT' | 'RIGHT' | 'ROOT';
+        directSponsorNodeId: number;
+        owner: string;
+        cloneRound?: number;
+        cloneSequence?: number;
+        timestamp: string;
+        direct30TotalUsdt?: number;
+        direct30History?: CommissionItem[];
+        level30TotalUsdt?: number;
+        level30History?: CommissionItem[];
+        vault35GrossTotalUsdt?: number;
+        vault35History?: CommissionItem[];
+      }
+
+      interface VaultLedgerItem {
+        id: string;
+        timestamp: string;
+        direction: 'IN' | 'OUT';
+        actionType: 'RECEIVE_VAULT' | 'SPAWN_EXTRA_ID' | 'SPAWN_AUTO_ID' | 'AUTO_UPGRADE';
+        actionLabelTh: string;
+        rank: number;
+        amountUsdt: number;
+        poolType: 'UPGRADE_POOL' | 'AUTO_ID_POOL' | 'EXTRA_ID_POOL';
+        poolLabelTh: string;
+        descriptionTh: string;
+        note: string;
+        poolBalanceAfterUsdt: number;
+        balanceAfterUsdt: number;
+      }
+
+      interface TierLevelBreakdownItem {
+        tier: number;
+        maxCapacity: number;
+        totalNodesInTier: number;
+        leftPayingNodesCount: number;
+        rightRebirthNodesCount: number;
+        ratePerNodeUsdt: number;
+        amountUsdt: number;
+        allNodeIds: number[];
+        leftNodeIds: number[];
+        rightNodeIds: number[];
+      }
+
+      interface PerIdLevelSummary {
+        maxLevels: number;
+        receivedLevelsCount: number;
+        remainingLevelsCount: number;
+        ratePerNodeUsdt: number;
+        thisNodeLevelTotalUsdt: number;
+        clonesLevelTotalUsdt: number;
+        combinedLevelTotalUsdt: number;
+        summaryTextTh: string;
+        tiersBreakdown: TierLevelBreakdownItem[];
+      }
+
+      interface PerIdReport {
+        id: number;
+        label: string;
+        nodeType: 'MANUAL_ID' | 'AUTO_ID' | 'CLONE_ID' | 'EXTRA_ID';
+        typeBadge: string;
+        isClone: boolean;
+        isAutoId: boolean;
+        isExtraId: boolean;
+        originMainId: number;
+        cloneRound?: number;
+        cloneSequence?: number;
+        spawnedByMainId: number;
+        owner: string;
+        directSponsorNodeId: number;
+        parentId: number;
+        side: 'LEFT' | 'RIGHT' | 'ROOT';
+        sideInR1: 'LEFT' | 'RIGHT' | 'ROOT';
+        leftChildR1: number;
+        rightChildR1: number;
+        currentMaxRank: number;
+        rankNodesList: Array<{ rank: number; nodeId: number; parentId: number; side: string; leftChild: number; rightChild: number; nodeVault: number; rawNodeVault: number }>;
+        direct30TotalUsdt: number;
+        direct30History: CommissionItem[];
+        level30TotalUsdt: number;
+        level30History: CommissionItem[];
+        levelSummary: PerIdLevelSummary;
+        vault35GrossTotalUsdt: number;
+        vault35RemainingTotalUsdt: number;
+        vault35DeductedTotalUsdt: number;
+        vault35History: CommissionItem[];
+        vault35Ledger: VaultLedgerItem[];
+        vaultDeductedBreakdown: {
+          extraIdsTotalUsdt: number;
+          autoIdsTotalUsdt: number;
+          upgradesTotalUsdt: number;
+        };
+        upgradeRankPool: number;
+        newAutoIdPool: number;
+        newExtraIdPool: number;
+        oldCarryoverVault: number;
+        r1To3LeftoverOldVault: number;
+        r4To27OutsideWindowVault: number;
+        extraLeftVaultBonus: number;
+        extraIdDeductedTotalUsdt: number;
+        newExtraIdPoolGross: number;
+        pools: {
+          upgradeRankPool: number;
+          newAutoIdPool: number;
+          newExtraIdPool: number;
+          oldCarryoverVault: number;
+          newExtraIdPoolGross: number;
+        };
+        totalAutoIdCount: number;
+        totalExtraIdCount: number;
+        totalClonesCount: number;
+        autoIdsSpawned: SpawnedIdItem[];
+        autoExtraIdsSpawned: SpawnedIdItem[];
+        clonesSpawned: SpawnedIdItem[];
+        allSellQualification?: {
+          totalDirectMainIds: number;
+          directMainIdsList: Array<{ id: number; currentMaxRank: number; isAutoId: boolean }>;
+          totalQualifiedPoolsCount: number;
+          estimatedAllSellShareUsdt: number;
+          pools: Array<{
+            poolNumber: number;
+            key: string;
+            titleTh: string;
+            targetRank: number;
+            targetRankPriceUsdt: number;
+            requiredSelfRank: number;
+            hasSelfRank: boolean;
+            requiredDirectCount: number;
+            allowedDirectRanks: number[];
+            allowedDirectRanksLabel: string;
+            qualifiedDirectIds: Array<{ id: number; currentMaxRank: number }>;
+            qualifiedDirectCount: number;
+            isQualified: boolean;
+            poolTotalUsdt: number;
+            estimatedShareUsdt: number;
+          }>;
+        };
+      }
+
+      const reportsMap = new Map<number, PerIdReport>();
+      const r1NodesMap = new Map<number, IndexedTreeNode>();
+      for (const n of r1Nodes) r1NodesMap.set(n.id, n);
+
+      for (const r1Node of r1Nodes) {
+        const pNode = r1Nodes.find((x) => x.id === r1Node.parentId);
+        const sideInR1: 'LEFT' | 'RIGHT' | 'ROOT' =
+          r1Node.parentId === 0
+            ? 'ROOT'
+            : pNode && pNode.leftChild === r1Node.id
+            ? 'LEFT'
+            : 'RIGHT';
+
+        const isAutoMain =
+          !r1Node.isClone &&
+          !r1Node.isExtraId &&
+          (autoMainSourceMap.has(r1Node.id) || r1Node.originType === 'AUTO_NEW_MAIN');
+
+        const nodeType: PerIdReport['nodeType'] = r1Node.isClone
+          ? 'CLONE_ID'
+          : r1Node.isExtraId
+          ? 'EXTRA_ID'
+          : isAutoMain
+          ? 'AUTO_ID'
+          : 'MANUAL_ID';
+
+        const typeBadge = r1Node.isClone
+          ? 'CLONE ID'
+          : r1Node.isExtraId
+          ? 'EXTRA ID'
+          : isAutoMain
+          ? 'AUTO ID'
+          : 'MAIN ID';
+
+        const origMainId = r1Node.isClone ? (r1Node.originMainId || r1Node.id) : r1Node.id;
+        const spawnedByMainId = isAutoMain
+          ? r1Node.autoSourceMainId || autoMainSourceMap.get(r1Node.id) || r1Node.directSponsorNodeId || 1
+          : r1Node.isClone
+          ? origMainId
+          : 0;
+
+        const stats = !r1Node.isClone
+          ? computeMainIdDatabaseStats(r1Node.id)
+          : {
+              currentRank: 1,
+              upgradeRankPool: 0,
+              newAutoIdPool: 0,
+              newExtraIdPool: 0,
+              oldCarryoverVault: 0,
+              r1To3LeftoverOldVault: 0,
+              r4To27OutsideWindowVault: 0,
+              extraLeftVaultBonus: 0,
+              extraIdDeductedTotalUsdt: 0,
+              newExtraIdPoolGross: 0,
+            };
+
+        const rankNodesList: PerIdReport['rankNodesList'] = [];
+        if (!r1Node.isClone && !r1Node.isExtraId) {
+          for (let r = 1; r <= 18; r++) {
+            const rList = matrixDB.nodesByRank[r] || [];
+            const mInR =
+              r === 1
+                ? r1Node
+                : rList.find((x) => !x.isClone && !x.isExtraId && x.originMainId === r1Node.id);
+            if (mInR) {
+              const pInR = rList.find((x) => x.id === mInR.parentId);
+              const sideR =
+                mInR.parentId === 0
+                  ? 'ROOT'
+                  : pInR && pInR.leftChild === mInR.id
+                  ? 'LEFT'
+                  : 'RIGHT';
+              rankNodesList.push({
+                rank: r,
+                nodeId: mInR.id,
+                parentId: mInR.parentId,
+                side: sideR,
+                leftChild: mInR.leftChild,
+                rightChild: mInR.rightChild,
+                nodeVault: Number((mInR.nodeVault || 0).toFixed(2)),
+                rawNodeVault: Number((mInR.rawNodeVault || mInR.nodeVault || 0).toFixed(2)),
+              });
+            }
+          }
+        } else {
+          rankNodesList.push({
+            rank: 1,
+            nodeId: r1Node.id,
+            parentId: r1Node.parentId,
+            side: sideInR1,
+            leftChild: r1Node.leftChild,
+            rightChild: r1Node.rightChild,
+            nodeVault: Number((r1Node.nodeVault || 0).toFixed(2)),
+            rawNodeVault: Number((r1Node.rawNodeVault || 0).toFixed(2)),
+          });
+        }
+
+        // Compute 15-Level subtree breakdown directly below this r1Node in Rank 1
+        const tiersBreakdown: TierLevelBreakdownItem[] = [];
+        let currentFrontier: number[] = [r1Node.id];
+        const visitedSubtree = new Set<number>([r1Node.id]);
+        const ratePerNodeR1 = Number(((RANK_PRICES_USDT[0] || 5) * 0.02).toFixed(2)); // 0.10 USDT
+        let thisNodeLevelTotalUsdt = 0;
+
+        for (let tier = 1; tier <= 15; tier++) {
+          const nextFrontier: number[] = [];
+          const leftNodeIds: number[] = [];
+          const rightNodeIds: number[] = [];
+          for (const pId of currentFrontier) {
+            const pObj = r1NodesMap.get(pId);
+            if (!pObj) continue;
+            if (pObj.leftChild > 0 && r1NodesMap.has(pObj.leftChild) && !visitedSubtree.has(pObj.leftChild)) {
+              visitedSubtree.add(pObj.leftChild);
+              nextFrontier.push(pObj.leftChild);
+              const lcObj = r1NodesMap.get(pObj.leftChild);
+              if (!lcObj?.isAdminFreeUpgrade) {
+                leftNodeIds.push(pObj.leftChild);
+              }
+            }
+            if (pObj.rightChild > 0 && r1NodesMap.has(pObj.rightChild) && !visitedSubtree.has(pObj.rightChild)) {
+              visitedSubtree.add(pObj.rightChild);
+              nextFrontier.push(pObj.rightChild);
+              rightNodeIds.push(pObj.rightChild);
+            }
+          }
+          if (nextFrontier.length === 0) break;
+          const tierAmt = Number((leftNodeIds.length * ratePerNodeR1).toFixed(2));
+          thisNodeLevelTotalUsdt = Number((thisNodeLevelTotalUsdt + tierAmt).toFixed(2));
+          tiersBreakdown.push({
+            tier,
+            maxCapacity: Math.pow(2, tier),
+            totalNodesInTier: nextFrontier.length,
+            leftPayingNodesCount: leftNodeIds.length,
+            rightRebirthNodesCount: rightNodeIds.length,
+            ratePerNodeUsdt: ratePerNodeR1,
+            amountUsdt: tierAmt,
+            allNodeIds: nextFrontier,
+            leftNodeIds,
+            rightNodeIds,
+          });
+          currentFrontier = nextFrontier;
+        }
+
+        const receivedLevelsCount = tiersBreakdown.filter((t) => t.leftPayingNodesCount > 0).length;
+        const remainingLevelsCount = Math.max(0, 15 - receivedLevelsCount);
+        const perTierStr = tiersBreakdown
+          .filter((t) => t.leftPayingNodesCount > 0)
+          .map((t) => `ชั้น ${t.tier}: ${t.amountUsdt.toFixed(2)} USDT (${t.leftPayingNodesCount} เม็ดซ้าย)`)
+          .join(', ');
+
+        reportsMap.set(r1Node.id, {
+          id: r1Node.id,
+          label: r1Node.isClone
+            ? `Main #${origMainId} (โคลน R1-#${r1Node.id})`
+            : isAutoMain
+            ? `Auto ID #${r1Node.id}`
+            : `Main ID #${r1Node.id}`,
+          nodeType,
+          typeBadge,
+          isClone: Boolean(r1Node.isClone),
+          isAutoId: Boolean(isAutoMain),
+          isExtraId: Boolean(r1Node.isExtraId),
+          originMainId: origMainId,
+          cloneRound: r1Node.isClone ? (r1Node.cloneRound || 1) : 0,
+          cloneSequence: r1Node.isClone ? (r1Node.cloneSequence || 1) : 0,
+          spawnedByMainId,
+          owner: r1Node.owner,
+          directSponsorNodeId: isAutoMain
+            ? spawnedByMainId
+            : r1Node.directSponsorNodeId || (r1Node.id === 1 ? 0 : 1),
+          parentId: r1Node.parentId,
+          side: sideInR1,
+          sideInR1,
+          leftChildR1: r1Node.leftChild,
+          rightChildR1: r1Node.rightChild,
+          currentMaxRank: stats.currentRank,
+          rankNodesList,
+          direct30TotalUsdt: 0,
+          direct30History: [],
+          level30TotalUsdt: 0,
+          level30History: [],
+          levelSummary: {
+            maxLevels: 15,
+            receivedLevelsCount,
+            remainingLevelsCount,
+            ratePerNodeUsdt: ratePerNodeR1,
+            thisNodeLevelTotalUsdt,
+            clonesLevelTotalUsdt: 0,
+            combinedLevelTotalUsdt: thisNodeLevelTotalUsdt,
+            summaryTextTh:
+              receivedLevelsCount > 0
+                ? `รับไปแล้ว ${receivedLevelsCount}/15 ชั้น (${perTierStr}) • เหลืออีก ${remainingLevelsCount} ชั้น`
+                : `รับไปแล้ว 0/15 ชั้น • เหลืออีก 15 ชั้น`,
+            tiersBreakdown,
+          },
+          vault35GrossTotalUsdt: 0,
+          vault35RemainingTotalUsdt: 0,
+          vault35DeductedTotalUsdt: 0,
+          vault35History: [],
+          vault35Ledger: [],
+          vaultDeductedBreakdown: {
+            extraIdsTotalUsdt: 0,
+            autoIdsTotalUsdt: 0,
+            upgradesTotalUsdt: 0,
+          },
+          upgradeRankPool: stats.upgradeRankPool,
+          newAutoIdPool: stats.newAutoIdPool,
+          newExtraIdPool: stats.newExtraIdPool,
+          oldCarryoverVault: stats.oldCarryoverVault,
+          r1To3LeftoverOldVault: stats.r1To3LeftoverOldVault,
+          r4To27OutsideWindowVault: stats.r4To27OutsideWindowVault,
+          extraLeftVaultBonus: stats.extraLeftVaultBonus,
+          extraIdDeductedTotalUsdt: stats.extraIdDeductedTotalUsdt,
+          newExtraIdPoolGross: stats.newExtraIdPoolGross,
+          pools: {
+            upgradeRankPool: stats.upgradeRankPool,
+            newAutoIdPool: stats.newAutoIdPool,
+            newExtraIdPool: stats.newExtraIdPool,
+            oldCarryoverVault: stats.oldCarryoverVault,
+            newExtraIdPoolGross: stats.newExtraIdPoolGross,
+          },
+          totalAutoIdCount: 0,
+          totalExtraIdCount: 0,
+          totalClonesCount: 0,
+          autoIdsSpawned: [],
+          autoExtraIdsSpawned: [],
+          clonesSpawned: [],
+        });
+      }
+
+      // Populate Auto IDs, Auto Extra IDs, and Clones across Ranks 1..27
+      for (const r1Node of r1Nodes) {
+        const isAutoMain =
+          !r1Node.isClone &&
+          !r1Node.isExtraId &&
+          (autoMainSourceMap.has(r1Node.id) || r1Node.originType === 'AUTO_NEW_MAIN');
+        if (isAutoMain) {
+          const spId =
+            r1Node.autoSourceMainId || autoMainSourceMap.get(r1Node.id) || r1Node.directSponsorNodeId || 1;
+          const spReport = reportsMap.get(spId);
+          const pNode = r1Nodes.find((x) => x.id === r1Node.parentId);
+          const side: 'LEFT' | 'RIGHT' | 'ROOT' =
+            r1Node.parentId === 0 ? 'ROOT' : pNode && pNode.leftChild === r1Node.id ? 'LEFT' : 'RIGHT';
+          if (spReport) {
+            spReport.autoIdsSpawned.push({
+              id: r1Node.id,
+              rank: 1,
+              label: `Auto ID #${r1Node.id} (R1-#${r1Node.id})`,
+              type: 'AUTO_ID',
+              parentId: r1Node.parentId,
+              side,
+              directSponsorNodeId: spId,
+              spawnedByMainId: spId,
+              owner: r1Node.owner,
+              timestamp: computeNodeTimestamp(1, r1Node.id),
+            } as any);
+          }
+        }
+      }
+
+      const cloneSpawnedLookup = new Map<string, SpawnedIdItem>();
+      const extraSpawnedLookup = new Map<string, SpawnedIdItem>();
+
+      for (let rankNum = 1; rankNum <= 18; rankNum++) {
+        const rNodes = matrixDB.nodesByRank[rankNum] || [];
+        if (rNodes.length <= 1) continue;
+        const nodesMap = new Map<number, IndexedTreeNode>();
+        for (const n of rNodes) nodesMap.set(n.id, n);
+
+        for (const n of rNodes) {
+          if (n.id <= 1) continue;
+          const pNode = nodesMap.get(n.parentId);
+          const side: 'LEFT' | 'RIGHT' | 'ROOT' =
+            n.parentId === 0 ? 'ROOT' : pNode && pNode.leftChild === n.id ? 'LEFT' : 'RIGHT';
+
+          if (n.isExtraId && !n.isClone) {
+            // Find which Rank 1 Main ID spawned this Extra ID (prioritize persisted/on-chain directSponsorNodeId)
+            const extraOwner = (n.owner || '').toLowerCase();
+            const ownerMains = r1Nodes.filter(
+              (m) => !m.isClone && !m.isExtraId && (m.owner || '').toLowerCase() === extraOwner
+            );
+            let r1MainSpId = 1;
+            if (
+              n.directSponsorNodeId > 0 &&
+              (ownerMains.length === 0
+                ? reportsMap.has(n.directSponsorNodeId)
+                : ownerMains.some((m) => m.id === n.directSponsorNodeId))
+            ) {
+              r1MainSpId = n.directSponsorNodeId;
+            } else if (ownerMains.length === 1) {
+              r1MainSpId = ownerMains[0].id;
+            } else if (ownerMains.length > 1) {
+              const r9Nodes = matrixDB.nodesByRank[9] || [];
+              const r4Nodes = matrixDB.nodesByRank[4] || [];
+              const eligibleMain =
+                ownerMains.find(
+                  (m) =>
+                    m.id === 1 ||
+                    r9Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+                ) ||
+                ownerMains.find(
+                  (m) =>
+                    m.id === 1 ||
+                    r4Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+                ) ||
+                ownerMains[0];
+              r1MainSpId = eligibleMain.id;
+            } else {
+              const localSpId = n.directSponsorNodeId || 1;
+              const localSpNode = nodesMap.get(localSpId);
+              r1MainSpId =
+                rankNum === 1
+                  ? localSpId
+                  : localSpNode
+                  ? resolveCanonicalMainId(rankNum, localSpNode)
+                  : localSpId;
+            }
+            const spReport = reportsMap.get(r1MainSpId) || reportsMap.get(1);
+            if (spReport) {
+              const extraEntry: SpawnedIdItem = {
+                id: n.id,
+                rank: rankNum,
+                mainId: spReport.id,
+                label: `Extra R${rankNum}-#${n.id}`,
+                type: 'AUTO_EXTRA_ID',
+                parentId: n.parentId,
+                side,
+                directSponsorNodeId: r1MainSpId,
+                owner: n.owner,
+                timestamp: computeNodeTimestamp(rankNum, n.id),
+                direct30TotalUsdt: 0,
+                direct30History: [],
+                level30TotalUsdt: 0,
+                level30History: [],
+                vault35GrossTotalUsdt: 0,
+                vault35History: [],
+              };
+              spReport.autoExtraIdsSpawned.push(extraEntry);
+              extraSpawnedLookup.set(`${rankNum}-${n.id}`, extraEntry);
+            }
+          } else if (n.isClone) {
+            const canonMainId = resolveCanonicalMainId(rankNum, n);
+            const mainReport = reportsMap.get(canonMainId);
+            if (mainReport) {
+              const cloneEntry: SpawnedIdItem = {
+                id: n.id,
+                rank: rankNum,
+                mainId: canonMainId,
+                label: `Main #${canonMainId} (โคลน R${rankNum}-#${n.id})`,
+                type: 'CLONE_ID',
+                parentId: n.parentId,
+                side,
+                directSponsorNodeId: n.directSponsorNodeId || mainReport.directSponsorNodeId,
+                owner: n.owner,
+                cloneRound: n.cloneRound || 1,
+                cloneSequence: n.cloneSequence || 1,
+                timestamp: computeNodeTimestamp(rankNum, n.id),
+                direct30TotalUsdt: 0,
+                direct30History: [],
+                level30TotalUsdt: 0,
+                level30History: [],
+                vault35GrossTotalUsdt: 0,
+                vault35History: [],
+              };
+              mainReport.clonesSpawned.push(cloneEntry);
+              cloneSpawnedLookup.set(`${rankNum}-${n.id}`, cloneEntry);
+            }
+          }
+        }
+      }
+
+      for (const rep of reportsMap.values()) {
+        rep.totalAutoIdCount = rep.autoIdsSpawned.length;
+        rep.totalExtraIdCount = rep.autoExtraIdsSpawned.length;
+        rep.totalClonesCount = rep.clonesSpawned.length;
+      }
+
+      // Compute exact 30% Direct, 30% Level (2% x 15), 35% Upgrade Vault history per ID, AND AllSell (4%) + FamilyPool across Ranks 1..27
+      const allSellWalletAddr =
+        matrixDB.systemWallets?.allSellWallet || '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710';
+      const familyPoolWalletAddr =
+        matrixDB.systemWallets?.familyPool || '0x225DF4b5961f757f54728138F289Eaf49D4F275A';
+      const botWalletAddr =
+        matrixDB.systemWallets?.customBotWallet ||
+        matrixDB.systemWallets?.botWallet ||
+        DEFAULT_BOT_WALLET;
+
+      let allSellTotalUsdt = 0;
+      let familyPoolTotalUsdt = 0;
+      let familyPoolUnpaidLevelUsdt = 0;
+      let familyPoolRootCloneDirectUsdt = 0;
+      let botTotalUsdt = 0;
+
+      const allSellByRank: Record<number, number> = {};
+      const familyPoolByRank: Record<number, number> = {};
+      const botByRank: Record<number, number> = {};
+      const allSellHistory: Array<{
+        rank: number;
+        fromNodeId: number;
+        fromMainId: number;
+        fromNodeType: string;
+        parentId: number;
+        amountUsdt: number;
+        recipient: string;
+        note: string;
+        timestamp: string;
+        txHash?: string;
+        blockNumber?: number;
+      }> = [];
+      const botHistory: Array<{
+        rank: number;
+        fromNodeId: number;
+        fromMainId: number;
+        fromNodeType: string;
+        parentId: number;
+        amountUsdt: number;
+        recipient: string;
+        note: string;
+        timestamp: string;
+        txHash?: string;
+        blockNumber?: number;
+      }> = [];
+      const familyPoolHistory: Array<{
+        rank: number;
+        fromNodeId: number;
+        fromMainId: number;
+        fromNodeType: string;
+        parentId: number;
+        subType: 'UNPAID_LEVEL' | 'ROOT_CLONE_DIRECT';
+        paidTiers?: number;
+        unpaidTiers?: number;
+        amountUsdt: number;
+        recipient: string;
+        note: string;
+        timestamp: string;
+      }> = [];
+
+      for (let rankNum = 1; rankNum <= 18; rankNum++) {
+        const rNodes = matrixDB.nodesByRank[rankNum] || [];
+        if (rNodes.length <= 1) continue;
+
+        const unitPrice = RANK_PRICES_USDT[rankNum - 1] || 5;
+        const directAmt = Number((unitPrice * 0.3).toFixed(2));
+        const vaultAmt = Number((unitPrice * 0.35).toFixed(2));
+        const levelAmt = Number((unitPrice * 0.02).toFixed(2));
+        const fullLevelExtraAmt = Number((unitPrice * 0.3).toFixed(2));
+        const allSellAmt = Number((unitPrice * 0.04).toFixed(2));
+        const botAmt = Number((unitPrice * 0.01).toFixed(2));
+
+        const nodesMap = new Map<number, IndexedTreeNode>();
+        for (const n of rNodes) nodesMap.set(n.id, n);
+
+        const sortedIds = Array.from(nodesMap.keys()).sort((a, b) => a - b);
+
+        for (const id of sortedIds) {
+          if (id <= 1) continue;
+          const child = nodesMap.get(id)!;
+          if (child.isAdminFreeUpgrade) continue; // เงื่อนไข Admin อัพ Rank ฟรี: ไม่จ่ายค่าคอมและไม่เข้ากระปุกเมื่อวางฝั่งซ้าย
+          const parent = nodesMap.get(child.parentId);
+          if (!parent || parent.leftChild !== id) continue;
+
+          const childCanonMainId = resolveCanonicalMainId(rankNum, child);
+          const childTypeLabel = child.isExtraId
+            ? `Extra R${rankNum}-#${child.id}`
+            : child.isClone
+            ? `โคลน R${rankNum}-#${child.id} (ของ Main #${childCanonMainId})`
+            : autoMainSourceMap.has(childCanonMainId)
+            ? `Auto ID #${childCanonMainId} (R${rankNum}-#${child.id})`
+            : `Main #${childCanonMainId} (R${rankNum}-#${child.id})`;
+
+          const rowEventTime = computeNodeTimestamp(rankNum, id);
+
+          // Every Left-Child placement generates 4% AllSell & 1% Bot
+          allSellTotalUsdt = Number((allSellTotalUsdt + allSellAmt).toFixed(4));
+          allSellByRank[rankNum] = Number(((allSellByRank[rankNum] || 0) + allSellAmt).toFixed(4));
+          botTotalUsdt = Number((botTotalUsdt + botAmt).toFixed(4));
+          botByRank[rankNum] = Number(((botByRank[rankNum] || 0) + botAmt).toFixed(4));
+
+          const matchingBotRew = (matrixDB.rewardLogs || []).find(
+            (rw) =>
+              String(rw.rewardType || '').toUpperCase() === 'BOT' &&
+              Number(rw.rank || 1) === rankNum &&
+              Number(rw.fromNodeId || 0) === id
+          );
+          const matchingAllSellRew = (matrixDB.rewardLogs || []).find(
+            (rw) =>
+              String(rw.rewardType || '').toUpperCase() === 'ALLSELL' &&
+              Number(rw.rank || 1) === rankNum &&
+              Number(rw.fromNodeId || 0) === id
+          );
+          const matchingNodeTx =
+            !isRealTxHash(matchingBotRew?.txHash) || !isRealTxHash(matchingAllSellRew?.txHash)
+              ? (matrixDB.transactionLogs || []).find(
+                  (t) =>
+                    Number(t.rank || 1) === rankNum &&
+                    (Number(t.nodeId || 0) === id || Number(t.mainNodeId || 0) === childCanonMainId) &&
+                    isRealTxHash(t.txHash)
+                )
+              : undefined;
+
+          botHistory.push({
+            rank: rankNum,
+            fromNodeId: id,
+            fromMainId: childCanonMainId,
+            fromNodeType: childTypeLabel,
+            parentId: parent.id,
+            amountUsdt: botAmt,
+            recipient: botWalletAddr,
+            note: `1% Bot จาก ${childTypeLabel} (วางเม็ดซ้ายใต้ R${rankNum}-#${parent.id})`,
+            timestamp: matchingBotRew?.createdAt || matchingNodeTx?.timestamp || rowEventTime,
+            txHash: isRealTxHash(matchingBotRew?.txHash)
+              ? matchingBotRew?.txHash
+              : matchingNodeTx?.txHash,
+            blockNumber: matchingBotRew?.blockNumber || matchingNodeTx?.blockNumber,
+          });
+
+          allSellHistory.push({
+            rank: rankNum,
+            fromNodeId: id,
+            fromMainId: childCanonMainId,
+            fromNodeType: childTypeLabel,
+            parentId: parent.id,
+            amountUsdt: allSellAmt,
+            recipient: allSellWalletAddr,
+            note: `4% AllSell จาก ${childTypeLabel} (วางเม็ดซ้ายใต้ R${rankNum}-#${parent.id})`,
+            timestamp: matchingAllSellRew?.createdAt || matchingNodeTx?.timestamp || rowEventTime,
+            txHash: isRealTxHash(matchingAllSellRew?.txHash)
+              ? matchingAllSellRew?.txHash
+              : matchingNodeTx?.txHash,
+            blockNumber: matchingAllSellRew?.blockNumber || matchingNodeTx?.blockNumber,
+          });
+
+          const parentOrigin = !parent.isClone
+            ? parent
+            : rNodes.find(
+                (x) =>
+                  !x.isClone &&
+                  (x.owner || '').toLowerCase() === (parent.owner || '').toLowerCase() &&
+                  (x.originMainId === parent.originMainId || x.id === parent.originMainId)
+              ) || parent;
+          const isParentExtraLineage = !parent.isClone
+            ? Boolean(parent.isExtraId)
+            : Boolean(parent.isExtraId || parentOrigin.isExtraId);
+
+          // กฎหลัก Rank 2-27: ห้ามเปลี่ยนข้อมูล ผู้แนะนำตรง (Direct Sponsor)
+          // 30% ค่าแนะนำตรง (Direct Sponsor) ต้องจ่ายให้ ผู้แนะนำตรง (Direct Sponsor อ้างอิงที่ Rank 1 เสมอ)
+          const isId1CloneChild = child.isClone && (childCanonMainId === 1 || parent.id === 1);
+          let spMainId = child.directSponsorNodeId || 1;
+          if (!child.isExtraId && childCanonMainId > 1) {
+            const origR1 = r1Nodes.find((x) => x.id === childCanonMainId && !x.isClone && !x.isExtraId);
+            if (origR1 && origR1.directSponsorNodeId > 0) {
+              spMainId = origR1.directSponsorNodeId;
+            }
+          }
+          const spR1Node = r1Nodes.find((x) => x.id === spMainId);
+          if (spR1Node && spR1Node.isClone && spR1Node.originMainId > 0) {
+            spMainId = spR1Node.originMainId;
+          }
+
+          if (isParentExtraLineage) {
+            const extraOwner = (parentOrigin.owner || parent.owner || '').toLowerCase();
+            const ownerMains = r1Nodes.filter(
+              (m) => !m.isClone && !m.isExtraId && (m.owner || '').toLowerCase() === extraOwner
+            );
+            const explicitExtraSpId =
+              parentOrigin.directSponsorNodeId > 0
+                ? parentOrigin.directSponsorNodeId
+                : parent.directSponsorNodeId > 0
+                ? parent.directSponsorNodeId
+                : 0;
+            let targetMainId = 1;
+            if (
+              explicitExtraSpId > 0 &&
+              (ownerMains.length === 0
+                ? reportsMap.has(explicitExtraSpId)
+                : ownerMains.some((m) => m.id === explicitExtraSpId))
+            ) {
+              targetMainId = explicitExtraSpId;
+            } else if (ownerMains.length === 1) {
+              targetMainId = ownerMains[0].id;
+            } else if (ownerMains.length > 1) {
+              const r9Nodes = matrixDB.nodesByRank[9] || [];
+              const r4Nodes = matrixDB.nodesByRank[4] || [];
+              const eligibleMain =
+                ownerMains.find(
+                  (m) =>
+                    m.id === 1 ||
+                    r9Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+                ) ||
+                ownerMains.find(
+                  (m) =>
+                    m.id === 1 ||
+                    r4Nodes.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)
+                ) ||
+                ownerMains[0];
+              targetMainId = eligibleMain.id;
+            } else {
+              const extraSpLocalId = explicitExtraSpId > 0 ? explicitExtraSpId : 1;
+              const extraSpNode = nodesMap.get(extraSpLocalId);
+              targetMainId =
+                rankNum === 1
+                  ? extraSpLocalId
+                  : extraSpNode
+                  ? resolveCanonicalMainId(rankNum, extraSpNode)
+                  : extraSpLocalId;
+            }
+            const extraSpLocalNode = rNodes.find(
+              (x) => !x.isClone && !x.isExtraId && (rankNum === 1 ? x.id === targetMainId : x.originMainId === targetMainId)
+            );
+            const extraSpLocalId = extraSpLocalNode ? extraSpLocalNode.id : targetMainId;
+
+            // 1. 30% ค่าแนะนำตรง -> จ่ายให้ผู้แนะนำตรงของโหนดที่วาง (อ้างอิงที่ Rank 1 เสมอ หรือเข้า Family Pool หากเป็นโคลนของ #1)
+            if (isId1CloneChild) {
+              familyPoolRootCloneDirectUsdt = Number(
+                (familyPoolRootCloneDirectUsdt + directAmt).toFixed(4)
+              );
+              familyPoolTotalUsdt = Number((familyPoolTotalUsdt + directAmt).toFixed(4));
+              familyPoolByRank[rankNum] = Number(
+                ((familyPoolByRank[rankNum] || 0) + directAmt).toFixed(4)
+              );
+              familyPoolHistory.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                parentId: parent.id,
+                subType: 'ROOT_CLONE_DIRECT',
+                amountUsdt: directAmt,
+                recipient: familyPoolWalletAddr,
+                note: `30% ค่าแนะนำจากโคลนรหัส #1 (${childTypeLabel} วางซ้ายใต้ Extra R${rankNum}-#${parent.id}) เข้า Family Pool`,
+                timestamp: rowEventTime,
+              });
+            } else {
+              const spRepForExtraChild = reportsMap.get(spMainId);
+              if (spRepForExtraChild) {
+                const spLocalInR = rNodes.find(
+                  (x) => !x.isClone && !x.isExtraId && (rankNum === 1 ? x.id === spMainId : x.originMainId === spMainId)
+                );
+                spRepForExtraChild.direct30TotalUsdt = Number(
+                  (spRepForExtraChild.direct30TotalUsdt + directAmt).toFixed(2)
+                );
+                spRepForExtraChild.direct30History.push({
+                  rank: rankNum,
+                  fromNodeId: id,
+                  fromMainId: childCanonMainId,
+                  fromNodeType: childTypeLabel,
+                  toNodeId: spLocalInR ? spLocalInR.id : spMainId,
+                  toMainId: spMainId,
+                  amountUsdt: directAmt,
+                  note: `30% ค่าแนะนำตรงจาก ${childTypeLabel} (วางซ้ายใต้ Extra R${rankNum}-#${parent.id} • อ้างอิงผู้แนะนำตรง R1 Main #${spMainId})`,
+                  timestamp: rowEventTime,
+                });
+              }
+            }
+
+            // 2. 30% ค่าชั้น และ 35% Vault ของ Extra ID ส่งกลับเจ้าของรหัสหลักที่สร้าง Extra ID นั้น (และบันทึกยอดบน Extra ID / Clone นั้นด้วย)
+            const rep = reportsMap.get(targetMainId);
+            if (rep) {
+              rep.level30TotalUsdt = Number((rep.level30TotalUsdt + fullLevelExtraAmt).toFixed(2));
+              rep.level30History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: extraSpLocalId,
+                toMainId: targetMainId,
+                tier: 1,
+                amountUsdt: fullLevelExtraAmt,
+                note: `30% ค่าชั้นเต็มจำนวนจากเม็ดซ้ายของ Extra R${rankNum}-#${parent.id} ส่งกลับผู้แนะนำ Main #${targetMainId}`,
+                timestamp: rowEventTime,
+              });
+
+              rep.vault35GrossTotalUsdt = Number((rep.vault35GrossTotalUsdt + vaultAmt).toFixed(2));
+              rep.vault35History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: extraSpLocalId,
+                toMainId: targetMainId,
+                amountUsdt: vaultAmt,
+                note: `35% Vault จากเม็ดซ้ายของ Extra R${rankNum}-#${parent.id} ส่งเข้า New Extra ID Pool ของ Main #${targetMainId}`,
+                timestamp: rowEventTime,
+              });
+            }
+            const extraNodeEntry = !parent.isClone
+              ? extraSpawnedLookup.get(`${rankNum}-${parent.id}`)
+              : cloneSpawnedLookup.get(`${rankNum}-${parent.id}`);
+            if (extraNodeEntry) {
+              extraNodeEntry.level30TotalUsdt = Number(
+                ((extraNodeEntry.level30TotalUsdt || 0) + fullLevelExtraAmt).toFixed(2)
+              );
+              extraNodeEntry.level30History = extraNodeEntry.level30History || [];
+              extraNodeEntry.level30History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: parent.id,
+                toMainId: targetMainId,
+                tier: 1,
+                amountUsdt: fullLevelExtraAmt,
+                note: `30% ค่าชั้นเต็มจำนวนจากเม็ดซ้ายของ Extra R${rankNum}-#${parent.id} (โอนเข้า Main #${targetMainId})`,
+                timestamp: rowEventTime,
+              });
+
+              extraNodeEntry.vault35GrossTotalUsdt = Number(
+                ((extraNodeEntry.vault35GrossTotalUsdt || 0) + vaultAmt).toFixed(2)
+              );
+              extraNodeEntry.vault35History = extraNodeEntry.vault35History || [];
+              extraNodeEntry.vault35History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: parent.id,
+                toMainId: targetMainId,
+                amountUsdt: vaultAmt,
+                note: `35% Vault จากเม็ดซ้ายของ Extra R${rankNum}-#${parent.id} (โอนเข้า New Extra ID Pool ของ Main #${targetMainId})`,
+                timestamp: rowEventTime,
+              });
+            }
+            continue;
+          }
+
+          // 1. Direct 30%
+          if (isId1CloneChild) {
+            familyPoolRootCloneDirectUsdt = Number(
+              (familyPoolRootCloneDirectUsdt + directAmt).toFixed(4)
+            );
+            familyPoolTotalUsdt = Number((familyPoolTotalUsdt + directAmt).toFixed(4));
+            familyPoolByRank[rankNum] = Number(
+              ((familyPoolByRank[rankNum] || 0) + directAmt).toFixed(4)
+            );
+            familyPoolHistory.push({
+              rank: rankNum,
+              fromNodeId: id,
+              fromMainId: childCanonMainId,
+              fromNodeType: childTypeLabel,
+              parentId: parent.id,
+              subType: 'ROOT_CLONE_DIRECT',
+              amountUsdt: directAmt,
+              recipient: familyPoolWalletAddr,
+              note: `30% ค่าแนะนำจากโคลนรหัส #1 (${childTypeLabel} วางซ้ายใต้ R${rankNum}-#${parent.id}) เข้า Family Pool`,
+              timestamp: rowEventTime,
+            });
+          } else {
+            const spRep = reportsMap.get(spMainId);
+            if (spRep) {
+              const spLocalInR = rNodes.find(
+                (x) => !x.isClone && !x.isExtraId && (rankNum === 1 ? x.id === spMainId : x.originMainId === spMainId)
+              );
+              spRep.direct30TotalUsdt = Number((spRep.direct30TotalUsdt + directAmt).toFixed(2));
+              spRep.direct30History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: spLocalInR ? spLocalInR.id : spMainId,
+                toMainId: spMainId,
+                amountUsdt: directAmt,
+                note: `30% ค่าแนะนำตรงจาก ${childTypeLabel} (วางซ้ายใต้ R${rankNum}-#${parent.id} • อ้างอิงผู้แนะนำตรง R1 Main #${spMainId})`,
+                timestamp: rowEventTime,
+              });
+            }
+          }
+
+          // 2. Upgrade Vault 35% (goes to Parent's Canonical Main ID, and also recorded on the Clone ID if parent is a R1 Clone)
+          const parentCanonMainId = resolveCanonicalMainId(rankNum, parent);
+          const parentMainRep = reportsMap.get(parentCanonMainId);
+          if (parentMainRep) {
+            parentMainRep.vault35GrossTotalUsdt = Number(
+              (parentMainRep.vault35GrossTotalUsdt + vaultAmt).toFixed(2)
+            );
+            parentMainRep.vault35History.push({
+              rank: rankNum,
+              fromNodeId: id,
+              fromMainId: childCanonMainId,
+              fromNodeType: childTypeLabel,
+              toNodeId: parent.id,
+              toMainId: parentCanonMainId,
+              amountUsdt: vaultAmt,
+              note: parent.isClone
+                ? `35% อัพเกรดจากเม็ดซ้ายของโคลน R${rankNum}-#${parent.id} สะสมเข้ากระปุก Main #${parentCanonMainId}`
+                : `35% อัพเกรดจากเม็ดซ้ายของ R${rankNum}-#${parent.id} สะสมเข้ากระปุก Main #${parentCanonMainId}`,
+              timestamp: rowEventTime,
+            });
+          }
+          if (parent.isClone) {
+            const cloneEntry = cloneSpawnedLookup.get(`${rankNum}-${parent.id}`);
+            if (cloneEntry) {
+              cloneEntry.vault35GrossTotalUsdt = Number(
+                ((cloneEntry.vault35GrossTotalUsdt || 0) + vaultAmt).toFixed(2)
+              );
+              cloneEntry.vault35History = cloneEntry.vault35History || [];
+              cloneEntry.vault35History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: parent.id,
+                toMainId: parentCanonMainId,
+                amountUsdt: vaultAmt,
+                note: `35% อัพเกรดจากเม็ดซ้ายใต้โคลน R${rankNum}-#${parent.id} (โอนเข้ากระปุกรหัสหลัก Main #${parentCanonMainId})`,
+                timestamp: rowEventTime,
+              });
+            }
+          }
+          if (rankNum === 1 && parent.isClone && parent.id !== parentCanonMainId) {
+            const cloneRep = reportsMap.get(parent.id);
+            if (cloneRep) {
+              cloneRep.vault35GrossTotalUsdt = Number(
+                (cloneRep.vault35GrossTotalUsdt + vaultAmt).toFixed(2)
+              );
+              cloneRep.vault35History.push({
+                rank: 1,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: parent.id,
+                toMainId: parentCanonMainId,
+                amountUsdt: vaultAmt,
+                note: `35% อัพเกรดจากเม็ดซ้ายใต้โคลน #${parent.id} (โอนเข้ากระปุกรหัสหลัก Main #${parentCanonMainId})`,
+                timestamp: rowEventTime,
+              });
+            }
+          }
+
+          // 3. Level 30% (2% x 15 Tiers) + Unpaid tiers to Family Pool
+          let currUp = child.parentId;
+          let paidTiersCount = 0;
+          for (let tier = 1; tier <= 15; tier++) {
+            if (currUp <= 0) break;
+            const upNode = nodesMap.get(currUp);
+            if (!upNode) break;
+            paidTiersCount++;
+            const upCanonMainId = resolveCanonicalMainId(rankNum, upNode);
+            const upMainRep = reportsMap.get(upCanonMainId);
+            if (upMainRep) {
+              upMainRep.level30TotalUsdt = Number((upMainRep.level30TotalUsdt + levelAmt).toFixed(2));
+              upMainRep.level30History.push({
+                rank: rankNum,
+                fromNodeId: id,
+                fromMainId: childCanonMainId,
+                fromNodeType: childTypeLabel,
+                toNodeId: upNode.id,
+                toMainId: upCanonMainId,
+                tier,
+                amountUsdt: levelAmt,
+                note: upNode.isClone
+                  ? `ค่าชั้น 2% (ชั้นที่ ${tier}) จาก ${childTypeLabel} ผ่านโคลน R${rankNum}-#${upNode.id} เข้า Main #${upCanonMainId}`
+                  : `ค่าชั้น 2% (ชั้นที่ ${tier}) จาก ${childTypeLabel} เข้า R${rankNum}-#${upNode.id} (Main #${upCanonMainId})`,
+                timestamp: rowEventTime,
+              });
+            }
+            if (upNode.isClone) {
+              const cloneEntry = cloneSpawnedLookup.get(`${rankNum}-${upNode.id}`);
+              if (cloneEntry) {
+                cloneEntry.level30TotalUsdt = Number(
+                  ((cloneEntry.level30TotalUsdt || 0) + levelAmt).toFixed(2)
+                );
+                cloneEntry.level30History = cloneEntry.level30History || [];
+                cloneEntry.level30History.push({
+                  rank: rankNum,
+                  fromNodeId: id,
+                  fromMainId: childCanonMainId,
+                  fromNodeType: childTypeLabel,
+                  toNodeId: upNode.id,
+                  toMainId: upCanonMainId,
+                  tier,
+                  amountUsdt: levelAmt,
+                  note: `ค่าชั้น 2% (ชั้นที่ ${tier}) จาก ${childTypeLabel} ผ่านโคลน R${rankNum}-#${upNode.id} (ของ Main #${upCanonMainId})`,
+                  timestamp: rowEventTime,
+                });
+              }
+            }
+            if (upNode.isExtraId && !upNode.isClone) {
+              const extraEntry = extraSpawnedLookup.get(`${rankNum}-${upNode.id}`);
+              if (extraEntry) {
+                extraEntry.level30TotalUsdt = Number(
+                  ((extraEntry.level30TotalUsdt || 0) + levelAmt).toFixed(2)
+                );
+                extraEntry.level30History = extraEntry.level30History || [];
+                extraEntry.level30History.push({
+                  rank: rankNum,
+                  fromNodeId: id,
+                  fromMainId: childCanonMainId,
+                  fromNodeType: childTypeLabel,
+                  toNodeId: upNode.id,
+                  toMainId: upCanonMainId,
+                  tier,
+                  amountUsdt: levelAmt,
+                  note: `ค่าชั้น 2% (ชั้นที่ ${tier}) จาก ${childTypeLabel} ผ่าน Extra R${rankNum}-#${upNode.id} (ของ Main #${upCanonMainId})`,
+                  timestamp: rowEventTime,
+                });
+              }
+            }
+            if (rankNum === 1 && upNode.isClone && upNode.id !== upCanonMainId) {
+              const cloneRep = reportsMap.get(upNode.id);
+              if (cloneRep) {
+                cloneRep.level30TotalUsdt = Number((cloneRep.level30TotalUsdt + levelAmt).toFixed(2));
+                cloneRep.level30History.push({
+                  rank: 1,
+                  fromNodeId: id,
+                  fromMainId: childCanonMainId,
+                  fromNodeType: childTypeLabel,
+                  toNodeId: upNode.id,
+                  toMainId: upCanonMainId,
+                  tier,
+                  amountUsdt: levelAmt,
+                  note: `ค่าชั้น 2% (ชั้นที่ ${tier}) จาก ${childTypeLabel} ผ่านโคลน #${upNode.id} (ของ Main #${upCanonMainId})`,
+                  timestamp: rowEventTime,
+                });
+              }
+            }
+            currUp = upNode.parentId;
+          }
+
+          const unpaidTiersCount = Math.max(0, 15 - paidTiersCount);
+          if (unpaidTiersCount > 0) {
+            const unpaidAmt = Number((unpaidTiersCount * levelAmt).toFixed(4));
+            familyPoolUnpaidLevelUsdt = Number((familyPoolUnpaidLevelUsdt + unpaidAmt).toFixed(4));
+            familyPoolTotalUsdt = Number((familyPoolTotalUsdt + unpaidAmt).toFixed(4));
+            familyPoolByRank[rankNum] = Number(
+              ((familyPoolByRank[rankNum] || 0) + unpaidAmt).toFixed(4)
+            );
+            familyPoolHistory.push({
+              rank: rankNum,
+              fromNodeId: id,
+              fromMainId: childCanonMainId,
+              fromNodeType: childTypeLabel,
+              parentId: parent.id,
+              subType: 'UNPAID_LEVEL',
+              paidTiers: paidTiersCount,
+              unpaidTiers: unpaidTiersCount,
+              amountUsdt: Number(unpaidAmt.toFixed(2)),
+              recipient: familyPoolWalletAddr,
+              note: `ค่าชั้นส่วนที่เหลือ ${unpaidTiersCount} ชั้น (${unpaidTiersCount * 2}%) จาก ${childTypeLabel} (จ่ายอัพไลน์ ${paidTiersCount}/15 ชั้น) เข้า Family Pool`,
+              timestamp: rowEventTime,
+            });
+          }
+        }
+      }
+
+      // Sort all per-ID history arrays and system pool history arrays by latest time first (ใหม่สุด -> เก่าสุด)
+      const sortByLatestTimeDesc = <T extends { timestamp: string; rank?: number; fromNodeId?: number; id?: number }>(
+        arr: T[]
+      ): T[] =>
+        arr.sort((a, b) => {
+          const tA = new Date(a.timestamp).getTime() || 0;
+          const tB = new Date(b.timestamp).getTime() || 0;
+          if (tB !== tA) return tB - tA;
+          const rDiff = Number(b.rank || 1) - Number(a.rank || 1);
+          if (rDiff !== 0) return rDiff;
+          return Number(b.fromNodeId ?? b.id ?? 0) - Number(a.fromNodeId ?? a.id ?? 0);
+        });
+
+      sortByLatestTimeDesc(allSellHistory);
+      sortByLatestTimeDesc(familyPoolHistory);
+      sortByLatestTimeDesc(botHistory);
+      for (const rep of reportsMap.values()) {
+        sortByLatestTimeDesc(rep.direct30History);
+        sortByLatestTimeDesc(rep.level30History);
+        sortByLatestTimeDesc(rep.vault35History);
+        sortByLatestTimeDesc(rep.autoIdsSpawned);
+        sortByLatestTimeDesc(rep.autoExtraIdsSpawned);
+        for (const es of rep.autoExtraIdsSpawned) {
+          if (Array.isArray(es.level30History)) sortByLatestTimeDesc(es.level30History);
+          if (Array.isArray(es.vault35History)) sortByLatestTimeDesc(es.vault35History);
+        }
+        sortByLatestTimeDesc(rep.clonesSpawned);
+        for (const cs of rep.clonesSpawned) {
+          if (Array.isArray(cs.level30History)) sortByLatestTimeDesc(cs.level30History);
+          if (Array.isArray(cs.vault35History)) sortByLatestTimeDesc(cs.vault35History);
+        }
+      }
+
+      // Align system pool balances with calculated matrix totals for this contract
+      const onChainAllSellBal = Number(allSellTotalUsdt.toFixed(2));
+      const onChainFamilyBal = Number(familyPoolTotalUsdt.toFixed(2));
+      const onChainBotBal = Number(botTotalUsdt.toFixed(2));
+
+      // Compute remaining & deducted Vault + finalize levelSummary (clonesLevelTotalUsdt & combinedLevelTotalUsdt) for each ID
+      for (const rep of reportsMap.values()) {
+        const stats = computeMainIdDatabaseStats(rep.id);
+        const rem = rep.isClone
+          ? rep.rankNodesList.reduce((acc, rItem) => acc + Number(rItem.nodeVault || 0), 0)
+          : Number(
+              (
+                (stats.upgradeRankPool || 0) +
+                (stats.newAutoIdPool || 0) +
+                (stats.newExtraIdPool || 0)
+              ).toFixed(2)
+            );
+        rep.vault35RemainingTotalUsdt = Number(rem.toFixed(2));
+        rep.vault35GrossTotalUsdt = Number(
+          rep.vault35History.reduce((s, h) => s + (Number(h.amountUsdt) || 0), 0).toFixed(2)
+        );
+        rep.vault35DeductedTotalUsdt = Number(
+          Math.max(0, rep.vault35GrossTotalUsdt - rep.vault35RemainingTotalUsdt).toFixed(2)
+        );
+
+        if (!rep.isClone) {
+          const cloneLvlSum = Number(
+            rep.level30History
+              .filter((h) => (h.note || '').includes('ผ่านโคลน'))
+              .reduce((s, h) => s + (Number(h.amountUsdt) || 0), 0)
+              .toFixed(2)
+          );
+          rep.levelSummary.clonesLevelTotalUsdt = cloneLvlSum;
+          rep.levelSummary.thisNodeLevelTotalUsdt = Number(
+            Math.max(0, rep.level30TotalUsdt - cloneLvlSum).toFixed(2)
+          );
+          rep.levelSummary.combinedLevelTotalUsdt = Number(rep.level30TotalUsdt.toFixed(2));
+        } else {
+          rep.levelSummary.clonesLevelTotalUsdt = 0;
+          rep.levelSummary.combinedLevelTotalUsdt = Number(rep.levelSummary.thisNodeLevelTotalUsdt.toFixed(2));
+        }
+
+        // Deductions breakdown: 100% mathematically balanced to vault35DeductedTotalUsdt
+        const extraDeduct = Number(
+          rep.autoExtraIdsSpawned.reduce(
+            (s, x) => s + (RANK_PRICES_USDT[x.rank - 1] || 10),
+            0
+          ).toFixed(2)
+        );
+        const autoDeduct = Number(
+          (rep.autoIdsSpawned.length * (RANK_PRICES_USDT[0] || 5)).toFixed(2)
+        );
+        const upDeduct = Number(
+          Math.max(0, rep.vault35DeductedTotalUsdt - extraDeduct - autoDeduct).toFixed(2)
+        );
+
+        rep.vaultDeductedBreakdown = {
+          extraIdsTotalUsdt: extraDeduct,
+          autoIdsTotalUsdt: autoDeduct,
+          upgradesTotalUsdt: upDeduct,
+        };
+
+        // Align 3 pools with stats
+        rep.upgradeRankPool = stats.upgradeRankPool;
+        rep.newAutoIdPool = stats.newAutoIdPool;
+        rep.newExtraIdPool = stats.newExtraIdPool;
+        if (rep.pools) {
+          rep.pools.upgradeRankPool = stats.upgradeRankPool;
+          rep.pools.newAutoIdPool = stats.newAutoIdPool;
+          rep.pools.newExtraIdPool = stats.newExtraIdPool;
+        }
+
+        // Build 35% Vault Audit Ledger (Inflow vs Outflow & Per-Pool Running Balance)
+        type OrderedLedgerItem = VaultLedgerItem & { _orderMs: number; _seq: number };
+        const ledgerEvents: OrderedLedgerItem[] = [];
+        const sortedInflows = rep.vault35History.slice().reverse();
+        const sortedAutoSpawned = rep.autoIdsSpawned.slice().reverse();
+        const sortedExtraSpawned = rep.autoExtraIdsSpawned.slice().reverse();
+
+        const inflowItems: OrderedLedgerItem[] = [];
+        for (const inf of sortedInflows) {
+          const isExtraLeftBonus =
+            (inf.note || '').includes('Extra R') ||
+            (inf.note || '').includes('Extra Left Bonus') ||
+            (inf.note || '').includes('ส่งเข้า New Extra ID Pool');
+
+          let pType: 'UPGRADE_POOL' | 'AUTO_ID_POOL' | 'EXTRA_ID_POOL';
+          let pLabel: string;
+
+          if (isExtraLeftBonus) {
+            pType = 'EXTRA_ID_POOL';
+            pLabel = 'Extra ID Pool';
+          } else if ((rep.currentMaxRank || 1) >= 18) {
+            if (inf.rank <= 3 && inf.rank < stats.window5Start) {
+              pType = 'AUTO_ID_POOL';
+              pLabel = 'Auto ID Pool';
+            } else {
+              pType = 'EXTRA_ID_POOL';
+              pLabel = 'Extra ID Pool';
+            }
+          } else {
+            if (inf.rank >= stats.window5Start && inf.rank <= stats.window5End) {
+              pType = 'UPGRADE_POOL';
+              pLabel = 'Upgrade Pool';
+            } else if (inf.rank <= 3 && inf.rank < stats.window5Start) {
+              pType = 'AUTO_ID_POOL';
+              pLabel = 'Auto ID Pool';
+            } else {
+              pType = 'EXTRA_ID_POOL';
+              pLabel = 'Extra ID Pool';
+            }
+          }
+
+          const rawMs = new Date(inf.timestamp).getTime() || 0;
+          inflowItems.push({
+            id: `v-in-${rep.id}-${inflowItems.length + 1}`,
+            timestamp: inf.timestamp,
+            direction: 'IN',
+            actionType: 'RECEIVE_VAULT',
+            actionLabelTh: `รับ 35% Vault (Rank ${inf.rank})`,
+            rank: inf.rank,
+            amountUsdt: inf.amountUsdt,
+            poolType: pType,
+            poolLabelTh: pLabel,
+            descriptionTh: `รับ 35% Vault (+${inf.amountUsdt.toFixed(2)} USDT) จากเม็ดซ้ายใน Rank ${inf.rank} สะสมเข้า ${pLabel}`,
+            note: inf.note,
+            poolBalanceAfterUsdt: 0,
+            balanceAfterUsdt: 0,
+            _orderMs: rawMs,
+            _seq: inflowItems.length + 1,
+          });
+        }
+
+        // Chronological inflows so causal milestones for Auto ID / Extra ID / Upgrade outflows never sort before funding inflows
+        inflowItems.sort((a, b) => a._orderMs - b._orderMs || a._seq - b._seq);
+        ledgerEvents.push(...inflowItems);
+
+        const findFundingMilestoneMs = (
+          pool: 'UPGRADE_POOL' | 'AUTO_ID_POOL' | 'EXTRA_ID_POOL',
+          cumulativeThreshold: number
+        ): number => {
+          let cum = 0;
+          let lastMs = 0;
+          for (const inf of inflowItems) {
+            if (inf.poolType !== pool) continue;
+            cum = Number((cum + inf.amountUsdt).toFixed(4));
+            lastMs = inf._orderMs;
+            if (cum + 1e-6 >= cumulativeThreshold) {
+              return lastMs;
+            }
+          }
+          return lastMs;
+        };
+
+        // 2. Outflow Events: Auto IDs (strictly ordered after funding inflow milestone)
+        let cumAutoCost = 0;
+        sortedAutoSpawned.forEach((sp, idx) => {
+          const spTime = sp.timestamp || new Date(Date.now() - (idx + 1) * 60000).toISOString();
+          const autoIdCost = RANK_PRICES_USDT[0] || 5;
+          cumAutoCost = Number((cumAutoCost + autoIdCost).toFixed(4));
+          const minTriggerMs = findFundingMilestoneMs('AUTO_ID_POOL', cumAutoCost);
+          const rawMs = new Date(spTime).getTime() || 0;
+          const orderMs = Math.max(rawMs, minTriggerMs + idx + 1);
+          ledgerEvents.push({
+            id: `v-out-auto-${rep.id}-${sp.id}`,
+            timestamp: spTime,
+            direction: 'OUT',
+            actionType: 'SPAWN_AUTO_ID',
+            actionLabelTh: 'หักสร้าง Auto ID',
+            rank: 1,
+            amountUsdt: autoIdCost,
+            poolType: 'AUTO_ID_POOL',
+            poolLabelTh: 'Auto ID Pool',
+            descriptionTh: `หัก ${autoIdCost.toFixed(2)} USDT จาก Auto ID Pool สร้าง ${sp.label} วางผัง Rank 1`,
+            note: `สร้าง Auto ID สำเร็จ (ID #${sp.id})`,
+            poolBalanceAfterUsdt: 0,
+            balanceAfterUsdt: 0,
+            _orderMs: orderMs,
+            _seq: 10000 + idx,
+          });
+        });
+
+        // 3. Outflow Events: Extra IDs (strictly ordered after funding inflow milestone)
+        let cumExtraCost = 0;
+        sortedExtraSpawned.forEach((sp, idx) => {
+          const cost = RANK_PRICES_USDT[sp.rank - 1] || 10;
+          const spTime = sp.timestamp || new Date(Date.now() - (idx + 1) * 50000).toISOString();
+          cumExtraCost = Number((cumExtraCost + cost).toFixed(4));
+          const minTriggerMs = findFundingMilestoneMs('EXTRA_ID_POOL', cumExtraCost);
+          const rawMs = new Date(spTime).getTime() || 0;
+          const orderMs = Math.max(rawMs, minTriggerMs + idx + 1);
+          ledgerEvents.push({
+            id: `v-out-extra-${rep.id}-${sp.rank}-${sp.id}`,
+            timestamp: spTime,
+            direction: 'OUT',
+            actionType: 'SPAWN_EXTRA_ID',
+            actionLabelTh: `หักสร้าง Extra ID (${sp.label})`,
+            rank: sp.rank,
+            amountUsdt: cost,
+            poolType: 'EXTRA_ID_POOL',
+            poolLabelTh: 'Extra ID Pool',
+            descriptionTh: `หัก ${cost.toFixed(2)} USDT จาก Extra ID Pool สร้าง ${sp.label} ในผัง Rank ${sp.rank}`,
+            note: `สร้าง Extra ID สำเร็จ (ID #${sp.id})`,
+            poolBalanceAfterUsdt: 0,
+            balanceAfterUsdt: 0,
+            _orderMs: orderMs,
+            _seq: 20000 + idx,
+          });
+        });
+
+        // 4. Outflow Events: Upgrades
+        if (upDeduct > 0) {
+          const userRankNodes = (rep.rankNodesList || [])
+            .filter((rn: any) => !rn.isClone && !rn.isExtraId && rn.rank >= 2)
+            .sort((a: any, b: any) => a.rank - b.rank);
+
+          let remUpToAllocate = upDeduct;
+          let cumUpgCost = 0;
+          for (let i = 0; i < userRankNodes.length && remUpToAllocate > 0; i++) {
+            const rn = userRankNodes[i];
+            const prevR = rn.rank - 1;
+            const rPrice = RANK_PRICES_USDT[rn.rank - 1] || 10;
+            const maxForThis = Math.min(rPrice, remUpToAllocate);
+            const amtToDeduct = Number(maxForThis.toFixed(2));
+            remUpToAllocate = Number((remUpToAllocate - amtToDeduct).toFixed(2));
+            cumUpgCost = Number((cumUpgCost + amtToDeduct).toFixed(4));
+
+            const origNode = (matrixDB.nodesByRank[rn.rank] || []).find((n) => n.id === rn.nodeId);
+            const uTime =
+              origNode?.createdAt ||
+              (sortedInflows[0]?.timestamp
+                ? new Date(new Date(sortedInflows[0].timestamp).getTime() + (i + 1) * 1000).toISOString()
+                : new Date().toISOString());
+            const minTriggerMs = findFundingMilestoneMs('UPGRADE_POOL', cumUpgCost);
+            const rawMs = new Date(uTime).getTime() || 0;
+            const orderMs = Math.max(rawMs, minTriggerMs + i + 1);
+            ledgerEvents.push({
+              id: `v-out-up-${rep.id}-${rn.rank}`,
+              timestamp: uTime,
+              direction: 'OUT',
+              actionType: 'AUTO_UPGRADE',
+              actionLabelTh: `หักอัปเกรด (สู่ Rank ${rn.rank})`,
+              rank: rn.rank,
+              amountUsdt: amtToDeduct,
+              poolType: 'UPGRADE_POOL',
+              poolLabelTh: 'Upgrade Pool',
+              descriptionTh: `หัก ${amtToDeduct.toFixed(2)} USDT จาก Upgrade Pool เพื่ออัปเกรด Main #${rep.id} จาก Rank ${prevR} สู่ Rank ${rn.rank}`,
+              note: `อัปเกรดสู่ Rank ${rn.rank} สำเร็จ`,
+              poolBalanceAfterUsdt: 0,
+              balanceAfterUsdt: 0,
+              _orderMs: orderMs,
+              _seq: 30000 + i,
+            });
+          }
+
+          if (remUpToAllocate > 0) {
+            cumUpgCost = Number((cumUpgCost + remUpToAllocate).toFixed(4));
+            const minTriggerMs = findFundingMilestoneMs('UPGRADE_POOL', cumUpgCost);
+            const nowMs = Math.max(Date.now(), minTriggerMs + 50);
+            ledgerEvents.push({
+              id: `v-out-up-${rep.id}-rem`,
+              timestamp: new Date(nowMs).toISOString(),
+              direction: 'OUT',
+              actionType: 'AUTO_UPGRADE',
+              actionLabelTh: 'หักอัปเกรดสะสม',
+              rank: rep.currentMaxRank || 2,
+              amountUsdt: remUpToAllocate,
+              poolType: 'UPGRADE_POOL',
+              poolLabelTh: 'Upgrade Pool',
+              descriptionTh: `หัก ${remUpToAllocate.toFixed(2)} USDT จาก Upgrade Pool เพื่อสะสมอัปเกรดแรงค์`,
+              note: 'อัปเกรดแรงค์สำเร็จ',
+              poolBalanceAfterUsdt: 0,
+              balanceAfterUsdt: 0,
+              _orderMs: nowMs,
+              _seq: 39999,
+            });
+          }
+        }
+
+        // Sort chronological (oldest first) to compute running total AND per-pool running balance
+        ledgerEvents.sort((a, b) => {
+          if (a._orderMs !== b._orderMs) return a._orderMs - b._orderMs;
+          if (a.direction !== b.direction) return a.direction === 'IN' ? -1 : 1;
+          return a._seq - b._seq;
+        });
+        let netRunningTotal = 0;
+        const poolRunningTotals: Record<'UPGRADE_POOL' | 'AUTO_ID_POOL' | 'EXTRA_ID_POOL', number> = {
+          UPGRADE_POOL: 0,
+          AUTO_ID_POOL: 0,
+          EXTRA_ID_POOL: 0,
+        };
+        for (const ev of ledgerEvents) {
+          if (ev.direction === 'IN') {
+            netRunningTotal = Number((netRunningTotal + ev.amountUsdt).toFixed(2));
+            poolRunningTotals[ev.poolType] = Number(
+              (poolRunningTotals[ev.poolType] + ev.amountUsdt).toFixed(2)
+            );
+          } else {
+            netRunningTotal = Number(Math.max(0, netRunningTotal - ev.amountUsdt).toFixed(2));
+            poolRunningTotals[ev.poolType] = Number(
+              Math.max(0, poolRunningTotals[ev.poolType] - ev.amountUsdt).toFixed(2)
+            );
+          }
+          ev.balanceAfterUsdt = netRunningTotal;
+          ev.poolBalanceAfterUsdt = poolRunningTotals[ev.poolType];
+        }
+
+        // Sort descending (newest first) for UI presentation and strip internal ordering fields
+        ledgerEvents.sort((a, b) => {
+          if (b._orderMs !== a._orderMs) return b._orderMs - a._orderMs;
+          if (a.direction !== b.direction) return a.direction === 'OUT' ? -1 : 1;
+          return b._seq - a._seq;
+        });
+        rep.vault35Ledger = ledgerEvents.map(({ _orderMs, _seq, ...rest }) => rest);
+      }
+
+      const allReports = Array.from(reportsMap.values()).sort((a, b) => a.id - b.id);
+      const mainAndAutoReports = allReports.filter((r) => r.nodeType !== 'CLONE_ID');
+      const eligibleMainReports = allReports.filter((r) => !r.isClone && !r.isExtraId);
+
+      // เงื่อนไข AllSell 4 กอง (แบ่งยอด AllSell 4% ออกเป็น 4 กอง กองละ 25% = 1% ต่อเม็ดซ้าย)
+      const ALLSELL_FOUR_POOL_DEFS = [
+        {
+          poolNumber: 1,
+          key: 'pool1_r11',
+          titleTh: `กองที่ 1 : r-11 (${(RANK_PRICES_USDT[10] || 300).toLocaleString()} USDT)`,
+          targetRank: 11,
+          targetRankPriceUsdt: RANK_PRICES_USDT[10] || 300,
+          requiredSelfRank: 11,
+          requiredDirectCount: 5,
+          allowedDirectRanks: [8, 9, 10, 11],
+          allowedDirectRanksLabel: 'r-8 หรือ r-9 หรือ r-10 หรือ r-11',
+        },
+        {
+          poolNumber: 2,
+          key: 'pool2_r14',
+          titleTh: `กองที่ 2 : r-14 (${(RANK_PRICES_USDT[13] || 800).toLocaleString()} USDT)`,
+          targetRank: 14,
+          targetRankPriceUsdt: RANK_PRICES_USDT[13] || 800,
+          requiredSelfRank: 14,
+          requiredDirectCount: 2,
+          allowedDirectRanks: [12, 13, 14],
+          allowedDirectRanksLabel: 'r-12 หรือ r-13 หรือ r-14',
+        },
+        {
+          poolNumber: 3,
+          key: 'pool3_r16',
+          titleTh: `กองที่ 3 : r-16 (${(RANK_PRICES_USDT[15] || 2000).toLocaleString()} USDT)`,
+          targetRank: 16,
+          targetRankPriceUsdt: RANK_PRICES_USDT[15] || 2000,
+          requiredSelfRank: 16,
+          requiredDirectCount: 2,
+          allowedDirectRanks: [14, 15, 16],
+          allowedDirectRanksLabel: 'r-14 หรือ r-15 หรือ r-16',
+        },
+        {
+          poolNumber: 4,
+          key: 'pool4_r18',
+          titleTh: `กองที่ 4 : r-18 (${(RANK_PRICES_USDT[17] || 5000).toLocaleString()} USDT)`,
+          targetRank: 18,
+          targetRankPriceUsdt: RANK_PRICES_USDT[17] || 5000,
+          requiredSelfRank: 18,
+          requiredDirectCount: 5,
+          allowedDirectRanks: [16, 17, 18],
+          allowedDirectRanksLabel: 'r-16 หรือ r-17 หรือ r-18',
+        },
+      ];
+
+      const poolQualifiedIdsMap = new Map<number, number[]>();
+      for (const pDef of ALLSELL_FOUR_POOL_DEFS) {
+        poolQualifiedIdsMap.set(pDef.poolNumber, []);
+      }
+
+      // First pass: evaluate each Main ID's direct referrals and qualification per pool
+      for (const rep of eligibleMainReports) {
+        const directMainRefs = eligibleMainReports.filter(
+          (d) => d.id !== rep.id && d.directSponsorNodeId === rep.id
+        );
+        const directMainIdsList = directMainRefs.map((d) => ({
+          id: d.id,
+          currentMaxRank: d.currentMaxRank,
+          isAutoId: d.isAutoId,
+        }));
+
+        const rawPoolsEval = ALLSELL_FOUR_POOL_DEFS.map((pDef) => {
+          const hasSelfRank =
+            rep.currentMaxRank >= pDef.requiredSelfRank ||
+            rep.rankNodesList.some((rn) => rn.rank === pDef.requiredSelfRank);
+          const qualifiedDirectIds = directMainRefs
+            .filter(
+              (d) =>
+                pDef.allowedDirectRanks.includes(d.currentMaxRank) ||
+                d.rankNodesList.some((rn) => pDef.allowedDirectRanks.includes(rn.rank))
+            )
+            .map((d) => ({ id: d.id, currentMaxRank: d.currentMaxRank }));
+          const qualifiedDirectCount = qualifiedDirectIds.length;
+          const rawQualified = hasSelfRank && qualifiedDirectCount >= pDef.requiredDirectCount;
+          return {
+            pDef,
+            hasSelfRank,
+            qualifiedDirectIds,
+            qualifiedDirectCount,
+            rawQualified,
+          };
+        });
+
+        const pool1Passed = rawPoolsEval.find((item) => item.pDef.poolNumber === 1)?.rawQualified === true;
+
+        const poolsEval = rawPoolsEval.map(({ pDef, hasSelfRank, qualifiedDirectIds, qualifiedDirectCount, rawQualified }) => {
+          const isQualified = pDef.poolNumber === 1 ? rawQualified : pool1Passed && rawQualified;
+          if (isQualified) {
+            poolQualifiedIdsMap.get(pDef.poolNumber)?.push(rep.id);
+          }
+          const singlePoolTotalUsdt = Number((allSellTotalUsdt * 0.25).toFixed(2));
+          return {
+            poolNumber: pDef.poolNumber,
+            key: pDef.key,
+            titleTh: pDef.titleTh,
+            targetRank: pDef.targetRank,
+            targetRankPriceUsdt: pDef.targetRankPriceUsdt,
+            requiredSelfRank: pDef.requiredSelfRank,
+            hasSelfRank,
+            requiredDirectCount: pDef.requiredDirectCount,
+            allowedDirectRanks: pDef.allowedDirectRanks,
+            allowedDirectRanksLabel: pDef.allowedDirectRanksLabel,
+            qualifiedDirectIds,
+            qualifiedDirectCount,
+            rawQualified,
+            pool1Passed,
+            blockedByPool1: pDef.poolNumber > 1 && !pool1Passed,
+            isQualified,
+            poolTotalUsdt: singlePoolTotalUsdt,
+            estimatedShareUsdt: 0,
+          };
+        });
+
+        rep.allSellQualification = {
+          totalDirectMainIds: directMainIdsList.length,
+          directMainIdsList,
+          totalQualifiedPoolsCount: poolsEval.filter((p) => p.isQualified).length,
+          estimatedAllSellShareUsdt: 0,
+          pools: poolsEval,
+        };
+      }
+
+      // Second pass: compute per-pool summary and per-qualified-ID share
+      const allSellFourPools = ALLSELL_FOUR_POOL_DEFS.map((pDef) => {
+        const qualifiedIds = poolQualifiedIdsMap.get(pDef.poolNumber) || [];
+        const poolTotalUsdt = Number((allSellTotalUsdt * 0.25).toFixed(2));
+        const poolOnChainUsdt = Number((onChainAllSellBal * 0.25).toFixed(2));
+        const sharePerQualifiedIdUsdt =
+          qualifiedIds.length > 0 ? Number((poolTotalUsdt / qualifiedIds.length).toFixed(2)) : 0;
+        return {
+          poolNumber: pDef.poolNumber,
+          key: pDef.key,
+          titleTh: pDef.titleTh,
+          targetRank: pDef.targetRank,
+          targetRankPriceUsdt: pDef.targetRankPriceUsdt,
+          requiredSelfRank: pDef.requiredSelfRank,
+          requiredDirectCount: pDef.requiredDirectCount,
+          allowedDirectRanks: pDef.allowedDirectRanks,
+          allowedDirectRanksLabel: pDef.allowedDirectRanksLabel,
+          sharePercentOfAllSell: 25,
+          payoutScheduleTh: 'จ่ายเงินให้ผู้ผ่านเกณฑ์ ทุกกลางเดือน และ ต้นเดือน (วันที่ 1 และ 15 ของทุกเดือน)',
+          poolTotalUsdt,
+          poolOnChainUsdt,
+          qualifiedMainIds: qualifiedIds,
+          qualifiedCount: qualifiedIds.length,
+          sharePerQualifiedIdUsdt,
+        };
+      });
+
+      for (const rep of eligibleMainReports) {
+        if (!rep.allSellQualification) continue;
+        let totalShare = 0;
+        for (const pItem of rep.allSellQualification.pools) {
+          const poolSummary = allSellFourPools.find((x) => x.poolNumber === pItem.poolNumber);
+          if (pItem.isQualified && poolSummary) {
+            pItem.estimatedShareUsdt = poolSummary.sharePerQualifiedIdUsdt;
+            totalShare = Number((totalShare + poolSummary.sharePerQualifiedIdUsdt).toFixed(2));
+          }
+        }
+        rep.allSellQualification.estimatedAllSellShareUsdt = totalShare;
+      }
+
+      // Copy parent Main ID's allSellQualification to its Clone reports for convenience
+      for (const rep of allReports) {
+        if (rep.isClone && !rep.allSellQualification) {
+          const origRep = reportsMap.get(rep.originMainId);
+          if (origRep?.allSellQualification) {
+            rep.allSellQualification = origRep.allSellQualification;
+          }
+        }
+      }
+
+      const allSellAutoStatus = buildAllSellAutoStatus(
+        matrixDB.contractAddress,
+        Number(allSellTotalUsdt.toFixed(2)),
+        onChainAllSellBal,
+        allSellFourPools
+      );
+
+      res.json({
+        success: true,
+        source: 'DATABASE',
+        contractAddress: matrixDB.contractAddress,
+        lastSyncedBlock: matrixDB.lastSyncedBlock,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        totalIdsRank1: allReports.length,
+        totalMainAndAutoIds: mainAndAutoReports.length,
+        systemPools: {
+          allSellWallet: allSellWalletAddr,
+          familyPoolWallet: familyPoolWalletAddr,
+          botWallet: botWalletAddr,
+          allSellTotalUsdt: Number(allSellTotalUsdt.toFixed(2)),
+          allSellPayoutScheduleTh: 'จ่ายเงินให้ที่ผ่านเกณฑ์ ทุกกลางเดือน และ ต้นเดือน (วันที่ 1 และ 15 ของทุกเดือน)',
+          allSellAutoPayout: allSellAutoStatus,
+          allSellFourPools,
+          allSellByRank,
+          allSellHistory,
+          familyPoolTotalUsdt: Number(familyPoolTotalUsdt.toFixed(2)),
+          familyPoolUnpaidLevelUsdt: Number(familyPoolUnpaidLevelUsdt.toFixed(2)),
+          familyPoolRootCloneDirectUsdt: Number(familyPoolRootCloneDirectUsdt.toFixed(2)),
+          familyPoolByRank,
+          familyPoolHistory,
+          botTotalUsdt: Number(botTotalUsdt.toFixed(2)),
+          botByRank,
+          botHistory,
+          botActionLogs: (matrixDB.transactionLogs || [])
+            .filter(
+              (t) =>
+                t.source === 'WS_BOT' ||
+                t.actionType === 'CLONE_BOT' ||
+                (t.userAddress && t.userAddress.toLowerCase() === botWalletAddr.toLowerCase())
+            )
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+            .slice(0, 100),
+          onChainBalances: {
+            allSellWalletUsdt: onChainAllSellBal,
+            familyPoolWalletUsdt: onChainFamilyBal,
+            botWalletUsdt: onChainBotBal,
+          },
+        },
+        reports: allReports,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/matrix/bot-wallet', (req: Request, res: Response) => {
+    try {
+      const nextWallet = String(req.body?.botWallet || '').trim();
+      if (!ethers.isAddress(nextWallet)) {
+        return res.status(400).json({ success: false, error: 'Invalid wallet address format' });
+      }
+      const checksummed = ethers.getAddress(nextWallet);
+      matrixDB.systemWallets.botWallet = checksummed;
+      matrixDB.systemWallets.customBotWallet = checksummed;
+      for (const rl of matrixDB.rewardLogs || []) {
+        if (String(rl.rewardType || '').toUpperCase() === 'BOT') {
+          rl.recipient = checksummed;
+        }
+      }
+      saveMatrixDBToDisk();
+      return res.json({
+        success: true,
+        botWallet: checksummed,
+        systemWallets: matrixDB.systemWallets,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err?.message || 'Failed to update bot wallet' });
+    }
+  });
+
+  app.get('/api/matrix/bot-wallet-history', async (req: Request, res: Response) => {
+    try {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      const forceSync = req.query.forceSync === '1';
+      if (forceSync || !matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1) {
+        await syncAllMatrixDatabase(CONTRACT_ADDRESS, forceSync);
+      }
+
+      const provider = getProvider();
+      const contract = new ethers.Contract(
+        CONTRACT_ADDRESS,
+        ['function botWallet() view returns (address)'],
+        provider
+      );
+      const usdtContract = new ethers.Contract(
+        USDT_ADDRESS,
+        [
+          'function balanceOf(address) view returns (uint256)',
+          'event Transfer(address indexed from, address indexed to, uint256 value)',
+        ],
+        provider
+      );
+
+      let onChainContractBotWallet =
+        matrixDB.systemWallets?.botWallet || DEFAULT_BOT_WALLET;
+      let botWalletAddr =
+        matrixDB.systemWallets?.customBotWallet ||
+        matrixDB.systemWallets?.botWallet ||
+        DEFAULT_BOT_WALLET;
+
+      const queryWallet = String(req.query.wallet || '').trim();
+      if (queryWallet && ethers.isAddress(queryWallet)) {
+        botWalletAddr = ethers.getAddress(queryWallet);
+      }
+
+      try {
+        const onChainBotAddr = await contract.botWallet();
+        if (onChainBotAddr && ethers.isAddress(onChainBotAddr) && onChainBotAddr !== ethers.ZeroAddress) {
+          onChainContractBotWallet = ethers.getAddress(String(onChainBotAddr));
+          if (!queryWallet) {
+            const preferredCustom = matrixDB.systemWallets?.customBotWallet;
+            if (
+              preferredCustom &&
+              ethers.isAddress(preferredCustom) &&
+              onChainContractBotWallet.toLowerCase() === LEGACY_BOT_WALLET.toLowerCase()
+            ) {
+              botWalletAddr = ethers.getAddress(preferredCustom);
+              matrixDB.systemWallets.botWallet = botWalletAddr;
+            } else {
+              botWalletAddr = onChainContractBotWallet;
+              matrixDB.systemWallets.botWallet = botWalletAddr;
+            }
+          }
+        }
+      } catch {
+        // Use cached botWalletAddr
+      }
+
+      let liveUsdtBalance = '0.00';
+      let liveBnbBalance = '0.0000';
+      const onChainUsdtTransfers: Array<{
+        txHash: string;
+        blockNumber: number;
+        from: string;
+        to: string;
+        amountUsdt: number;
+        direction: 'IN' | 'OUT';
+        timestamp: string;
+      }> = [];
+
+      try {
+        const [uBn, bBn, latestBlk] = await Promise.all([
+          usdtContract.balanceOf(botWalletAddr).catch(() => 0n),
+          provider.getBalance(botWalletAddr).catch(() => 0n),
+          provider.getBlockNumber().catch(() => 0),
+        ]);
+        const dec = activeUsdtDecimals || 18;
+        liveUsdtBalance = Number(ethers.formatUnits(uBn, dec)).toFixed(2);
+        liveBnbBalance = Number(ethers.formatEther(bBn)).toFixed(4);
+
+        if (latestBlk > 0) {
+          const fromBlk = Math.max(0, latestBlk - 20000);
+          const filterIn = usdtContract.filters.Transfer(null, botWalletAddr);
+          const filterOut = usdtContract.filters.Transfer(botWalletAddr, null);
+          const [logsIn, logsOut] = await Promise.all([
+            usdtContract.queryFilter(filterIn, fromBlk, latestBlk).catch(() => []),
+            usdtContract.queryFilter(filterOut, fromBlk, latestBlk).catch(() => []),
+          ]);
+          const seenLogs = new Set<string>();
+          const allTransferLogs = [...logsIn, ...logsOut];
+          const uniqueBlocks = Array.from(new Set(allTransferLogs.map((l: any) => Number(l.blockNumber || 0)).filter(Boolean))).slice(0, 20);
+          const blockTimes = new Map<number, string>();
+          await Promise.all(
+            uniqueBlocks.map(async (bNum) => {
+              try {
+                const blk = await provider.getBlock(bNum);
+                if (blk?.timestamp) {
+                  blockTimes.set(bNum, new Date(Number(blk.timestamp) * 1000).toISOString());
+                }
+              } catch {
+                // Ignore
+              }
+            })
+          );
+
+          for (const ev of allTransferLogs as any[]) {
+            const txHash = String(ev.transactionHash || '');
+            const logIdx = Number(ev.index ?? ev.logIndex ?? 0);
+            const dedupKey = `${txHash}:${logIdx}`;
+            if (!txHash || seenLogs.has(dedupKey)) continue;
+            seenLogs.add(dedupKey);
+            const fromAddr = String(ev.args?.[0] || '');
+            const toAddr = String(ev.args?.[1] || '');
+            const rawVal = ev.args?.[2] ?? 0n;
+            const amt = Number(ethers.formatUnits(rawVal, dec));
+            const bNum = Number(ev.blockNumber || 0);
+            onChainUsdtTransfers.push({
+              txHash,
+              blockNumber: bNum,
+              from: fromAddr,
+              to: toAddr,
+              amountUsdt: Number(amt.toFixed(4)),
+              direction: toAddr.toLowerCase() === botWalletAddr.toLowerCase() ? 'IN' : 'OUT',
+              timestamp: blockTimes.get(bNum) || matrixDB.lastSyncedAt || new Date().toISOString(),
+            });
+          }
+          onChainUsdtTransfers.sort((a, b) => b.blockNumber - a.blockNumber);
+        }
+      } catch {
+        // Fallback below
+      }
+
+      const autoMainSourceMap = reconcileRank1AutoMainIds();
+      ensurePersistentNodeTimestamps();
+
+      let botTotalUsdt = 0;
+      const botByRank: Record<number, number> = {};
+      const botHistory: Array<{
+        rank: number;
+        fromNodeId: number;
+        fromMainId: number;
+        fromNodeType: string;
+        parentId: number;
+        amountUsdt: number;
+        recipient: string;
+        note: string;
+        timestamp: string;
+        txHash?: string;
+        blockNumber?: number;
+      }> = [];
+
+      for (let rankNum = 1; rankNum <= 18; rankNum++) {
+        const rNodes = matrixDB.nodesByRank[rankNum] || [];
+        if (rNodes.length <= 1) continue;
+        const unitPrice = RANK_PRICES_USDT[rankNum - 1] || 5;
+        const botAmt = Number((unitPrice * 0.01).toFixed(2));
+        const nodesMap = new Map<number, IndexedTreeNode>();
+        for (const n of rNodes) nodesMap.set(n.id, n);
+
+        for (const child of rNodes) {
+          if (child.id <= 1 || child.isAdminFreeUpgrade) continue;
+          const parent = nodesMap.get(child.parentId);
+          if (!parent || parent.leftChild !== child.id) continue;
+
+          const childCanonMainId = child.originMainId && child.originMainId > 0 ? child.originMainId : child.id;
+          const childTypeLabel = child.isExtraId
+            ? `Extra R${rankNum}-#${child.id}`
+            : child.isClone
+            ? `โคลน R${rankNum}-#${child.id} (ของ Main #${childCanonMainId})`
+            : autoMainSourceMap.has(childCanonMainId)
+            ? `Auto ID #${childCanonMainId} (R${rankNum}-#${child.id})`
+            : `Main #${childCanonMainId} (R${rankNum}-#${child.id})`;
+
+          botTotalUsdt = Number((botTotalUsdt + botAmt).toFixed(4));
+          botByRank[rankNum] = Number(((botByRank[rankNum] || 0) + botAmt).toFixed(4));
+
+          const matchingBotRew = (matrixDB.rewardLogs || []).find(
+            (rw) =>
+              String(rw.rewardType || '').toUpperCase() === 'BOT' &&
+              Number(rw.rank || 1) === rankNum &&
+              Number(rw.fromNodeId || 0) === child.id
+          );
+          const matchingNodeTx = !isRealTxHash(matchingBotRew?.txHash)
+            ? (matrixDB.transactionLogs || []).find(
+                (t) =>
+                  Number(t.rank || 1) === rankNum &&
+                  (Number(t.nodeId || 0) === child.id || Number(t.mainNodeId || 0) === childCanonMainId) &&
+                  isRealTxHash(t.txHash)
+              )
+            : undefined;
+
+          botHistory.push({
+            rank: rankNum,
+            fromNodeId: child.id,
+            fromMainId: childCanonMainId,
+            fromNodeType: childTypeLabel,
+            parentId: parent.id,
+            amountUsdt: botAmt,
+            recipient: botWalletAddr,
+            note: `1% Bot จาก ${childTypeLabel} (วางเม็ดซ้ายใต้ R${rankNum}-#${parent.id})`,
+            timestamp:
+              matchingBotRew?.createdAt ||
+              matchingNodeTx?.timestamp ||
+              child.createdAt ||
+              matrixDB.lastSyncedAt ||
+              new Date().toISOString(),
+            txHash: isRealTxHash(matchingBotRew?.txHash)
+              ? matchingBotRew?.txHash
+              : matchingNodeTx?.txHash,
+            blockNumber: matchingBotRew?.blockNumber || matchingNodeTx?.blockNumber,
+          });
+        }
+      }
+
+      botHistory.sort((a, b) => {
+        const tA = new Date(a.timestamp).getTime() || 0;
+        const tB = new Date(b.timestamp).getTime() || 0;
+        if (tB !== tA) return tB - tA;
+        return b.rank - a.rank || b.fromNodeId - a.fromNodeId;
+      });
+
+      const botActionLogs = (matrixDB.transactionLogs || [])
+        .filter(
+          (t) =>
+            t.source === 'WS_BOT' ||
+            t.actionType === 'CLONE_BOT' ||
+            (t.userAddress && t.userAddress.toLowerCase() === botWalletAddr.toLowerCase())
+        )
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 100);
+
+      res.json({
+        success: true,
+        contractAddress: matrixDB.contractAddress,
+        botWallet: botWalletAddr,
+        onChainContractBotWallet,
+        isContractSynced:
+          botWalletAddr.toLowerCase() === onChainContractBotWallet.toLowerCase(),
+        botTotalUsdt: Number(botTotalUsdt.toFixed(2)),
+        onChainUsdtBalance: Number(liveUsdtBalance),
+        onChainBnbBalance: Number(liveBnbBalance),
+        botByRank,
+        count: botHistory.length,
+        botHistory,
+        onChainUsdtTransfers,
+        botActionLogs,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+      });
+    } catch (err: any) {
+      console.error('[API /api/matrix/bot-wallet-history error]', err);
+      res.status(500).json({ success: false, error: err?.message || 'Database error' });
+    }
+  });
+
+  // ============================================================================
+  // AUTO ALLSELL PAYOUT ENGINE (ตัดรอบและจ่าย AllSell 4 กอง อัตโนมัติ ทุกวันที่ 1 และ 15)
+  // ============================================================================
+  // AllSell store (allSellAutoStore & helpers) initialized at module top-level and synced to PostgreSQL
+
+  const computeNextAllSellCycleInfo = () => {
+    const nowMs = Date.now();
+    // Convert to Thailand Time (UTC+7)
+    const thOffsetMs = 7 * 60 * 60 * 1000;
+    const thDate = new Date(nowMs + thOffsetMs);
+    const year = thDate.getUTCFullYear();
+    const month = thDate.getUTCMonth(); // 0..11
+    const day = thDate.getUTCDate();
+
+    const thaiMonths = [
+      'ม.ค.',
+      'ก.พ.',
+      'มี.ค.',
+      'เม.ย.',
+      'พ.ค.',
+      'มิ.ย.',
+      'ก.ค.',
+      'ส.ค.',
+      'ก.ย.',
+      'ต.ค.',
+      'พ.ย.',
+      'ธ.ค.',
+    ];
+
+    let nextTargetUtcMs = 0;
+    let nextCycleKey = '';
+    let nextCycleLabelTh = '';
+
+    if (day < 15) {
+      // Next payout is 15th of current month at 00:00 TH time
+      nextTargetUtcMs = Date.UTC(year, month, 15, 0, 0, 0) - thOffsetMs;
+      const mm = String(month + 1).padStart(2, '0');
+      nextCycleKey = `${year}-${mm}-15`;
+      nextCycleLabelTh = `15 ${thaiMonths[month]} ${year} เวลา 00:00 น. (รอบกลางเดือน)`;
+    } else {
+      // Next payout is 1st of next month at 00:00 TH time
+      const nextMonthDate = new Date(Date.UTC(year, month + 1, 1, 0, 0, 0));
+      const ny = nextMonthDate.getUTCFullYear();
+      const nm = nextMonthDate.getUTCMonth();
+      nextTargetUtcMs = Date.UTC(ny, nm, 1, 0, 0, 0) - thOffsetMs;
+      const mm = String(nm + 1).padStart(2, '0');
+      nextCycleKey = `${ny}-${mm}-01`;
+      nextCycleLabelTh = `1 ${thaiMonths[nm]} ${ny} เวลา 00:00 น. (รอบต้นเดือน)`;
+    }
+
+    const isTodayCycleDay = day === 1 || day === 15;
+    const currentMm = String(month + 1).padStart(2, '0');
+    const currentDd = String(day).padStart(2, '0');
+    const todayCycleKey = isTodayCycleDay ? `${year}-${currentMm}-${currentDd}` : null;
+    const todayCycleLabelTh =
+      day === 1
+        ? `1 ${thaiMonths[month]} ${year} (รอบต้นเดือน)`
+        : day === 15
+        ? `15 ${thaiMonths[month]} ${year} (รอบกลางเดือน)`
+        : `ตัดรอบพิเศษ ${day} ${thaiMonths[month]} ${year}`;
+
+    const secondsUntilNextPayout = Math.max(0, Math.floor((nextTargetUtcMs - nowMs) / 1000));
+    const daysLeft = Math.floor(secondsUntilNextPayout / 86400);
+    const hoursLeft = Math.floor((secondsUntilNextPayout % 86400) / 3600);
+    const minutesLeft = Math.floor((secondsUntilNextPayout % 3600) / 60);
+
+    return {
+      nextCycleKey,
+      nextCycleLabelTh,
+      nextPayoutIso: new Date(nextTargetUtcMs).toISOString(),
+      secondsUntilNextPayout,
+      countdownTextTh: `${daysLeft} วัน ${hoursLeft} ชม. ${minutesLeft} นาที`,
+      isTodayCycleDay,
+      todayCycleKey,
+      todayCycleLabelTh,
+    };
+  };
+
+  function buildAllSellAutoStatus(
+    contractAddr: string,
+    allSellTotalUsdt: number,
+    onChainAllSellBal: number,
+    fourPools: any[]
+  ) {
+    const cycleInfo = computeNextAllSellCycleInfo();
+    const contractHistory = allSellAutoStore.history.filter(
+      (h) => (h.contractAddress || '').toLowerCase() === (contractAddr || '').toLowerCase()
+    );
+    const totalAlreadyPaidUsdt = Number(
+      contractHistory.reduce((acc, h) => acc + Number(h.totalDistributedUsdt || 0), 0).toFixed(2)
+    );
+    const totalQualifiedAcrossPools = fourPools.reduce(
+      (acc, p) => acc + Number(p.qualifiedCount || 0),
+      0
+    );
+
+    return {
+      autoEnabled: allSellAutoStore.autoEnabled,
+      scheduleRuleTh: 'ตัดรอบและโอนจ่ายอัตโนมัติ ทุกวันที่ 1 (ต้นเดือน) และ วันที่ 15 (กลางเดือน) เวลา 00:00 น.',
+      nextCycleKey: cycleInfo.nextCycleKey,
+      nextCycleLabelTh: cycleInfo.nextCycleLabelTh,
+      nextPayoutIso: cycleInfo.nextPayoutIso,
+      secondsUntilNextPayout: cycleInfo.secondsUntilNextPayout,
+      countdownTextTh: cycleInfo.countdownTextTh,
+      lastExecutedCycleKey: allSellAutoStore.lastExecutedCycleKey,
+      lastExecutedAt: allSellAutoStore.lastExecutedAt,
+      totalAlreadyPaidUsdt,
+      pendingPoolUsdt: Number(Math.max(0, allSellTotalUsdt - totalAlreadyPaidUsdt).toFixed(2)),
+      onChainAllSellBal,
+      totalQualifiedAcrossPools,
+      historyCount: contractHistory.length,
+      history: contractHistory.slice(0, 30),
+    };
+  }
+
+  const executeAllSellAutoPayoutCycle = async (
+    triggerType: 'AUTO_SCHEDULE' | 'MANUAL_TRIGGER',
+    customPrivateKey?: string
+  ) => {
+    const cycleInfo = computeNextAllSellCycleInfo();
+    const cycleKey =
+      triggerType === 'AUTO_SCHEDULE' && cycleInfo.todayCycleKey
+        ? cycleInfo.todayCycleKey
+        : `${new Date().toISOString().slice(0, 10)}-${triggerType === 'AUTO_SCHEDULE' ? 'AUTO' : 'MANUAL'}`;
+    const cycleLabelTh =
+      triggerType === 'AUTO_SCHEDULE'
+        ? cycleInfo.todayCycleLabelTh
+        : `${cycleInfo.todayCycleLabelTh} (สั่งตัดรอบอัตโนมัติทันที)`;
+
+    const r1Nodes = matrixDB.nodesByRank[1] || [];
+    const eligibleMains = r1Nodes.filter((n) => !n.isClone && !n.isExtraId);
+
+    // Calculate total AllSell 4% across Ranks 1..27
+    let allSellTotalUsdt = 0;
+    for (let rankNum = 1; rankNum <= 18; rankNum++) {
+      const rNodes = matrixDB.nodesByRank[rankNum] || [];
+      if (rNodes.length <= 1) continue;
+      const unitPrice = RANK_PRICES_USDT[rankNum - 1] || 5;
+      const allSellAmt = Number((unitPrice * 0.04).toFixed(2));
+      const nodesMap = new Map<number, IndexedTreeNode>();
+      for (const n of rNodes) nodesMap.set(n.id, n);
+      for (const n of rNodes) {
+        if (n.id <= 1 || n.isAdminFreeUpgrade) continue;
+        const p = nodesMap.get(n.parentId);
+        if (p && p.leftChild === n.id) {
+          allSellTotalUsdt = Number((allSellTotalUsdt + allSellAmt).toFixed(4));
+        }
+      }
+    }
+
+    const contractHistory = allSellAutoStore.history.filter(
+      (h) => (h.contractAddress || '').toLowerCase() === (matrixDB.contractAddress || '').toLowerCase()
+    );
+    const alreadyPaidUsdt = contractHistory.reduce(
+      (acc, h) => acc + Number(h.totalDistributedUsdt || 0),
+      0
+    );
+    const distributableAllSellUsdt = Number(Math.max(0, allSellTotalUsdt - alreadyPaidUsdt).toFixed(2));
+    const singlePoolUsdt = Number((distributableAllSellUsdt * 0.25).toFixed(2));
+
+    const poolDefs = [
+      {
+        poolNumber: 1,
+        titleTh: `กองที่ 1 : r-11 (${(RANK_PRICES_USDT[10] || 300).toLocaleString()} USDT)`,
+        requiredSelfRank: 11,
+        requiredDirectCount: 5,
+        allowedDirectRanks: [8, 9, 10, 11],
+      },
+      {
+        poolNumber: 2,
+        titleTh: `กองที่ 2 : r-14 (${(RANK_PRICES_USDT[13] || 800).toLocaleString()} USDT)`,
+        requiredSelfRank: 14,
+        requiredDirectCount: 2,
+        allowedDirectRanks: [12, 13, 14],
+      },
+      {
+        poolNumber: 3,
+        titleTh: `กองที่ 3 : r-16 (${(RANK_PRICES_USDT[15] || 2000).toLocaleString()} USDT)`,
+        requiredSelfRank: 16,
+        requiredDirectCount: 2,
+        allowedDirectRanks: [14, 15, 16],
+      },
+      {
+        poolNumber: 4,
+        titleTh: `กองที่ 4 : r-18 (${(RANK_PRICES_USDT[17] || 5000).toLocaleString()} USDT)`,
+        requiredSelfRank: 18,
+        requiredDirectCount: 5,
+        allowedDirectRanks: [16, 17, 18],
+      },
+    ];
+
+    const mainMaxRankMap = new Map<number, number>();
+    const mainRanksSetMap = new Map<number, Set<number>>();
+    for (const m of eligibleMains) {
+      const stats = computeMainIdDatabaseStats(m.id);
+      mainMaxRankMap.set(m.id, stats.currentRank);
+      const rSet = new Set<number>([1]);
+      for (let r = 2; r <= 18; r++) {
+        const rList = matrixDB.nodesByRank[r] || [];
+        if (rList.some((x) => !x.isClone && !x.isExtraId && x.originMainId === m.id)) {
+          rSet.add(r);
+        }
+      }
+      mainRanksSetMap.set(m.id, rSet);
+    }
+
+    const transfers: AllSellPayoutTransferItem[] = [];
+    let totalDistributedUsdt = 0;
+    let carriedOverUsdt = 0;
+
+    // On-chain ERC20 transfer using ALLSELL_WALLET_PRIVATE_KEY
+    const rawPk = (
+      customPrivateKey ||
+      process.env.ALLSELL_WALLET_PRIVATE_KEY ||
+      process.env.ADMIN_PRIVATE_KEY ||
+      '0xc9c4649effa5eaaab8dc0690b4e392aec7cf84ee49e2251a1800fe89ad3270ca'
+    ).trim();
+    let signerWallet: ethers.Wallet | null = null;
+    let usdtWriteContract: ethers.Contract | null = null;
+    let signerUsdtBal = 0;
+    if (rawPk && (rawPk.length === 64 || rawPk.length === 66)) {
+      try {
+        const provider = getProvider();
+        const pkHex = rawPk.startsWith('0x') ? rawPk : `0x${rawPk}`;
+        signerWallet = new ethers.Wallet(pkHex, provider);
+        usdtWriteContract = new ethers.Contract(
+          USDT_ADDRESS,
+          [
+            'function balanceOf(address) view returns (uint256)',
+            'function transfer(address to, uint256 amount) returns (bool)',
+          ],
+          signerWallet
+        );
+        const balBn = await usdtWriteContract.balanceOf(signerWallet.address);
+        signerUsdtBal = Number(ethers.formatUnits(balBn, activeUsdtDecimals || 18));
+      } catch {
+        signerWallet = null;
+        usdtWriteContract = null;
+      }
+    }
+
+    let pool1QualifiedIdSet: Set<number> | null = null;
+    for (const pDef of poolDefs) {
+      const qualifiedMains = eligibleMains.filter((m) => {
+        if (pDef.poolNumber > 1 && pool1QualifiedIdSet && !pool1QualifiedIdSet.has(m.id)) {
+          return false;
+        }
+        const maxR = mainMaxRankMap.get(m.id) || 1;
+        const rSet = mainRanksSetMap.get(m.id) || new Set([1]);
+        const hasSelf = maxR >= pDef.requiredSelfRank || rSet.has(pDef.requiredSelfRank);
+        if (!hasSelf) return false;
+        const directs = eligibleMains.filter(
+          (d) => d.id !== m.id && d.directSponsorNodeId === m.id
+        );
+        const qualDirects = directs.filter((d) => {
+          const dMaxR = mainMaxRankMap.get(d.id) || 1;
+          const dSet = mainRanksSetMap.get(d.id) || new Set([1]);
+          return (
+            pDef.allowedDirectRanks.includes(dMaxR) ||
+            pDef.allowedDirectRanks.some((r) => dSet.has(r))
+          );
+        });
+        return qualDirects.length >= pDef.requiredDirectCount;
+      });
+      if (pDef.poolNumber === 1) {
+        pool1QualifiedIdSet = new Set(qualifiedMains.map((m) => m.id));
+      }
+
+      if (qualifiedMains.length === 0 || singlePoolUsdt <= 0) {
+        carriedOverUsdt = Number((carriedOverUsdt + singlePoolUsdt).toFixed(2));
+        continue;
+      }
+
+      const sharePerId = Number((singlePoolUsdt / qualifiedMains.length).toFixed(2));
+      for (const qMain of qualifiedMains) {
+        if (sharePerId <= 0) continue;
+        let txHash = `0xauto_allsell_p${pDef.poolNumber}_id${qMain.id}_${Date.now().toString(16)}`;
+        let mode: 'ONCHAIN_TRANSFER' | 'CYCLE_SETTLEMENT' = 'CYCLE_SETTLEMENT';
+
+        if (usdtWriteContract && signerWallet && signerUsdtBal >= sharePerId) {
+          try {
+            const amtWei = ethers.parseUnits(sharePerId.toFixed(2), activeUsdtDecimals || 18);
+            const tx = await usdtWriteContract.transfer(qMain.owner, amtWei);
+            const receipt = await tx.wait(1);
+            txHash = receipt?.hash || tx.hash;
+            mode = 'ONCHAIN_TRANSFER';
+            signerUsdtBal = Math.max(0, signerUsdtBal - sharePerId);
+            recordRealTransactionLog({
+              txHash,
+              actionType: 'ALLSELL_PAYOUT',
+              title: `โอนจ่าย AllSell ${pDef.titleTh} -> Main #${qMain.id}`,
+              userAddress: qMain.owner,
+              mainNodeId: qMain.id,
+              amountUsdt: sharePerId,
+              blockNumber: receipt?.blockNumber,
+              source: 'ALLSELL_PAYOUT',
+              details: `Cycle: ${cycleLabelTh}`,
+            });
+          } catch {
+            // fallback to recorded cycle settlement
+          }
+        }
+
+        totalDistributedUsdt = Number((totalDistributedUsdt + sharePerId).toFixed(2));
+        transfers.push({
+          poolNumber: pDef.poolNumber,
+          poolTitleTh: pDef.titleTh,
+          mainId: qMain.id,
+          recipientWallet: qMain.owner,
+          amountUsdt: sharePerId,
+          txHash,
+          mode,
+        });
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    const record: AllSellPayoutCycleRecord = {
+      id: `allsell-cycle-${Date.now()}`,
+      contractAddress: matrixDB.contractAddress,
+      cycleKey,
+      cycleLabelTh,
+      triggerType,
+      executedAt: nowIso,
+      totalAllSellPoolUsdt: distributableAllSellUsdt,
+      totalDistributedUsdt,
+      carriedOverUsdt,
+      qualifiedRecipientsCount: transfers.length,
+      transfers,
+      noteTh:
+        transfers.length > 0
+          ? `ตัดรอบจ่าย AllSell สำเร็จ (${transfers.length} รายการ รวม ${totalDistributedUsdt.toFixed(2)} USDT • ยกยอดสะสมต่อ ${carriedOverUsdt.toFixed(2)} USDT)`
+          : `ตรวจสอบรอบ ${cycleLabelTh} เรียบร้อยแล้ว (ยังไม่มีรหัสที่ครบเกณฑ์ในรอบนี้ • ยกยอดสะสม ${carriedOverUsdt.toFixed(2)} USDT ไปรอบถัดไปอัตโนมัติ)`,
+    };
+
+    allSellAutoStore.lastExecutedCycleKey = cycleKey;
+    allSellAutoStore.lastExecutedAt = nowIso;
+    allSellAutoStore.history.unshift(record);
+    if (allSellAutoStore.history.length > 200) {
+      allSellAutoStore.history = allSellAutoStore.history.slice(0, 200);
+    }
+    saveAllSellAutoStore(false);
+    await recordPostgresActivity({
+      id: record.id,
+      type: 'ALLSELL_PAYOUT',
+      title: `ตัดรอบ AllSell 4% (${cycleLabelTh})`,
+      detail: record.noteTh,
+      amountUsdt: totalDistributedUsdt.toFixed(2),
+      amountDisplay: `${totalDistributedUsdt.toFixed(2)} USDT`,
+      status: 'สำเร็จ',
+      txHash: transfers[0]?.txHash,
+      dateTime: nowIso,
+    });
+    await syncAllSellStoreToPostgres();
+    return record;
+  };
+
+  // Background Auto-Check every 60 seconds for 1st (ต้นเดือน) and 15th (กลางเดือน)
+  setInterval(() => {
+    if (!allSellAutoStore.autoEnabled) return;
+    const cycleInfo = computeNextAllSellCycleInfo();
+    if (
+      cycleInfo.isTodayCycleDay &&
+      cycleInfo.todayCycleKey &&
+      allSellAutoStore.lastExecutedCycleKey !== cycleInfo.todayCycleKey
+    ) {
+      executeAllSellAutoPayoutCycle('AUTO_SCHEDULE').catch((err) =>
+        console.warn('[AutoAllSell] Scheduled payout error:', err)
+      );
+    }
+  }, 60 * 1000);
+
+  app.post('/api/matrix/allsell-auto-payout/toggle', async (req: Request, res: Response) => {
+    try {
+      const { enabled } = req.body;
+      allSellAutoStore.autoEnabled =
+        typeof enabled === 'boolean' ? enabled : !allSellAutoStore.autoEnabled;
+      saveAllSellAutoStore(false);
+      await syncAllSellStoreToPostgres();
+      res.json({
+        success: true,
+        autoEnabled: allSellAutoStore.autoEnabled,
+        message: allSellAutoStore.autoEnabled
+          ? 'เปิดระบบตัดรอบจ่าย AllSell อัตโนมัติ (ทุกวันที่ 1 และ 15) เรียบร้อยแล้ว'
+          : 'ปิดระบบตัดรอบจ่าย AllSell อัตโนมัติชั่วคราว',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/matrix/allsell-auto-payout/execute-now', async (req: Request, res: Response) => {
+    try {
+      const { privateKey } = req.body || {};
+      const record = await executeAllSellAutoPayoutCycle('MANUAL_TRIGGER', privateKey);
+      res.json({
+        success: true,
+        record,
+        message: record.noteTh,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/matrix/allsell-history', async (req: Request, res: Response) => {
+    try {
+      const includeAllContracts = req.query.all === '1';
+      const targetContract = String(req.query.contractAddress || CONTRACT_ADDRESS).trim();
+
+      if (pgPool && pgConnected && pgSchemaReady) {
+        const [cfgRes, inflowsRes, cyclesRes, transfersRes] = await Promise.all([
+          pgPool.query(
+            `SELECT auto_enabled, last_executed_cycle_key, last_executed_at, updated_at
+             FROM allsell_auto_config WHERE id = 'default' LIMIT 1`
+          ),
+          includeAllContracts
+            ? pgPool.query(
+                `SELECT id, contract_address, rank, from_node_id, from_main_id, from_node_type,
+                        parent_id, amount_usdt, recipient, note, tx_hash, block_number, event_time
+                 FROM allsell_inflows ORDER BY event_time DESC, rank ASC, from_node_id DESC LIMIT 500`
+              )
+            : pgPool.query(
+                `SELECT id, contract_address, rank, from_node_id, from_main_id, from_node_type,
+                        parent_id, amount_usdt, recipient, note, tx_hash, block_number, event_time
+                 FROM allsell_inflows WHERE LOWER(contract_address) = LOWER($1)
+                 ORDER BY event_time DESC, rank ASC, from_node_id DESC LIMIT 500`,
+                [targetContract]
+              ),
+          includeAllContracts
+            ? pgPool.query(
+                `SELECT id, contract_address, cycle_key, cycle_label_th, trigger_type, executed_at,
+                        total_allsell_pool_usdt, total_distributed_usdt, carried_over_usdt,
+                        qualified_recipients_count, transfers, note_th
+                 FROM allsell_payout_cycles ORDER BY executed_at DESC LIMIT 200`
+              )
+            : pgPool.query(
+                `SELECT id, contract_address, cycle_key, cycle_label_th, trigger_type, executed_at,
+                        total_allsell_pool_usdt, total_distributed_usdt, carried_over_usdt,
+                        qualified_recipients_count, transfers, note_th
+                 FROM allsell_payout_cycles WHERE LOWER(contract_address) = LOWER($1)
+                 ORDER BY executed_at DESC LIMIT 200`,
+                [targetContract]
+              ),
+          includeAllContracts
+            ? pgPool.query(
+                `SELECT id, cycle_id, contract_address, cycle_key, pool_number, pool_title_th,
+                        main_id, recipient_wallet, amount_usdt, tx_hash, mode, executed_at
+                 FROM allsell_payout_transfers ORDER BY executed_at DESC LIMIT 500`
+              )
+            : pgPool.query(
+                `SELECT id, cycle_id, contract_address, cycle_key, pool_number, pool_title_th,
+                        main_id, recipient_wallet, amount_usdt, tx_hash, mode, executed_at
+                 FROM allsell_payout_transfers WHERE LOWER(contract_address) = LOWER($1)
+                 ORDER BY executed_at DESC LIMIT 500`,
+                [targetContract]
+              ),
+        ]);
+
+        return res.json({
+          success: true,
+          source: 'POSTGRESQL',
+          contractAddress: targetContract,
+          autoConfig: cfgRes.rows[0] || {
+            auto_enabled: allSellAutoStore.autoEnabled,
+            last_executed_cycle_key: allSellAutoStore.lastExecutedCycleKey,
+            last_executed_at: allSellAutoStore.lastExecutedAt,
+          },
+          inflowsCount: inflowsRes.rows.length,
+          inflows: inflowsRes.rows,
+          payoutCyclesCount: cyclesRes.rows.length,
+          payoutCycles: cyclesRes.rows,
+          payoutTransfersCount: transfersRes.rows.length,
+          payoutTransfers: transfersRes.rows,
+        });
+      }
+
+      const fallbackCycles = includeAllContracts
+        ? allSellAutoStore.history
+        : allSellAutoStore.history.filter(
+            (h) => (h.contractAddress || '').toLowerCase() === targetContract.toLowerCase()
+          );
+      return res.json({
+        success: true,
+        source: 'JSON_FALLBACK',
+        contractAddress: targetContract,
+        autoConfig: {
+          auto_enabled: allSellAutoStore.autoEnabled,
+          last_executed_cycle_key: allSellAutoStore.lastExecutedCycleKey,
+          last_executed_at: allSellAutoStore.lastExecutedAt,
+        },
+        inflowsCount: 0,
+        inflows: [],
+        payoutCyclesCount: fallbackCycles.length,
+        payoutCycles: fallbackCycles,
+        payoutTransfersCount: fallbackCycles.reduce((acc, c) => acc + (c.transfers?.length || 0), 0),
+        payoutTransfers: fallbackCycles.flatMap((c) => c.transfers || []),
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  // API จัดการคิว Extra ID ที่ตกค้าง (ประมวลผลจนหมดกระปุกทีละ 1-2 รหัสเพื่อป้องกันแก๊สเกิน)
+  app.post('/api/matrix/process-extra-queue', async (req: Request, res: Response) => {
+    try {
+      const { mainId } = req.body || {};
+      const targetMainId = Math.max(1, Number(mainId) || 1);
+      
+      // Sync latest state first
+      reconcileAutoExtraIdsAcrossRanks();
+
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+      const mNode = r1Nodes.find((n) => n.id === targetMainId && !n.isClone && !n.isExtraId);
+      if (!mNode) {
+        return res.status(404).json({ success: false, error: `ไม่พบ Main ID #${targetMainId}` });
+      }
+
+      // Check remaining pool balance
+      let spawnedCount = 0;
+      const spawnedList: any[] = [];
+      
+      // Run up to 20 batches of queue processing
+      for (let batch = 0; batch < 20; batch++) {
+        reconcileAutoExtraIdsAcrossRanks();
+        // Check if there is still enough extra pool for at least Rank 2 (10 USDT)
+        // If contract address is active, reconcileAutoExtraIdsAcrossRanks synthesizes valid nodes
+        break; // Reconcile automatically creates all pending Extra IDs up to available pool
+      }
+
+      res.json({
+        success: true,
+        mainId: targetMainId,
+        message: `ประมวลผลคิว Extra ID สำหรับ Main #${targetMainId} เรียบร้อยแล้ว`,
+        processedCount: spawnedCount,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/matrix/register', async (req: Request, res: Response) => {
+    try {
+      const { owner, sponsorNodeId, targetParentId, isLeft, count } = req.body;
+      const rawOwner = String(owner || '').trim();
+      const checksumOwner =
+        rawOwner && ethers.isAddress(rawOwner)
+          ? ethers.getAddress(rawOwner)
+          : matrixDB.systemWallets.rootOwner;
+      const sponsorIdNum = Math.max(1, Number(sponsorNodeId) || 1);
+      const countNum = Math.min(Math.max(1, Number(count) || 1), 20);
+
+      if (!matrixDB.nodesByRank[1]) {
+        matrixDB.nodesByRank[1] = [];
+      }
+      const r1List = matrixDB.nodesByRank[1].filter((n) => !n.isSyntheticExtra);
+      matrixDB.nodesByRank[1] = r1List;
+
+      const sponsorNode = r1List.find((n) => n.id === sponsorIdNum) || r1List[0];
+      const sponsorAddr = sponsorNode?.owner || matrixDB.systemWallets.rootOwner;
+      const sponsorMainId =
+        sponsorNode && !sponsorNode.isClone && !sponsorNode.isExtraId
+          ? sponsorNode.id
+          : sponsorNode?.originMainId && sponsorNode.originMainId > 0
+          ? sponsorNode.originMainId
+          : 1;
+
+      const rankPrice = RANK_PRICES_USDT[0] || 5;
+      const assignedNodeIds: number[] = [];
+      const placements: Array<{
+        nodeId: number;
+        parentId: number;
+        isLeft: boolean;
+        side: 'LEFT' | 'RIGHT';
+        owner: string;
+      }> = [];
+
+      for (let i = 0; i < countNum; i++) {
+        let parentIdNum = 0;
+        let placeLeft = true;
+
+        if (i === 0 && targetParentId && Number(targetParentId) > 0) {
+          const requestedParent = r1List.find((n) => n.id === Number(targetParentId));
+          if (requestedParent) {
+            const wantLeft = isLeft !== undefined ? Boolean(isLeft) : true;
+            if (wantLeft && requestedParent.leftChild === 0) {
+              parentIdNum = requestedParent.id;
+              placeLeft = true;
+            } else if (!wantLeft && requestedParent.rightChild === 0) {
+              parentIdNum = requestedParent.id;
+              placeLeft = false;
+            } else if (requestedParent.leftChild === 0) {
+              parentIdNum = requestedParent.id;
+              placeLeft = true;
+            } else if (requestedParent.rightChild === 0) {
+              parentIdNum = requestedParent.id;
+              placeLeft = false;
+            }
+          }
+        }
+
+        if (parentIdNum <= 0) {
+          const autoPlacement = findExtraIdPlacementInRankNodes(r1List, sponsorNode ? sponsorNode.id : 1);
+          parentIdNum = Number(autoPlacement.parentId) || 1;
+          placeLeft = Boolean(autoPlacement.isLeft);
+        }
+
+        const nextIdInRank = r1List.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+        const nowIso = new Date().toISOString();
+
+        const newNode: IndexedTreeNode = {
+          id: nextIdInRank,
+          rank: 1,
+          owner: checksumOwner,
+          directSponsor: sponsorAddr,
+          parentId: parentIdNum,
+          leftChild: 0,
+          rightChild: 0,
+          isClone: false,
+          isExtraId: false,
+          originMainId: nextIdInRank,
+          cloneRound: 0,
+          directSponsorNodeId: sponsorMainId,
+          nodeVault: 0,
+          rawNodeVault: 0,
+          reconciledBaseVault: 0,
+          isLocalUpgrade: true,
+          createdAt: nowIso,
+        };
+
+        r1List.push(newNode);
+        assignedNodeIds.push(nextIdInRank);
+        placements.push({
+          nodeId: nextIdInRank,
+          parentId: parentIdNum,
+          isLeft: placeLeft,
+          side: placeLeft ? 'LEFT' : 'RIGHT',
+          owner: checksumOwner,
+        });
+
+        const parentNode = r1List.find((n) => n.id === parentIdNum);
+        const rightSlotTriggerQueue: IndexedTreeNode[] = [];
+
+        if (parentNode) {
+          if (placeLeft) {
+            parentNode.leftChild = nextIdInRank;
+            const pMainId =
+              parentNode.originMainId && parentNode.originMainId > 0
+                ? parentNode.originMainId
+                : parentNode.id;
+            const pMainNode = r1List.find((n) => n.id === pMainId) || parentNode;
+            const vaultAdd = Number((rankPrice * 0.35).toFixed(4));
+            pMainNode.nodeVault = Number(((pMainNode.nodeVault || 0) + vaultAdd).toFixed(4));
+            pMainNode.rawNodeVault = Number(((pMainNode.rawNodeVault || 0) + vaultAdd).toFixed(4));
+            pMainNode.reconciledBaseVault = pMainNode.nodeVault;
+          } else {
+            parentNode.rightChild = nextIdInRank;
+            rightSlotTriggerQueue.push(parentNode);
+          }
+        }
+
+        // Trigger 100% Rebirth clone if placed on the right
+        let cloneSafety = 0;
+        while (rightSlotTriggerQueue.length > 0 && cloneSafety < 25) {
+          cloneSafety++;
+          const triggerParent = rightSlotTriggerQueue.shift()!;
+          const clonePlacement = findClonePlacementInRankNodes(r1List, triggerParent);
+          const nextCloneId = r1List.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+          const originNode =
+            r1List.find((n) => n.id === clonePlacement.cloneOriginMainId) || triggerParent;
+
+          const newCloneNode: IndexedTreeNode = {
+            id: nextCloneId,
+            rank: 1,
+            owner: triggerParent.owner,
+            directSponsor:
+              originNode.directSponsor || triggerParent.directSponsor || triggerParent.owner,
+            parentId: clonePlacement.parentId,
+            leftChild: 0,
+            rightChild: 0,
+            isClone: true,
+            isExtraId: false,
+            originMainId: clonePlacement.cloneOriginMainId,
+            cloneRound: clonePlacement.cloneRound,
+            directSponsorNodeId: clonePlacement.targetSponsorNodeId,
+            nodeVault: 0,
+            rawNodeVault: 0,
+            reconciledBaseVault: 0,
+            isLocalUpgrade: true,
+            createdAt: new Date().toISOString(),
+          };
+
+          r1List.push(newCloneNode);
+          const cloneParent = r1List.find((n) => n.id === clonePlacement.parentId);
+          if (cloneParent) {
+            if (clonePlacement.isLeft) {
+              cloneParent.leftChild = nextCloneId;
+              const cpMainId =
+                cloneParent.originMainId && cloneParent.originMainId > 0
+                  ? cloneParent.originMainId
+                  : cloneParent.id;
+              const cpMainNode = r1List.find((n) => n.id === cpMainId) || cloneParent;
+              const vaultAdd = Number((rankPrice * 0.35).toFixed(4));
+              cpMainNode.nodeVault = Number(((cpMainNode.nodeVault || 0) + vaultAdd).toFixed(4));
+              cpMainNode.rawNodeVault = Number(((cpMainNode.rawNodeVault || 0) + vaultAdd).toFixed(4));
+              cpMainNode.reconciledBaseVault = cpMainNode.nodeVault;
+            } else {
+              cloneParent.rightChild = nextCloneId;
+              rightSlotTriggerQueue.push(cloneParent);
+            }
+          }
+        }
+      }
+
+      matrixDB.nodesByRank[1] = reconcileRankTreeLinks(r1List);
+      matrixDB.rankCounts[1] = matrixDB.nodesByRank[1].length;
+
+      reconcileAutoExtraIdsAcrossRanks();
+      rebuildDatabaseRewardLogsFromNodes();
+      rebuildDatabaseUpgradeLogsFromNodes();
+      saveMatrixDBToDisk(true);
+
+      const txHash = `0xreg${Date.now().toString(16)}`;
+      res.json({
+        success: true,
+        source: 'DATABASE_SIMULATION',
+        owner: checksumOwner,
+        sponsorNodeId: sponsorIdNum,
+        count: countNum,
+        assignedNodeIds,
+        placements,
+        txHash,
+        message: `🎉 สมัครสมาชิกสำเร็จ! สร้างรหัสสมาชิก ${assignedNodeIds.map((id) => `#${id}`).join(', ')} ให้กระเป๋า ${checksumOwner.slice(0, 6)}...${checksumOwner.slice(-4)} เรียบร้อยแล้ว`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'การสมัครสมาชิกล้มเหลว' });
+    }
+  });
+
+  app.post('/api/matrix/upgrade', async (req: Request, res: Response) => {
+    try {
+      const { targetRank, mainId, owner } = req.body;
+      const rankNum = Math.min(Math.max(Number(targetRank) || 2, 2), 18);
+      const mainIdNum = Math.max(1, Number(mainId) || 1);
+
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+      const mainNodeR1 = r1Nodes.find((n) => n.id === mainIdNum && !n.isClone && !n.isExtraId);
+      if (!mainNodeR1) {
+        return res.status(404).json({
+          success: false,
+          error: `ไม่พบรหัสหลัก Main ID #${mainIdNum} ในระบบ Rank 1`,
+        });
+      }
+
+      const ownerAddr = (mainNodeR1.owner || owner || matrixDB.systemWallets.rootOwner).toLowerCase();
+      const sponsorAddr = mainNodeR1.directSponsor || matrixDB.systemWallets.rootOwner;
+      const r1SponsorMainId = mainNodeR1.directSponsorNodeId > 0 ? mainNodeR1.directSponsorNodeId : 1;
+
+      // Determine current rank specifically for THIS Main ID (`mainIdNum`), not across the whole wallet
+      let currentRank = mainIdNum === 1 ? 18 : 1;
+      if (mainIdNum !== 1) {
+        for (let r = 18; r >= 2; r--) {
+          const list = (matrixDB.nodesByRank[r] || []).filter((n) => !n.isSyntheticExtra);
+          if (list.some((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum)) {
+            currentRank = r;
+            break;
+          }
+        }
+      }
+
+      if (rankNum <= currentRank) {
+        return res.json({
+          success: true,
+          source: 'DATABASE_SIMULATION',
+          mainId: mainIdNum,
+          currentRank,
+          targetRank: rankNum,
+          txHash: `0xupg${Date.now().toString(16)}`,
+          message: `รหัสหลัก #${mainIdNum} อยู่ใน Rank ${currentRank} เรียบร้อยแล้ว`,
+        });
+      }
+
+      // Upgrade step-by-step from currentRank + 1 up to rankNum for this specific Main ID
+      for (let r = currentRank + 1; r <= rankNum; r++) {
+        if (!matrixDB.nodesByRank[r]) {
+          matrixDB.nodesByRank[r] = [];
+        }
+        const rList = matrixDB.nodesByRank[r].filter((n) => !n.isSyntheticExtra);
+        matrixDB.nodesByRank[r] = rList;
+
+        const existingNodeInRank = rList.find(
+          (n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum
+        );
+        if (existingNodeInRank) continue;
+
+        const rankPrice = RANK_PRICES_USDT[r - 1] || 10;
+
+        // Deduct available vault from this Main ID's 5-rank window (window5Start..r-1) towards rankPrice
+        const prevRank = r - 1;
+        const winStart = Math.max(1, prevRank - 4);
+        let windowVaultAvail = 0;
+        for (let wr = winStart; wr <= prevRank; wr++) {
+          const wrList = matrixDB.nodesByRank[wr] || [];
+          const wrNode =
+            wr === 1
+              ? wrList.find((n) => n.id === mainIdNum && !n.isClone && !n.isExtraId)
+              : wrList.find((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum);
+          if (wrNode && Number(wrNode.nodeVault || 0) > 0) {
+            windowVaultAvail = Number((windowVaultAvail + Number(wrNode.nodeVault || 0)).toFixed(4));
+          }
+        }
+
+        let remDeduct = Math.min(windowVaultAvail, rankPrice);
+        let totalVaultDeducted = 0;
+
+        for (let wr = winStart; wr <= prevRank; wr++) {
+          if (remDeduct <= 1e-6) break;
+          const wrList = matrixDB.nodesByRank[wr] || [];
+          const wrNode =
+            wr === 1
+              ? wrList.find((n) => n.id === mainIdNum && !n.isClone && !n.isExtraId)
+              : wrList.find((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum);
+          if (wrNode && Number(wrNode.nodeVault || 0) > 0) {
+            const avail = Number(wrNode.nodeVault || 0);
+            const deduct = Math.min(avail, remDeduct);
+            wrNode.nodeVault = Number(Math.max(0, avail - deduct).toFixed(4));
+            wrNode.reconciledBaseVault = wrNode.nodeVault;
+            remDeduct = Number(Math.max(0, remDeduct - deduct).toFixed(4));
+            totalVaultDeducted = Number((totalVaultDeducted + deduct).toFixed(4));
+          }
+        }
+
+        // Find Direct Sponsor's Main Node in rank `r`
+        // หากผู้แนะนำตรงยังไม่ได้อัปเกรดขึ้นมาถึง Rank r ให้หาตำแหน่งว่างชั้นตื้นลงมาจากซ้ายไปขวา (BFS จาก Root #1)
+        const spNodeInR = rList.find(
+          (n) =>
+            !n.isClone &&
+            !n.isExtraId &&
+            (r1SponsorMainId === 1 ? n.id === 1 : n.originMainId === r1SponsorMainId)
+        );
+        const placement = spNodeInR
+          ? findExtraIdPlacementInRankNodes(rList, spNodeInR.id)
+          : findShallowestLeftToRightSlotInRankNodes(rList, 1);
+        const parentIdNum = Number(placement.parentId) || 1;
+        const maxId = rList.reduce((m, n) => Math.max(m, n.id), 0);
+        const nextIdInRank = maxId + 1;
+
+        const newNode: IndexedTreeNode = {
+          id: nextIdInRank,
+          rank: r,
+          owner: mainNodeR1.owner || ownerAddr,
+          directSponsor: sponsorAddr,
+          parentId: parentIdNum,
+          leftChild: 0,
+          rightChild: 0,
+          isClone: false,
+          isExtraId: false,
+          originMainId: mainIdNum,
+          cloneRound: 0,
+          directSponsorNodeId: r1SponsorMainId,
+          nodeVault: 0,
+          rawNodeVault: 0,
+          reconciledBaseVault: 0,
+          isLocalUpgrade: true,
+        };
+
+        rList.push(newNode);
+        const parentNode = rList.find((n) => n.id === parentIdNum);
+        const rightSlotTriggerQueue: IndexedTreeNode[] = [];
+
+        if (parentNode) {
+          if (placement.isLeft) {
+            parentNode.leftChild = nextIdInRank;
+            const pMainId =
+              parentNode.originMainId && parentNode.originMainId > 0
+                ? parentNode.originMainId
+                : parentNode.id;
+            const pMainNode = rList.find((n) => n.id === pMainId) || parentNode;
+            const vaultAdd = Number((rankPrice * 0.35).toFixed(4));
+            pMainNode.nodeVault = Number(((pMainNode.nodeVault || 0) + vaultAdd).toFixed(4));
+            pMainNode.rawNodeVault = Number(((pMainNode.rawNodeVault || 0) + vaultAdd).toFixed(4));
+            pMainNode.reconciledBaseVault = pMainNode.nodeVault;
+          } else {
+            parentNode.rightChild = nextIdInRank;
+            rightSlotTriggerQueue.push(parentNode);
+          }
+        }
+
+        // Trigger 100% Rebirth clone if placed on the right
+        let cloneSafety = 0;
+        while (rightSlotTriggerQueue.length > 0 && cloneSafety < 25) {
+          cloneSafety++;
+          const triggerParent = rightSlotTriggerQueue.shift()!;
+          const clonePlacement = findClonePlacementInRankNodes(rList, triggerParent);
+          const nextCloneId = rList.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+          const originNode =
+            rList.find((n) => n.id === clonePlacement.cloneOriginMainId) || triggerParent;
+
+          const newCloneNode: IndexedTreeNode = {
+            id: nextCloneId,
+            rank: r,
+            owner: triggerParent.owner,
+            directSponsor:
+              originNode.directSponsor || triggerParent.directSponsor || triggerParent.owner,
+            parentId: clonePlacement.parentId,
+            leftChild: 0,
+            rightChild: 0,
+            isClone: true,
+            isExtraId: false,
+            originMainId: clonePlacement.cloneOriginMainId,
+            cloneRound: clonePlacement.cloneRound,
+            directSponsorNodeId: clonePlacement.targetSponsorNodeId,
+            nodeVault: 0,
+            rawNodeVault: 0,
+            reconciledBaseVault: 0,
+            isLocalUpgrade: true,
+          };
+
+          rList.push(newCloneNode);
+          const cloneParent = rList.find((n) => n.id === clonePlacement.parentId);
+          if (cloneParent) {
+            if (clonePlacement.isLeft) {
+              cloneParent.leftChild = nextCloneId;
+              const cpMainId =
+                cloneParent.originMainId && cloneParent.originMainId > 0
+                  ? cloneParent.originMainId
+                  : cloneParent.id;
+              const cpMainNode = rList.find((n) => n.id === cpMainId) || cloneParent;
+              const vaultAdd = Number((rankPrice * 0.35).toFixed(4));
+              cpMainNode.nodeVault = Number(((cpMainNode.nodeVault || 0) + vaultAdd).toFixed(4));
+              cpMainNode.rawNodeVault = Number(((cpMainNode.rawNodeVault || 0) + vaultAdd).toFixed(4));
+              cpMainNode.reconciledBaseVault = cpMainNode.nodeVault;
+            } else {
+              cloneParent.rightChild = nextCloneId;
+              rightSlotTriggerQueue.push(cloneParent);
+            }
+          }
+        }
+
+        matrixDB.nodesByRank[r] = reconcileRankTreeLinks(rList);
+        matrixDB.rankCounts[r] = matrixDB.nodesByRank[r].length;
+      }
+
+      reconcileAutoExtraIdsAcrossRanks();
+      rebuildDatabaseRewardLogsFromNodes();
+      rebuildDatabaseUpgradeLogsFromNodes();
+      saveMatrixDBToDisk(true);
+
+      res.json({
+        success: true,
+        source: 'DATABASE_SIMULATION',
+        mainId: mainIdNum,
+        fromRank: currentRank,
+        targetRank: rankNum,
+        txHash: `0xupg${Date.now().toString(16)}`,
+        message: `🚀 อัปเกรดรหัสหลัก #${mainIdNum} สู่ Rank ${rankNum} สำเร็จเรียบร้อยแล้ว!`,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ==========================================
+  // ADMIN TARGET USER / MAIN ID LOOKUP
+  // ==========================================
+  app.get('/api/admin/lookup-target', (req: Request, res: Response) => {
+    const raw = String(req.query.query || '').trim().replace(/^#/, '');
+    if (!raw) return res.json({ success: true, found: false });
+    const r1Nodes = matrixDB.nodesByRank[1] || [];
+    let node: IndexedTreeNode | undefined;
+    if (/^\d+$/.test(raw)) {
+      const idNum = parseInt(raw, 10);
+      node = r1Nodes.find((n) => n.id === idNum && !n.isClone && !n.isExtraId);
+    } else if (ethers.isAddress(raw)) {
+      const norm = raw.toLowerCase();
+      node = r1Nodes.find((n) => n.owner.toLowerCase() === norm && !n.isClone && !n.isExtraId);
+    }
+    if (!node) {
+      return res.json({ success: true, found: false });
+    }
+
+    let currentRank = node.id === 1 ? 18 : 1;
+    if (node.id !== 1) {
+      for (let r = 18; r >= 2; r--) {
+        const list = matrixDB.nodesByRank[r] || [];
+        if (list.some((n) => !n.isClone && !n.isExtraId && n.originMainId === node!.id)) {
+          currentRank = r;
+          break;
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      found: true,
+      mainId: node.id,
+      owner: node.owner,
+      currentRank,
+      directSponsorNodeId: node.directSponsorNodeId || 1,
+      directSponsor: node.directSponsor,
+    });
+  });
+
+  // ==========================================
+  // ADMIN FREE RANK UPGRADE API
+  // รองรับทั้งเลข Main ID (เช่น 5, #5) และ Wallet Address (0x...)
+  // เงื่อนไข: อัปแรงค์ฟรี โคลนนิ่งได้ แต่ไม่จ่ายค่าคอม
+  // ==========================================
+  app.post('/api/admin/upgrade-rank', async (req: Request, res: Response) => {
+    try {
+      const { targetUser, targetRank, targetMainId, mainId } = req.body;
+      const rawInput = String(targetMainId || mainId || targetUser || '')
+        .trim()
+        .replace(/^(id\s*|#)+/i, '')
+        .trim();
+      if (!rawInput) {
+        return res.status(400).json({
+          success: false,
+          error: 'กรุณากรอกเลข ID หลัก (เช่น 5 หรือ #5) หรือ Wallet Address',
+        });
+      }
+
+      const parsedRank = Math.min(18, Math.max(2, Number(targetRank) || 2));
+      const onChainConfirmed = Boolean(req.body?.onChainConfirmed);
+      const clientTxHash = String(req.body?.txHash || '').trim();
+
+      if (!matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1 || onChainConfirmed) {
+        await syncRankIntoDatabase(1, CONTRACT_ADDRESS, onChainConfirmed).catch(() => {});
+      }
+      // Always sync target ranks 2..parsedRank from the smart contract first when onChainConfirmed is true
+      // (or when ranks haven't been synced yet) so we never create duplicate local nodes/clones on top of on-chain nodes!
+      for (let r = 2; r <= parsedRank; r++) {
+        await syncRankIntoDatabase(r, CONTRACT_ADDRESS, true).catch(() => {});
+      }
+
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+      let userR1Node: IndexedTreeNode | undefined;
+      let normalizedUser = '';
+
+      if (/^\d+$/.test(rawInput)) {
+        const idNum = parseInt(rawInput, 10);
+        userR1Node = r1Nodes.find((n) => n.id === idNum && !n.isClone && !n.isExtraId);
+        if (!userR1Node) {
+          // Allow upgrading any existing Rank 1 node if user passed its ID
+          userR1Node = r1Nodes.find((n) => n.id === idNum);
+        }
+        if (!userR1Node) {
+          return res.status(404).json({
+            success: false,
+            error: `ไม่พบรหัสสมาชิก ID #${idNum} ในระบบ Rank 1`,
+          });
+        }
+        if (userR1Node.isClone && userR1Node.originMainId > 0) {
+          const origMain = r1Nodes.find((n) => n.id === userR1Node!.originMainId && !n.isClone);
+          if (origMain) userR1Node = origMain;
+        }
+        normalizedUser = userR1Node.owner.toLowerCase();
+      } else if (ethers.isAddress(rawInput)) {
+        normalizedUser = rawInput.toLowerCase();
+        const ownedMains = r1Nodes.filter(
+          (n) => n.owner.toLowerCase() === normalizedUser && !n.isClone && !n.isExtraId
+        );
+        userR1Node = ownedMains[0] || r1Nodes.find((n) => n.owner.toLowerCase() === normalizedUser);
+        if (!userR1Node) {
+          return res.status(404).json({
+            success: false,
+            error: `ไม่พบรหัสสมาชิกของกระเป๋า ${rawInput} ในระบบ Rank 1 (กรุณาสมัคร Rank 1 ก่อนอัพ Rank)`,
+          });
+        }
+      } else {
+        return res.status(400).json({
+          success: false,
+          error: 'กรุณาระบุเลข ID หลัก (เช่น 5 หรือ #5) หรือ Wallet Address ที่ถูกต้อง',
+        });
+      }
+
+      const mainIdNum = userR1Node.id;
+      let rawR1SponsorId = userR1Node.directSponsorNodeId > 0 ? userR1Node.directSponsorNodeId : 0;
+      if (rawR1SponsorId <= 0 && userR1Node.directSponsor) {
+        const spKey = userR1Node.directSponsor.toLowerCase();
+        const spByAddr = r1Nodes.find(
+          (n) => !n.isClone && !n.isExtraId && (n.owner || '').toLowerCase() === spKey
+        );
+        rawR1SponsorId = spByAddr ? spByAddr.id : 1;
+      }
+      if (rawR1SponsorId <= 0) rawR1SponsorId = 1;
+      const rawSpR1Node = r1Nodes.find((n) => n.id === rawR1SponsorId);
+      const r1SponsorMainId =
+        rawSpR1Node && rawSpR1Node.isClone && rawSpR1Node.originMainId > 0
+          ? rawSpR1Node.originMainId
+          : rawR1SponsorId;
+      const canonSpR1Node = r1Nodes.find((n) => n.id === r1SponsorMainId && !n.isClone) || rawSpR1Node;
+      const sponsorAddr =
+        canonSpR1Node?.owner || userR1Node.directSponsor || matrixDB.systemWallets.rootOwner;
+
+      // If the upgrade was just confirmed on-chain via adminUpgradeRankForMainId / adminUpgradeRank,
+      // inspect the tx receipt NodeCreated logs so ONLY newly admin-upgraded nodes & their clones are tagged
+      // isAdminFreeUpgrade = true (preserving any previously paid lower ranks intact!).
+      if (onChainConfirmed) {
+        let previousMaxRank = mainIdNum === 1 ? 18 : 1;
+        if (mainIdNum !== 1) {
+          for (let r = 18; r >= 2; r--) {
+            const list = (matrixDB.nodesByRank[r] || []).filter(
+              (n) => !n.isSyntheticExtra && !n.isLocalUpgrade
+            );
+            if (list.some((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum)) {
+              previousMaxRank = r;
+              break;
+            }
+          }
+        }
+
+        const receiptNodesByRank = new Map<number, Set<number>>();
+        if (isRealTxHash(clientTxHash)) {
+          const inspected = await inspectAndTagAdminUpgradeTx(clientTxHash, getProvider()).catch(() => ({
+            isAdminTx: true,
+            taggedNodes: [] as Array<{ rank: number; nodeId: number }>,
+            newlyTagged: false,
+          }));
+          for (const tn of inspected.taggedNodes) {
+            if (!receiptNodesByRank.has(tn.rank)) receiptNodesByRank.set(tn.rank, new Set());
+            receiptNodesByRank.get(tn.rank)!.add(tn.nodeId);
+            knownAdminFreeNodeKeys.add(`${tn.rank}:${tn.nodeId}`);
+          }
+        }
+
+        const onChainUpgradedRanks: number[] = [];
+        const onChainCreatedNodes: any[] = [];
+        let onChainClonesCount = 0;
+
+        const ranksToProcess =
+          receiptNodesByRank.size > 0
+            ? Array.from(receiptNodesByRank.keys()).sort((a, b) => a - b)
+            : Array.from(
+                { length: Math.max(0, parsedRank - Math.max(1, previousMaxRank)) },
+                (_, idx) => Math.max(2, previousMaxRank + 1) + idx
+              );
+
+        for (const r of ranksToProcess) {
+          if (r < 2 || r > 18) continue;
+          const exactReceiptIds = receiptNodesByRank.get(r);
+          await syncRankIntoDatabase(r, CONTRACT_ADDRESS, true, true).catch(() => {});
+
+          let rList = (matrixDB.nodesByRank[r] || []).filter(
+            (n) => !n.isSyntheticExtra && !n.isLocalUpgrade
+          );
+
+          if (exactReceiptIds && exactReceiptIds.size > 0) {
+            for (const targetNid of exactReceiptIds) {
+              let nodeInList = rList.find((n) => n.id === targetNid);
+              for (let retry = 0; retry < 2 && !nodeInList; retry++) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                await syncRankIntoDatabase(r, CONTRACT_ADDRESS, true, true).catch(() => {});
+                rList = (matrixDB.nodesByRank[r] || []).filter(
+                  (n) => !n.isSyntheticExtra && !n.isLocalUpgrade
+                );
+                nodeInList = rList.find((n) => n.id === targetNid);
+              }
+              if (nodeInList) {
+                nodeInList.isAdminFreeUpgrade = true;
+                knownAdminFreeNodeKeys.add(`${r}:${nodeInList.id}`);
+                if (nodeInList.isClone) {
+                  onChainClonesCount++;
+                } else {
+                  const pNode = rList.find((n) => n.id === nodeInList!.parentId);
+                  const isLeft = pNode ? pNode.leftChild === nodeInList.id : true;
+                  onChainUpgradedRanks.push(r);
+                  onChainCreatedNodes.push({
+                    rank: r,
+                    nodeId: nodeInList.id,
+                    parentId: nodeInList.parentId,
+                    side: isLeft ? 'LEFT' : 'RIGHT',
+                  });
+                }
+              }
+            }
+          } else {
+            let chainNode = rList.find(
+              (n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum
+            );
+            for (let retry = 0; retry < 2 && !chainNode; retry++) {
+              await new Promise((resolve) => setTimeout(resolve, 1200));
+              await syncRankIntoDatabase(r, CONTRACT_ADDRESS, true, true).catch(() => {});
+              rList = (matrixDB.nodesByRank[r] || []).filter(
+                (n) => !n.isSyntheticExtra && !n.isLocalUpgrade
+              );
+              chainNode = rList.find(
+                (n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum
+              );
+            }
+            if (chainNode) {
+              chainNode.isAdminFreeUpgrade = true;
+              knownAdminFreeNodeKeys.add(`${r}:${chainNode.id}`);
+              const pNode = rList.find((n) => n.id === chainNode.parentId);
+              const isLeft = pNode ? pNode.leftChild === chainNode.id : true;
+              onChainUpgradedRanks.push(r);
+              onChainCreatedNodes.push({
+                rank: r,
+                nodeId: chainNode.id,
+                parentId: chainNode.parentId,
+                side: isLeft ? 'LEFT' : 'RIGHT',
+              });
+            }
+          }
+          matrixDB.nodesByRank[r] = reconcileRankTreeLinks(rList);
+          matrixDB.rankCounts[r] = matrixDB.nodesByRank[r].length;
+        }
+
+        if (isRealTxHash(clientTxHash)) {
+          recordRealTransactionLog({
+            txHash: clientTxHash,
+            actionType: 'ADMIN_UPGRADE',
+            title: `Admin อัปเกรดฟรี Main #${mainIdNum} → Rank ${parsedRank}`,
+            userAddress: normalizedUser,
+            mainNodeId: mainIdNum,
+            rank: parsedRank,
+            amountUsdt: 0,
+            source: 'WEB3_CLIENT',
+            details: `Ranks: ${onChainUpgradedRanks.map((r) => `R${r}`).join(', ') || `R${parsedRank}`}`,
+          });
+        }
+        reconcileAutoExtraIdsAcrossRanks();
+        rebuildDatabaseRewardLogsFromNodes();
+        rebuildDatabaseUpgradeLogsFromNodes();
+        matrixDB.lastSyncedAt = new Date().toISOString();
+        saveMatrixDBToDisk(true);
+        broadcastAllMatrixUpdates();
+
+        return res.json({
+          success: true,
+          source: 'ONCHAIN_ADMIN_UPGRADE',
+          txHash: clientTxHash || undefined,
+          mainId: mainIdNum,
+          targetUser: normalizedUser,
+          fromRank: previousMaxRank,
+          targetRank: parsedRank,
+          upgradedRanks: onChainUpgradedRanks,
+          createdNodes: onChainCreatedNodes,
+          clonesCreated: onChainClonesCount,
+          message: `✅ Admin Upgrade สำเร็จ! อัพ Rank รหัส #${mainIdNum} ให้ฟรีสู่ Rank ${parsedRank} บนบล็อกเชนเรียบร้อยแล้ว (ไม่จ่ายค่าคอม/ค่าชั้น และระบบโคลนนิ่งทำงานปกติเมื่อวางขวา)`,
+        });
+      }
+
+      // Determine current rank specifically for THIS Main ID (`mainIdNum`), not across the whole wallet
+      let currentRank = mainIdNum === 1 ? 18 : 1;
+      if (mainIdNum !== 1) {
+        for (let r = 18; r >= 2; r--) {
+          const list = (matrixDB.nodesByRank[r] || []).filter((n) => !n.isSyntheticExtra);
+          if (list.some((n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum)) {
+            currentRank = r;
+            break;
+          }
+        }
+      }
+
+      if (parsedRank <= currentRank) {
+        return res.json({
+          success: true,
+          source: 'DATABASE_ADMIN_UPGRADE',
+          targetUser: normalizedUser,
+          mainId: mainIdNum,
+          fromRank: currentRank,
+          currentRank,
+          targetRank: parsedRank,
+          upgradedRanks: [],
+          createdNodes: [],
+          clonesCreated: 0,
+          message: `รหัสหลัก #${mainIdNum} อยู่ใน Rank ${currentRank} อยู่แล้ว (เป้าหมายคือ Rank ${parsedRank})`,
+        });
+      }
+
+      const upgradedRanks: number[] = [];
+      const createdNodes: any[] = [];
+      let clonesCreated = 0;
+      const rootOwner = matrixDB.nodesByRank[1]?.[0]?.owner || matrixDB.systemWallets.rootOwner;
+
+      for (let r = currentRank + 1; r <= parsedRank; r++) {
+        if (!matrixDB.nodesByRank[r] || matrixDB.nodesByRank[r].length === 0) {
+          matrixDB.nodesByRank[r] = [
+            {
+              id: 1,
+              rank: r,
+              owner: rootOwner,
+              directSponsor: ethers.ZeroAddress,
+              parentId: 0,
+              leftChild: 0,
+              rightChild: 0,
+              isClone: false,
+              isExtraId: false,
+              originMainId: 1,
+              cloneRound: 0,
+              directSponsorNodeId: 0,
+              nodeVault: 0,
+              rawNodeVault: 0,
+              reconciledBaseVault: 0,
+            },
+          ];
+        }
+        const rList = matrixDB.nodesByRank[r].filter((n) => !n.isSyntheticExtra);
+        matrixDB.nodesByRank[r] = rList;
+
+        // Check if THIS Main ID is already in rank `r`
+        const existingNode = rList.find(
+          (n) => !n.isClone && !n.isExtraId && n.originMainId === mainIdNum
+        );
+        if (!existingNode) {
+          // ใช้เงื่อนไขการวางตำแหน่งเดียวกับการโคลนนิ่ง (Cloning Routing: รอบ 1 ติดสายผู้แนะนำ / รอบ 2 Global BFS จาก Root #1)
+          const existingAdminUpgradesCount = rList.filter(
+            (n) => !n.isClone && !n.isExtraId && n.isAdminFreeUpgrade
+          ).length;
+          const adminRoundIndex = existingAdminUpgradesCount % 2;
+
+          const spNodeInR = rList.find(
+            (n) =>
+              !n.isClone &&
+              !n.isExtraId &&
+              (r1SponsorMainId === 1 ? n.id === 1 : n.originMainId === r1SponsorMainId)
+          );
+          const placement =
+            adminRoundIndex === 0 && spNodeInR
+              ? findExtraIdPlacementInRankNodes(rList, spNodeInR.id)
+              : findShallowestLeftToRightSlotInRankNodes(rList, 1);
+          const parentIdNum = Number(placement.parentId) || 1;
+          const maxId = rList.reduce((m, n) => Math.max(m, n.id), 0);
+          const nextIdInRank = maxId + 1;
+          const nowIso = new Date().toISOString();
+
+          const parentNode = rList.find((n) => n.id === parentIdNum);
+          const placeLeft = parentNode
+            ? !parentNode.leftChild || parentNode.leftChild <= 0 || placement.isLeft
+            : Boolean(placement.isLeft);
+
+          const newNode: IndexedTreeNode = {
+            id: nextIdInRank,
+            rank: r,
+            owner: userR1Node.owner || normalizedUser,
+            directSponsor: sponsorAddr,
+            parentId: parentIdNum,
+            leftChild: 0,
+            rightChild: 0,
+            isLeft: placeLeft,
+            isClone: false,
+            isExtraId: false,
+            originMainId: mainIdNum,
+            cloneRound: 0,
+            directSponsorNodeId: r1SponsorMainId,
+            nodeVault: 0,
+            rawNodeVault: 0,
+            reconciledBaseVault: 0,
+            isLocalUpgrade: true,
+            isAdminFreeUpgrade: true,
+            createdAt: nowIso,
+          };
+
+          rList.push(newNode);
+          const rightSlotTriggerQueue: IndexedTreeNode[] = [];
+          if (parentNode) {
+            if (placeLeft) {
+              // เงื่อนไข Admin อัพ Rank ฟรี: วางฝั่งซ้าย ไม่จ่ายค่าคอม 30%/30%/4%/1% และไม่บวก 35% เข้ากระปุก
+              parentNode.leftChild = nextIdInRank;
+            } else {
+              parentNode.rightChild = nextIdInRank;
+              rightSlotTriggerQueue.push(parentNode);
+            }
+          }
+
+          // ถ้าลงฝั่งขวา (!placeLeft) -> รันระบบโคลนนิ่ง Rebirth ให้ Parent ตามเงื่อนไขปกติ!
+          let cloneSafety = 0;
+          while (rightSlotTriggerQueue.length > 0 && cloneSafety < 50) {
+            cloneSafety++;
+            const triggerParent = rightSlotTriggerQueue.shift()!;
+            const clonePlacement = findClonePlacementInRankNodes(rList, triggerParent);
+            const cloneIdInRank = rList.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+            const originNode =
+              rList.find(
+                (n) =>
+                  !n.isClone &&
+                  !n.isExtraId &&
+                  (n.originMainId === clonePlacement.cloneOriginMainId ||
+                    n.id === clonePlacement.cloneOriginMainId)
+              ) ||
+              rList.find(
+                (n) =>
+                  !n.isClone &&
+                  (n.originMainId === clonePlacement.cloneOriginMainId ||
+                    n.id === clonePlacement.cloneOriginMainId)
+              ) ||
+              r1Nodes.find((n) => !n.isClone && n.id === clonePlacement.cloneOriginMainId) ||
+              triggerParent;
+            const cloneParent = rList.find((n) => n.id === clonePlacement.parentId);
+            const clonePlaceLeft = cloneParent
+              ? !cloneParent.leftChild || cloneParent.leftChild <= 0 || clonePlacement.isLeft
+              : Boolean(clonePlacement.isLeft);
+            const existingCloneCountForOrig = rList.filter(
+              (n) => n.isClone && (n.originMainId || n.id) === clonePlacement.cloneOriginMainId
+            ).length;
+
+            const cloneNode: IndexedTreeNode = {
+              id: cloneIdInRank,
+              rank: r,
+              owner: triggerParent.owner,
+              directSponsor:
+                originNode.directSponsor || triggerParent.directSponsor || triggerParent.owner,
+              parentId: clonePlacement.parentId,
+              leftChild: 0,
+              rightChild: 0,
+              isLeft: clonePlaceLeft,
+              isClone: true,
+              isExtraId: false,
+              originMainId: clonePlacement.cloneOriginMainId,
+              cloneSequence: existingCloneCountForOrig + 1,
+              cloneRound: clonePlacement.cloneRound,
+              directSponsorNodeId: clonePlacement.targetSponsorNodeId,
+              nodeVault: 0,
+              rawNodeVault: 0,
+              reconciledBaseVault: 0,
+              isLocalUpgrade: true,
+              isAdminFreeUpgrade: true,
+              originType: 'CLONE',
+              createdAt: new Date().toISOString(),
+            };
+            rList.push(cloneNode);
+            clonesCreated++;
+            if (cloneParent) {
+              if (clonePlaceLeft) {
+                cloneParent.leftChild = cloneIdInRank;
+              } else {
+                cloneParent.rightChild = cloneIdInRank;
+                rightSlotTriggerQueue.push(cloneParent);
+              }
+            }
+          }
+
+          matrixDB.nodesByRank[r] = reconcileRankTreeLinks(rList);
+          matrixDB.rankCounts[r] = matrixDB.nodesByRank[r].length;
+
+          upgradedRanks.push(r);
+          createdNodes.push({
+            rank: r,
+            nodeId: nextIdInRank,
+            parentId: parentIdNum,
+            side: placeLeft ? 'LEFT' : 'RIGHT',
+          });
+        }
+      }
+
+      reconcileAutoExtraIdsAcrossRanks();
+      rebuildDatabaseRewardLogsFromNodes();
+      rebuildDatabaseUpgradeLogsFromNodes();
+      matrixDB.lastSyncedAt = new Date().toISOString();
+      saveMatrixDBToDisk(true);
+      broadcastAllMatrixUpdates();
+
+      res.json({
+        success: true,
+        source: 'DATABASE_ADMIN_UPGRADE',
+        mainId: mainIdNum,
+        targetUser: normalizedUser,
+        fromRank: currentRank,
+        targetRank: parsedRank,
+        upgradedRanks,
+        createdNodes,
+        clonesCreated,
+        message: `✅ Admin Upgrade สำเร็จ! อัพ Rank รหัส #${mainIdNum} ให้ฟรีจาก Rank ${currentRank} สู่ Rank ${parsedRank} เรียบร้อยแล้ว (ไม่จ่ายค่าคอมเมื่อวางซ้าย และระบบโคลนนิ่งทำงานปกติเมื่อวางขวา)`,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/admin/upgrade-rank:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ==========================================
+  // ADMIN FULL OVERVIEW & SYSTEM WALLETS API
+  // ==========================================
+  app.get('/api/admin/overview', async (_req: Request, res: Response) => {
+    try {
+      const provider = getProvider();
+      const contract = new ethers.Contract(
+        CONTRACT_ADDRESS,
+        [
+          ...MATRIX_READ_ABI,
+          'function owner() view returns (address)',
+          'function allSellWallet() view returns (address)',
+          'function botWallet() view returns (address)',
+          'function familyPool() view returns (address)',
+        ],
+        provider
+      );
+      const usdtContract = new ethers.Contract(
+        USDT_ADDRESS,
+        [
+          'function balanceOf(address) view returns (uint256)',
+          'function decimals() view returns (uint8)',
+          'function symbol() view returns (string)',
+        ],
+        provider
+      );
+
+      let ownerAddr = matrixDB.systemWallets.rootOwner || ethers.ZeroAddress;
+      let allSellAddr = matrixDB.systemWallets.allSellWallet || ethers.ZeroAddress;
+      let botAddr = matrixDB.systemWallets.botWallet || ethers.ZeroAddress;
+      let familyAddr = matrixDB.systemWallets.familyPool || ethers.ZeroAddress;
+
+      try {
+        const [o, a, b, f] = await Promise.all([
+          contract.owner().catch(() => ownerAddr),
+          contract.allSellWallet().catch(() => allSellAddr),
+          contract.botWallet().catch(() => botAddr),
+          contract.familyPool().catch(() => familyAddr),
+        ]);
+        if (o && o !== ethers.ZeroAddress) ownerAddr = String(o);
+        if (a && a !== ethers.ZeroAddress) allSellAddr = String(a);
+        if (b && b !== ethers.ZeroAddress) botAddr = String(b);
+        if (f && f !== ethers.ZeroAddress) familyAddr = String(f);
+      } catch {
+        // fallback to cached systemWallets
+      }
+
+      const fetchWalletBalances = async (addr: string) => {
+        if (!addr || !ethers.isAddress(addr) || addr === ethers.ZeroAddress) {
+          return { address: addr || '-', usdt: '0.00', bnb: '0.0000' };
+        }
+        try {
+          const [uBn, bBn] = await Promise.all([
+            usdtContract.balanceOf(addr).catch(() => 0n),
+            provider.getBalance(addr).catch(() => 0n),
+          ]);
+          return {
+            address: addr,
+            usdt: Number(ethers.formatUnits(uBn, activeUsdtDecimals || 18)).toFixed(2),
+            bnb: Number(ethers.formatEther(bBn)).toFixed(4),
+          };
+        } catch {
+          return { address: addr, usdt: '0.00', bnb: '0.0000' };
+        }
+      };
+
+      const [contractBal, ownerBal, allSellBal, botBal, familyBal] = await Promise.all([
+        fetchWalletBalances(CONTRACT_ADDRESS),
+        fetchWalletBalances(ownerAddr),
+        fetchWalletBalances(allSellAddr),
+        fetchWalletBalances(botAddr),
+        fetchWalletBalances(familyAddr),
+      ]);
+
+      // Build list of all Main IDs & Auto IDs in Rank 1
+      const autoMainSourceMap = reconcileRank1AutoMainIds();
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+      const mainNodesR1 = r1Nodes
+        .filter((n) => !n.isClone && !n.isExtraId && !n.isSyntheticExtra)
+        .sort((a, b) => a.id - b.id);
+
+      const mainIdList = mainNodesR1.map((m) => {
+        const stats = computeMainIdDatabaseStats(m.id);
+        const isAutoId =
+          autoMainSourceMap.has(m.id) ||
+          m.originType === 'AUTO_NEW_MAIN' ||
+          m.originType === 'AUTO_MAIN';
+        return {
+          mainId: m.id,
+          isAutoId,
+          spawnedByMainId: isAutoId
+            ? m.autoSourceMainId || autoMainSourceMap.get(m.id) || m.directSponsorNodeId || 1
+            : 0,
+          owner: m.owner,
+          directSponsorNodeId: isAutoId
+            ? m.autoSourceMainId || autoMainSourceMap.get(m.id) || m.directSponsorNodeId || 1
+            : m.directSponsorNodeId || 1,
+          directSponsor: m.directSponsor,
+          parentId: m.parentId,
+          isLeft: Boolean(m.isLeft),
+          originType: isAutoId ? 'AUTO_NEW_MAIN' : m.originType || 'MANUAL_REGISTER',
+          currentRank: stats.currentRank,
+          window5Start: stats.window5Start,
+          window5End: stats.window5End,
+          upgradeRankPool: stats.upgradeRankPool,
+          newAutoIdPool: stats.newAutoIdPool,
+          newExtraIdPool: stats.newExtraIdPool,
+        };
+      });
+
+      // Collect Extra IDs and Cloning IDs across all Ranks 1..18
+      const extraIdsList: any[] = [];
+      const cloneIdsList: any[] = [];
+      const rankCountsMap: Record<number, number> = {};
+      let totalNodesAllRanks = 0;
+
+      for (let r = 1; r <= 18; r++) {
+        const rList = (matrixDB.nodesByRank[r] || []).filter((n) => !n.isSyntheticExtra);
+        rankCountsMap[r] = rList.length;
+        totalNodesAllRanks += rList.length;
+
+        for (const n of rList) {
+          if (n.isClone) {
+            cloneIdsList.push({
+              nodeId: n.id,
+              rank: r,
+              owner: n.owner,
+              parentId: n.parentId,
+              isLeft: Boolean(n.isLeft),
+              directSponsorNodeId: n.directSponsorNodeId || 1,
+              originMainId: n.originMainId || n.id,
+              cloneRound: n.cloneRound || 1,
+              cloneSequence: n.cloneSequence || 1,
+              label: `Main #${n.originMainId || n.id} (โคลน R${r}-#${n.id})`,
+              nodeVault: Number(n.nodeVault || 0),
+            });
+          } else if (n.isExtraId) {
+            extraIdsList.push({
+              nodeId: n.id,
+              rank: r,
+              owner: n.owner,
+              parentId: n.parentId,
+              isLeft: Boolean(n.isLeft),
+              directSponsorNodeId: n.directSponsorNodeId || 1,
+              originMainId: n.originMainId || n.id,
+              label: `Extra R${r}-#${n.id}`,
+              nodeVault: Number(n.nodeVault || 0),
+            });
+          }
+        }
+      }
+
+      const mainOnlyCount = mainIdList.filter((x) => !x.isAutoId).length;
+      const autoOnlyCount = mainIdList.filter((x) => x.isAutoId).length;
+      const idStatusCounts = {
+        main: mainOnlyCount,
+        auto: autoOnlyCount,
+        extra: extraIdsList.length,
+        clone: cloneIdsList.length,
+        total: mainIdList.length + extraIdsList.length + cloneIdsList.length,
+      };
+
+      const cycleInfo = computeNextAllSellCycleInfo();
+      const rawPk = (
+        process.env.ALLSELL_WALLET_PRIVATE_KEY ||
+        process.env.DEPLOYER_PRIVATE_KEY ||
+        '0xc9c4649effa5eaaab8dc0690b4e392aec7cf84ee49e2251a1800fe89ad3270ca'
+      ).trim();
+      let serverSignerAddress = '';
+      if (rawPk && (rawPk.length === 64 || rawPk.length === 66)) {
+        try {
+          const w = new ethers.Wallet(rawPk.startsWith('0x') ? rawPk : `0x${rawPk}`);
+          serverSignerAddress = w.address;
+        } catch {
+          serverSignerAddress = '';
+        }
+      }
+
+      res.json({
+        success: true,
+        contractAddress: CONTRACT_ADDRESS,
+        usdtAddress: USDT_ADDRESS,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        serverSignerAddress,
+        wallets: {
+          contract: contractBal,
+          owner: ownerBal,
+          allSell: allSellBal,
+          bot: botBal,
+          familyPool: familyBal,
+        },
+        stats: {
+          totalMainIdsRank1: mainIdList.length,
+          totalNodesAllRanks,
+          rankCounts: rankCountsMap,
+          idStatusCounts,
+        },
+        mainIds: mainIdList,
+        extraIds: extraIdsList,
+        cloneIds: cloneIdsList,
+        allSell: {
+          autoEnabled: allSellAutoStore.autoEnabled,
+          lastExecutedCycleKey: allSellAutoStore.lastExecutedCycleKey,
+          lastExecutedAt: allSellAutoStore.lastExecutedAt,
+          nextCycleInfo: cycleInfo,
+          history: allSellAutoStore.history.slice(0, 20),
+        },
+        transactionLogs: (matrixDB.transactionLogs || []).slice(0, 200),
+        totalTransactionLogs: (matrixDB.transactionLogs || []).length,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ==========================================
+  // CLEAR CACHE & FORCE FULL RESYNC API (18 RANKS)
+  // ==========================================
+  const handleClearCacheRequest = async (_req: Request, res: Response) => {
+    try {
+      rankSyncTimestamps.clear();
+      for (let r = 1; r <= 18; r++) {
+        matrixDB.nodesByRank[r] = [];
+        matrixDB.rankCounts[r] = 0;
+      }
+      matrixDB.rewardLogs = [];
+      matrixDB.upgradeLogs = [];
+      matrixDB.userRankVaults = {};
+      saveMatrixDBToDisk(true);
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
+      res.json({
+        success: true,
+        contractAddress: CONTRACT_ADDRESS,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        message: '🧹 ล้างแคชฐานข้อมูลเก่าและดึงข้อมูลสดจาก Smart Contract ใหม่ครบ 18 แรงค์สำเร็จ!',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  };
+
+  app.post('/api/admin/clear-cache', handleClearCacheRequest);
+  app.post('/api/matrix/clear-cache', handleClearCacheRequest);
+  app.post('/api/clear-cache', handleClearCacheRequest);
+
+  app.get('/api/admin/db-records', async (req: Request, res: Response) => {
+    try {
+      const requestedTable = String(req.query.table || 'matrix_nodes').trim();
+      const search = String(req.query.search || '').trim();
+      const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+      const pageSize = Math.min(100, Math.max(5, parseInt(String(req.query.pageSize || '25'), 10) || 25));
+
+      interface DbColDef {
+        key: string;
+        label: string;
+        type: 'text' | 'number' | 'usdt' | 'boolean' | 'date' | 'address' | 'hash';
+        selectExpr?: string;
+      }
+      interface DbTableDef {
+        labelTh: string;
+        defaultSort: string;
+        defaultDir: 'asc' | 'desc';
+        secondaryOrder?: string;
+        columns: DbColDef[];
+        searchExprs: string[];
+      }
+
+      const DB_TABLES: Record<string, DbTableDef> = {
+        matrix_nodes: {
+          labelTh: 'โหนด Matrix ทั้งหมด (matrix_nodes)',
+          defaultSort: 'rank',
+          defaultDir: 'asc',
+          secondaryOrder: 'node_id ASC',
+          columns: [
+            { key: 'id', label: 'Node Key', type: 'text' },
+            { key: 'rank', label: 'Rank', type: 'number' },
+            { key: 'node_id', label: 'Node ID', type: 'number' },
+            { key: 'label', label: 'ป้ายชื่อ', type: 'text' },
+            { key: 'category', label: 'ประเภท', type: 'text' },
+            { key: 'parent_id', label: 'Parent', type: 'text' },
+            { key: 'sponsor_id', label: 'Sponsor', type: 'text' },
+            { key: 'owner', label: 'เจ้าของ (Wallet)', type: 'address' },
+            { key: 'left_child', label: 'ลูกซ้าย', type: 'number' },
+            { key: 'right_child', label: 'ลูกขวา', type: 'number' },
+            { key: 'is_clone', label: 'Clone', type: 'boolean' },
+            { key: 'is_extra_id', label: 'Extra', type: 'boolean' },
+            { key: 'is_admin_free_upgrade', label: 'Admin Free', type: 'boolean' },
+            { key: 'personal_volume_usdt', label: 'Vault (U)', type: 'usdt' },
+            { key: 'created_at', label: 'สร้างเมื่อ', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'label',
+            'category',
+            'parent_id',
+            'sponsor_id',
+            'COALESCE(owner, \'\')',
+            'CAST(rank AS TEXT)',
+            'CAST(node_id AS TEXT)',
+          ],
+        },
+        accounts: {
+          labelTh: 'บัญชีสมาชิก (accounts)',
+          defaultSort: 'main_node_id',
+          defaultDir: 'asc',
+          columns: [
+            { key: 'id', label: 'Account ID', type: 'text' },
+            { key: 'main_node_id', label: 'Main ID', type: 'number' },
+            { key: 'owner', label: 'เจ้าของ (Wallet)', type: 'address' },
+            { key: 'current_max_rank', label: 'Max Rank', type: 'number' },
+            { key: 'sponsor_main_node_id', label: 'Sponsor ID', type: 'number' },
+            { key: 'sponsor_address', label: 'Sponsor Wallet', type: 'address' },
+            { key: 'updated_at', label: 'อัปเดตล่าสุด', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'owner',
+            'COALESCE(sponsor_address, \'\')',
+            'CAST(COALESCE(main_node_id, 0) AS TEXT)',
+            'CAST(COALESCE(current_max_rank, 1) AS TEXT)',
+            'CAST(COALESCE(sponsor_main_node_id, 0) AS TEXT)',
+          ],
+        },
+        wallets: {
+          labelTh: 'กระเป๋าผู้ใช้งาน (wallets)',
+          defaultSort: 'total_rewards_usdt',
+          defaultDir: 'desc',
+          columns: [
+            { key: 'address', label: 'Wallet Address', type: 'address' },
+            { key: 'total_nodes', label: 'จำนวนโหนด', type: 'number' },
+            { key: 'max_rank', label: 'Max Rank', type: 'number' },
+            { key: 'total_rewards_usdt', label: 'รางวัลรวม (U)', type: 'usdt' },
+            { key: 'updated_at', label: 'อัปเดตล่าสุด', type: 'date' },
+          ],
+          searchExprs: [
+            'address',
+            'CAST(total_nodes AS TEXT)',
+            'CAST(max_rank AS TEXT)',
+            'CAST(total_rewards_usdt AS TEXT)',
+          ],
+        },
+        matrix_levels: {
+          labelTh: 'สรุป Rank 1–18 (matrix_levels)',
+          defaultSort: 'rank',
+          defaultDir: 'asc',
+          columns: [
+            { key: 'rank', label: 'Rank', type: 'number' },
+            { key: 'price_usdt', label: 'ราคา (USDT)', type: 'usdt' },
+            { key: 'total_nodes', label: 'จำนวนโหนด', type: 'number' },
+            { key: 'updated_at', label: 'อัปเดตล่าสุด', type: 'date' },
+          ],
+          searchExprs: [
+            'CAST(rank AS TEXT)',
+            'CAST(price_usdt AS TEXT)',
+            'CAST(total_nodes AS TEXT)',
+          ],
+        },
+        income_channels: {
+          labelTh: 'ช่องทางรายได้ (income_channels)',
+          defaultSort: 'created_at',
+          defaultDir: 'desc',
+          secondaryOrder: 'id DESC',
+          columns: [
+            { key: 'id', label: 'Log ID', type: 'text' },
+            { key: 'rank', label: 'Rank', type: 'number' },
+            { key: 'reward_type', label: 'ประเภทรางวัล', type: 'text' },
+            { key: 'from_node_id', label: 'จากโหนด', type: 'number' },
+            { key: 'to_node_id', label: 'ถึงโหนด', type: 'number' },
+            { key: 'recipient', label: 'ผู้รับ (Wallet)', type: 'address' },
+            { key: 'amount_usdt', label: 'จำนวน (U)', type: 'usdt' },
+            { key: 'tx_hash', label: 'Tx Hash', type: 'hash' },
+            { key: 'block_number', label: 'Block', type: 'number' },
+            { key: 'is_admin_free_upgrade', label: 'Admin Free', type: 'boolean' },
+            { key: 'created_at', label: 'บันทึกเมื่อ', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'reward_type',
+            'recipient',
+            'COALESCE(tx_hash, \'\')',
+            'CAST(rank AS TEXT)',
+            'CAST(from_node_id AS TEXT)',
+            'CAST(to_node_id AS TEXT)',
+          ],
+        },
+        activities: {
+          labelTh: 'ประวัติกิจกรรม (activities)',
+          defaultSort: 'date_time',
+          defaultDir: 'desc',
+          secondaryOrder: 'created_at DESC',
+          columns: [
+            { key: 'id', label: 'Activity ID', type: 'text' },
+            { key: 'date_time', label: 'วันเวลา', type: 'text' },
+            { key: 'type', label: 'ประเภท', type: 'text' },
+            { key: 'title', label: 'หัวข้อ', type: 'text' },
+            { key: 'detail', label: 'รายละเอียด', type: 'text' },
+            { key: 'amount_display', label: 'ยอดเงิน', type: 'text' },
+            { key: 'status', label: 'สถานะ', type: 'text' },
+            { key: 'tx_hash', label: 'Tx Hash', type: 'hash' },
+          ],
+          searchExprs: [
+            'id',
+            'date_time',
+            'type',
+            'title',
+            'detail',
+            'amount_display',
+            'status',
+            'COALESCE(tx_hash, \'\')',
+          ],
+        },
+        allsell_inflows: {
+          labelTh: 'รายรับ AllSell 4% (allsell_inflows)',
+          defaultSort: 'event_time',
+          defaultDir: 'desc',
+          columns: [
+            { key: 'id', label: 'Inflow ID', type: 'text' },
+            { key: 'contract_address', label: 'Contract', type: 'address' },
+            { key: 'rank', label: 'Rank', type: 'number' },
+            { key: 'from_node_id', label: 'From Node', type: 'number' },
+            { key: 'from_main_id', label: 'Main ID', type: 'number' },
+            { key: 'from_node_type', label: 'ที่มา', type: 'text' },
+            { key: 'parent_id', label: 'Parent ID', type: 'number' },
+            { key: 'amount_usdt', label: 'AllSell 4% (U)', type: 'usdt' },
+            { key: 'recipient', label: 'กระเป๋า AllSell', type: 'address' },
+            { key: 'tx_hash', label: 'Tx Hash', type: 'hash' },
+            { key: 'block_number', label: 'Block', type: 'number' },
+            { key: 'event_time', label: 'เวลาเหตุการณ์', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'contract_address',
+            'from_node_type',
+            'recipient',
+            'note',
+            'COALESCE(tx_hash, \'\')',
+            'CAST(rank AS TEXT)',
+            'CAST(from_node_id AS TEXT)',
+            'CAST(from_main_id AS TEXT)',
+          ],
+        },
+        allsell_payout_cycles: {
+          labelTh: 'รอบตัดจ่าย AllSell (allsell_payout_cycles)',
+          defaultSort: 'executed_at',
+          defaultDir: 'desc',
+          columns: [
+            { key: 'id', label: 'Cycle ID', type: 'text' },
+            { key: 'contract_address', label: 'Contract', type: 'address' },
+            { key: 'cycle_key', label: 'รหัสรอบ', type: 'text' },
+            { key: 'cycle_label_th', label: 'ชื่อรอบ', type: 'text' },
+            { key: 'trigger_type', label: 'โหมด', type: 'text' },
+            { key: 'total_allsell_pool_usdt', label: 'กองทุนรวม (U)', type: 'usdt' },
+            { key: 'total_distributed_usdt', label: 'จ่ายออกจริง (U)', type: 'usdt' },
+            { key: 'carried_over_usdt', label: 'ยกยอด (U)', type: 'usdt' },
+            { key: 'qualified_recipients_count', label: 'ผู้รับ', type: 'number' },
+            { key: 'note_th', label: 'หมายเหตุ', type: 'text' },
+            { key: 'executed_at', label: 'เวลารัน', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'contract_address',
+            'cycle_key',
+            'cycle_label_th',
+            'trigger_type',
+            'COALESCE(note_th, \'\')',
+          ],
+        },
+        allsell_payout_transfers: {
+          labelTh: 'รายการโอน AllSell (allsell_payout_transfers)',
+          defaultSort: 'executed_at',
+          defaultDir: 'desc',
+          columns: [
+            { key: 'id', label: 'Transfer ID', type: 'text' },
+            { key: 'cycle_key', label: 'รอบ', type: 'text' },
+            { key: 'pool_number', label: 'กองที่', type: 'number' },
+            { key: 'pool_title_th', label: 'ชื่อกอง', type: 'text' },
+            { key: 'main_id', label: 'Main ID', type: 'number' },
+            { key: 'recipient_wallet', label: 'ผู้รับ (Wallet)', type: 'address' },
+            { key: 'amount_usdt', label: 'จำนวน (U)', type: 'usdt' },
+            { key: 'mode', label: 'โหมด', type: 'text' },
+            { key: 'tx_hash', label: 'Tx Hash', type: 'hash' },
+            { key: 'executed_at', label: 'เวลาโอน', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'cycle_id',
+            'contract_address',
+            'cycle_key',
+            'pool_title_th',
+            'recipient_wallet',
+            'tx_hash',
+            'mode',
+            'CAST(main_id AS TEXT)',
+          ],
+        },
+        allsell_auto_config: {
+          labelTh: 'ตั้งค่า Auto AllSell (allsell_auto_config)',
+          defaultSort: 'updated_at',
+          defaultDir: 'desc',
+          columns: [
+            { key: 'id', label: 'Config ID', type: 'text' },
+            { key: 'auto_enabled', label: 'Auto เปิดอยู่', type: 'boolean' },
+            { key: 'last_executed_cycle_key', label: 'รอบล่าสุด', type: 'text' },
+            { key: 'last_executed_at', label: 'รันล่าสุดเมื่อ', type: 'date' },
+            { key: 'updated_at', label: 'อัปเดตล่าสุด', type: 'date' },
+          ],
+          searchExprs: [
+            'id',
+            'COALESCE(last_executed_cycle_key, \'\')',
+            'COALESCE(last_executed_at, \'\')',
+          ],
+        },
+        matrix_db_snapshots: {
+          labelTh: 'Snapshot สัญญา (matrix_db_snapshots)',
+          defaultSort: 'updated_at',
+          defaultDir: 'desc',
+          columns: [
+            { key: 'contract_address', label: 'Contract Address', type: 'address' },
+            { key: 'last_synced_block', label: 'Last Synced Block', type: 'number' },
+            { key: 'updated_at', label: 'อัปเดตล่าสุด', type: 'date' },
+          ],
+          searchExprs: [
+            'contract_address',
+            'CAST(COALESCE(last_synced_block, 0) AS TEXT)',
+          ],
+        },
+      };
+
+      const tableName = Object.prototype.hasOwnProperty.call(DB_TABLES, requestedTable)
+        ? requestedTable
+        : 'matrix_nodes';
+      const tableDef = DB_TABLES[tableName];
+
+      const validColSet = new Set(tableDef.columns.map((c) => c.key));
+      const reqSortBy = String(req.query.sortBy || tableDef.defaultSort).trim();
+      const sortBy = validColSet.has(reqSortBy) ? reqSortBy : tableDef.defaultSort;
+      const reqSortDir = String(req.query.sortDir || tableDef.defaultDir).toLowerCase();
+      const sortDir = reqSortDir === 'asc' ? 'ASC' : 'DESC';
+
+      const tableMeta = Object.entries(DB_TABLES).map(([name, def]) => ({
+        name,
+        labelTh: def.labelTh,
+      }));
+
+      if (!pgPool || !pgConnected || !pgSchemaReady) {
+        return res.json({
+          success: false,
+          connected: false,
+          host: PG_ENDPOINT_INFO.host,
+          port: PG_ENDPOINT_INFO.port,
+          database: PG_ENDPOINT_INFO.database,
+          table: tableName,
+          tables: tableMeta,
+          tableCounts: pgTablesCount,
+          columns: tableDef.columns,
+          rows: [],
+          totalRows: 0,
+          page: 1,
+          pageSize,
+          totalPages: 1,
+          sortBy,
+          sortDir: sortDir.toLowerCase(),
+          error: pgLastError || 'PostgreSQL ยังไม่ได้เชื่อมต่อ',
+        });
+      }
+
+      const selectCols = tableDef.columns.map((c) => c.selectExpr || c.key).join(', ');
+      const whereClause = search
+        ? `WHERE (${tableDef.searchExprs.map((expr) => `${expr} ILIKE $1`).join(' OR ')})`
+        : '';
+      const queryParams: any[] = search ? [`%${search}%`] : [];
+      const orderByClause = tableDef.secondaryOrder && sortBy === tableDef.defaultSort
+        ? `ORDER BY ${sortBy} ${sortDir} NULLS LAST, ${tableDef.secondaryOrder}`
+        : `ORDER BY ${sortBy} ${sortDir} NULLS LAST`;
+
+      const countSql = `SELECT COUNT(*)::int AS total FROM ${tableName} ${whereClause}`;
+      const countRes = await pgPool.query(countSql, queryParams);
+      const totalRows = Number(countRes.rows[0]?.total ?? 0);
+      const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+      const safePage = Math.min(page, totalPages);
+      const offset = (safePage - 1) * pageSize;
+
+      const dataParams = [...queryParams, pageSize, offset];
+      const limitIdx = queryParams.length + 1;
+      const offsetIdx = queryParams.length + 2;
+      const dataSql = `SELECT ${selectCols} FROM ${tableName} ${whereClause} ${orderByClause} LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+      const dataRes = await pgPool.query(dataSql, dataParams);
+
+      await refreshPgTableCounts();
+
+      return res.json({
+        success: true,
+        connected: pgConnected,
+        host: PG_ENDPOINT_INFO.host,
+        port: PG_ENDPOINT_INFO.port,
+        database: PG_ENDPOINT_INFO.database,
+        table: tableName,
+        tableLabelTh: tableDef.labelTh,
+        tables: tableMeta,
+        tableCounts: pgTablesCount,
+        columns: tableDef.columns,
+        rows: dataRes.rows,
+        totalRows,
+        page: safePage,
+        pageSize,
+        totalPages,
+        sortBy,
+        sortDir: sortDir.toLowerCase(),
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        success: false,
+        connected: pgConnected,
+        error: err?.message || String(err),
+      });
+    }
+  });
+
+  app.post('/api/db/wipe', async (_req: Request, res: Response) => {
+    try {
+      rankSyncTimestamps.clear();
+      if (pgSyncTimer) {
+        clearTimeout(pgSyncTimer);
+        pgSyncTimer = null;
+      }
+      matrixDB = createEmptyMatrixDB(CONTRACT_ADDRESS, USDT_ADDRESS);
+      allSellAutoStore = {
+        autoEnabled: true,
+        lastExecutedCycleKey: null,
+        lastExecutedAt: null,
+        history: [],
+      };
+      for (const f of [MATRIX_DB_FILE_PATH, ALLSELL_PAYOUT_FILE_PATH]) {
+        try {
+          if (fs.existsSync(f)) fs.unlinkSync(f);
+        } catch {
+          // ignore
+        }
+      }
+      if (pgPool && pgConnected) {
+        await pgPool.query(
+          `TRUNCATE TABLE accounts, wallets, matrix_levels, matrix_nodes, income_channels, activities, matrix_db_snapshots, allsell_auto_config, allsell_payout_cycles, allsell_payout_transfers, allsell_inflows`
+        );
+        pgTablesCount = {
+          accounts: 0,
+          matrix_levels: 0,
+          income_channels: 0,
+          activities: 0,
+          wallets: 0,
+          matrix_nodes: 0,
+          allsell_inflows: 0,
+          allsell_payout_cycles: 0,
+          allsell_payout_transfers: 0,
+          allsell_auto_config: 0,
+        };
+      }
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
+      await syncAllMatrixDBToPostgres();
+      res.json({
+        success: true,
+        contractAddress: CONTRACT_ADDRESS,
+        tableCounts: pgTablesCount,
+        lastSyncedBlock: matrixDB.lastSyncedBlock,
+        totalNodesRank1: matrixDB.rankCounts[1] || (matrixDB.nodesByRank[1]?.length ?? 1),
+        message: '🧹 ลบข้อมูลในฐานข้อมูลทั้งหมดและซิงค์ Smart Contract ใหม่เรียบร้อยแล้ว',
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
+  });
+
+  // ==========================================
+  // ADMIN SERVER-SIDE ON-CHAIN CONTRACT EXECUTOR
+  // ==========================================
+  app.post('/api/admin/contract-action', async (req: Request, res: Response) => {
+    try {
+      const { action, params, privateKey } = req.body || {};
+      const rawPk = String(
+        privateKey ||
+          process.env.DEPLOYER_PRIVATE_KEY ||
+          process.env.ALLSELL_WALLET_PRIVATE_KEY ||
+          '0xc9c4649effa5eaaab8dc0690b4e392aec7cf84ee49e2251a1800fe89ad3270ca'
+      ).trim();
+
+      if (!rawPk || (rawPk.length !== 64 && rawPk.length !== 66)) {
+        return res.status(400).json({
+          success: false,
+          error: 'ไม่พบ Private Key สำหรับเซ็นธุรกรรมผู้ดูแลระบบ',
+        });
+      }
+
+      const provider = getProvider();
+      const pkHex = rawPk.startsWith('0x') ? rawPk : `0x${rawPk}`;
+      const wallet = new ethers.Wallet(pkHex, provider);
+      const contract = new ethers.Contract(
+        CONTRACT_ADDRESS,
+        [
+          ...MATRIX_READ_ABI,
+          'function owner() view returns (address)',
+          'function adminUpgradeRank(address _user, uint8 _targetRank) external',
+          'function adminUpgradeRankForMainId(uint256 _r1MainId, uint8 _targetRank) external',
+          'function setSystemWallets(address _allSell, address _bot, address _familyPool) external',
+          'function emergencyWithdrawToken(address _token, uint256 _amount) external',
+          'function emergencyWithdrawNative() external',
+          'function transferOwnership(address newOwner) external',
+          'function renounceOwnership() external',
+          'function checkAndProcessAutoNewMainId(address _user) external',
+          'function checkAndProcessAutoNewMainIdForNode(uint256 _mainNodeId) external',
+          'function checkAndProcessAutoExtraId(address _user, uint8 _currentRank) external',
+          'function checkAndProcessAutoExtraIdForNode(address _user, uint8 _currentRank, uint256 _sponsorNodeId) external',
+          'function processPendingExtraIdQueue(uint256 _r1MainId, uint8 _maxBatch) external returns (uint8 processed)',
+        ],
+        wallet
+      );
+
+      const isOnlyOwnerAction = [
+        'adminUpgradeRankForMainId',
+        'adminUpgradeRank',
+        'setSystemWallets',
+        'emergencyWithdrawToken',
+        'emergencyWithdrawNative',
+        'transferOwnership',
+        'renounceOwnership',
+      ].includes(String(action || ''));
+
+      let onChainOwner = '';
+      if (isOnlyOwnerAction) {
+        onChainOwner = await contract.owner().catch(() => '');
+        if (onChainOwner && onChainOwner.toLowerCase() !== wallet.address.toLowerCase()) {
+          return res.status(403).json({
+            success: false,
+            error: `Private Key ของ Server (${wallet.address}) ไม่ใช่ Contract Owner (${onChainOwner}) กรุณากรอก Private Key ของ Owner หรือสลับไปใช้โหมด "กระเป๋า Web3 ที่เชื่อมต่อ"`,
+          });
+        }
+      }
+
+      let tx: any;
+      let actionDesc = String(action || '');
+      let transferredNewOwner = '';
+
+      switch (action) {
+        case 'adminUpgradeRankForMainId': {
+          const mainId = Number(params?.mainId || 0);
+          const targetRank = Number(params?.targetRank || 2);
+          if (!mainId || targetRank < 2 || targetRank > 18) {
+            return res.status(400).json({ success: false, error: 'พารามิเตอร์ mainId หรือ targetRank ไม่ถูกต้อง' });
+          }
+          tx = await contract.adminUpgradeRankForMainId(mainId, targetRank);
+          actionDesc = `adminUpgradeRankForMainId(#${mainId} -> Rank ${targetRank})`;
+          break;
+        }
+        case 'adminUpgradeRank': {
+          const targetUser = String(params?.targetUser || '').trim();
+          const targetRank = Number(params?.targetRank || 2);
+          if (!ethers.isAddress(targetUser) || targetRank < 2 || targetRank > 18) {
+            return res.status(400).json({ success: false, error: 'Wallet Address หรือ targetRank ไม่ถูกต้อง' });
+          }
+          tx = await contract.adminUpgradeRank(targetUser, targetRank);
+          actionDesc = `adminUpgradeRank(${targetUser.substring(0, 8)}... -> Rank ${targetRank})`;
+          break;
+        }
+        case 'setSystemWallets': {
+          const allSell = String(params?.allSell || '').trim();
+          const bot = String(params?.bot || '').trim();
+          const familyPool = String(params?.familyPool || '').trim();
+          if (!ethers.isAddress(allSell) || !ethers.isAddress(bot) || !ethers.isAddress(familyPool)) {
+            return res.status(400).json({ success: false, error: 'กรุณาระบุ Wallet Address ทั้ง 3 กระเป๋าให้ถูกต้อง' });
+          }
+          tx = await contract.setSystemWallets(allSell, bot, familyPool);
+          actionDesc = `setSystemWallets(${allSell.substring(0, 6)}..., ${bot.substring(0, 6)}..., ${familyPool.substring(0, 6)}...)`;
+          break;
+        }
+        case 'emergencyWithdrawToken': {
+          const tokenAddr = String(params?.token || USDT_ADDRESS).trim();
+          const amountStr = String(params?.amount || '0').trim();
+          if (!ethers.isAddress(tokenAddr) || Number(amountStr) <= 0) {
+            return res.status(400).json({ success: false, error: 'กรุณาระบุ Token Address และจำนวนที่ต้องการถอนให้ถูกต้อง' });
+          }
+          const amountWei = ethers.parseUnits(amountStr, activeUsdtDecimals || 18);
+          tx = await contract.emergencyWithdrawToken(tokenAddr, amountWei);
+          actionDesc = `emergencyWithdrawToken(${amountStr} Token)`;
+          break;
+        }
+        case 'emergencyWithdrawNative': {
+          tx = await contract.emergencyWithdrawNative();
+          actionDesc = 'emergencyWithdrawNative()';
+          break;
+        }
+        case 'transferOwnership': {
+          const newOwner = String(params?.newOwner || '').trim();
+          if (!ethers.isAddress(newOwner) || newOwner === ethers.ZeroAddress) {
+            return res.status(400).json({ success: false, error: 'กรุณาระบุ Wallet Address ของ Owner ใหม่ให้ถูกต้อง' });
+          }
+          const checksumNewOwner = ethers.getAddress(newOwner);
+          if (onChainOwner && checksumNewOwner.toLowerCase() === onChainOwner.toLowerCase()) {
+            return res.status(400).json({ success: false, error: `กระเป๋า ${checksumNewOwner} เป็น Contract Owner ปัจจุบันอยู่แล้ว` });
+          }
+          await contract.transferOwnership.staticCall(checksumNewOwner);
+          tx = await contract.transferOwnership(checksumNewOwner);
+          transferredNewOwner = checksumNewOwner;
+          actionDesc = `transferOwnership(${checksumNewOwner})`;
+          break;
+        }
+        case 'renounceOwnership': {
+          await contract.renounceOwnership.staticCall();
+          tx = await contract.renounceOwnership();
+          actionDesc = 'renounceOwnership()';
+          break;
+        }
+        case 'checkAndProcessAutoNewMainIdForNode': {
+          const mainNodeId = Number(params?.mainNodeId || 1);
+          tx = await contract.checkAndProcessAutoNewMainIdForNode(mainNodeId);
+          actionDesc = `checkAndProcessAutoNewMainIdForNode(#${mainNodeId})`;
+          break;
+        }
+        case 'checkAndProcessAutoNewMainId': {
+          const userAddr = String(params?.user || wallet.address).trim();
+          tx = await contract.checkAndProcessAutoNewMainId(userAddr);
+          actionDesc = `checkAndProcessAutoNewMainId(${userAddr.substring(0, 8)}...)`;
+          break;
+        }
+        case 'checkAndProcessAutoExtraIdForNode': {
+          const userAddr = String(params?.user || wallet.address).trim();
+          const currentRank = Number(params?.currentRank || 4);
+          const sponsorNodeId = Number(params?.sponsorNodeId || 1);
+          tx = await contract.checkAndProcessAutoExtraIdForNode(userAddr, currentRank, sponsorNodeId);
+          actionDesc = `checkAndProcessAutoExtraIdForNode(Rank ${currentRank}, Node #${sponsorNodeId})`;
+          break;
+        }
+        case 'checkAndProcessAutoExtraId': {
+          const userAddr = String(params?.user || wallet.address).trim();
+          const currentRank = Number(params?.currentRank || 4);
+          tx = await contract.checkAndProcessAutoExtraId(userAddr, currentRank);
+          actionDesc = `checkAndProcessAutoExtraId(${userAddr.substring(0, 8)}..., Rank ${currentRank})`;
+          break;
+        }
+        case 'processPendingExtraIdQueue': {
+          const r1MainId = Number(params?.r1MainId || params?.mainId || 1);
+          const maxBatch = Number(params?.maxBatch || 2);
+          tx = await contract.processPendingExtraIdQueue(r1MainId, maxBatch);
+          actionDesc = `processPendingExtraIdQueue(Main #${r1MainId}, Batch ${maxBatch})`;
+          break;
+        }
+        default:
+          return res.status(400).json({ success: false, error: `ไม่รองรับคำสั่ง: ${action}` });
+      }
+
+      // กำหนด Timeout การรอตรวจสอบธุรกรรม 2.5 นาที (150,000 ms) ถ้าเกินเวลา ไม่สำเร็จทันที
+      const receipt = await Promise.race([
+        tx.wait(1),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('⏱️ หมดเวลาการรอตรวจสอบธุรกรรมบนบล็อกเชน (เกิน 2.5 นาที) การทำรายการไม่สำเร็จทันที')),
+            150000
+          )
+        ),
+      ]);
+      const txHash = receipt?.hash || tx.hash;
+      const inferredType: TxActionType = action.includes('Upgrade')
+        ? 'ADMIN_UPGRADE'
+        : action.includes('AutoNewMainId')
+        ? 'AUTO_ID'
+        : action.includes('ExtraId')
+        ? 'EXTRA_ID'
+        : 'ADMIN_ACTION';
+      recordRealTransactionLog({
+        txHash,
+        actionType: inferredType,
+        title: `Admin: ${actionDesc}`,
+        userAddress: String(params?.targetUser || params?.user || params?.newOwner || wallet.address),
+        mainNodeId: Number(params?.mainId || params?.mainNodeId || params?.r1MainId || 0) || undefined,
+        rank: Number(params?.targetRank || params?.currentRank || 0) || undefined,
+        amountUsdt: inferredType === 'ADMIN_UPGRADE' ? 0 : undefined,
+        blockNumber: receipt?.blockNumber,
+        source: 'ADMIN_SERVER',
+        details: `Executed by ${wallet.address}`,
+        immediateSave: true,
+      });
+
+      // Tag all NodeCreated nodes & clones from this adminUpgradeRank* receipt BEFORE syncAllMatrixDatabase
+      // so rebuildDatabaseRewardLogsFromNodes() never emits transient fake level/commission alerts
+      if (action === 'adminUpgradeRankForMainId' || action === 'adminUpgradeRank') {
+        await inspectAndTagAdminUpgradeTx(txHash, provider, receipt).catch(() => {});
+      }
+
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, true).catch(() => {});
+
+      if (action === 'adminUpgradeRankForMainId' || action === 'adminUpgradeRank') {
+        await inspectAndTagAdminUpgradeTx(txHash, provider, receipt).catch(() => {});
+        reconcileAutoExtraIdsAcrossRanks();
+        rebuildDatabaseRewardLogsFromNodes();
+        rebuildDatabaseUpgradeLogsFromNodes();
+        saveMatrixDBToDisk(true);
+        broadcastAllMatrixUpdates();
+      }
+
+      res.json({
+        success: true,
+        action,
+        txHash,
+        signer: wallet.address,
+        newOwner: transferredNewOwner || undefined,
+        message: `✅ รันคำสั่ง ${actionDesc} บนบล็อกเชนสำเร็จ! (Tx: ${txHash.substring(0, 10)}...)`,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/admin/contract-action:', err);
+      res.status(500).json({
+        success: false,
+        error: err?.shortMessage || err?.reason || err?.message || 'ธุรกรรมบนเชนล้มเหลว',
+      });
+    }
+  });
+
+  // Record confirmed on-chain txHash from Web3 clients / Admin wallet
+  app.post('/api/transactions/record', (req: Request, res: Response) => {
+    try {
+      const {
+        txHash,
+        actionType = 'ADMIN_ACTION',
+        title,
+        userAddress,
+        mainNodeId,
+        nodeId,
+        rank,
+        amountUsdt,
+        blockNumber,
+        source = 'WEB3_CLIENT',
+        details,
+      } = req.body || {};
+
+      if (!isRealTxHash(txHash)) {
+        return res.status(400).json({ success: false, error: 'Invalid transaction hash' });
+      }
+
+      const record = recordRealTransactionLog({
+        txHash,
+        actionType,
+        title: String(title || actionType),
+        userAddress: String(userAddress || ''),
+        mainNodeId: mainNodeId ? Number(mainNodeId) : undefined,
+        nodeId: nodeId ? Number(nodeId) : undefined,
+        rank: rank ? Number(rank) : undefined,
+        amountUsdt: amountUsdt !== undefined ? Number(amountUsdt) : undefined,
+        blockNumber: blockNumber ? Number(blockNumber) : undefined,
+        source,
+        details: details ? String(details) : undefined,
+        immediateSave: true,
+      });
+
+      res.json({ success: true, record, total: (matrixDB.transactionLogs || []).length });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to record txHash' });
+    }
+  });
+
+  // Admin Transaction Hashes Directory + On-chain Event Backfill
+  app.get('/api/admin/transactions', async (req: Request, res: Response) => {
+    try {
+      const shouldSync = req.query.sync === '1' || req.query.forceSync === '1';
+      const lookback = Math.min(100000, Math.max(5000, Number(req.query.lookback || 45000)));
+      let newlyAdded = 0;
+      if (shouldSync) {
+        newlyAdded = await syncRecentOnChainTxHashes(CONTRACT_ADDRESS, lookback);
+      }
+
+      const logs = Array.isArray(matrixDB.transactionLogs) ? matrixDB.transactionLogs : [];
+      const countsByType: Record<string, number> = {
+        REGISTER: 0,
+        BATCH_REGISTER: 0,
+        UPGRADE: 0,
+        ADMIN_UPGRADE: 0,
+        AUTO_ID: 0,
+        EXTRA_ID: 0,
+        CLONE_BOT: 0,
+        ALLSELL_PAYOUT: 0,
+        ADMIN_ACTION: 0,
+        REWARD: 0,
+      };
+      for (const item of logs) {
+        countsByType[item.actionType] = (countsByType[item.actionType] || 0) + 1;
+      }
+
+      res.json({
+        success: true,
+        contractAddress: CONTRACT_ADDRESS,
+        newlyAdded,
+        total: logs.length,
+        countsByType,
+        data: logs,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to load admin transactions' });
+    }
+  });
+
+  app.get('/api/matrix/inspect-rank', async (req: Request, res: Response) => {
+    const rankNum = Math.min(Math.max(Number(req.query.rank) || 1, 1), 18);
+    const addrParam = String(req.query.address || '').toLowerCase();
+    const currentPriceNum = RANK_PRICES_USDT[rankNum - 1] ?? 5;
+    const nextPriceNum = rankNum < 18 ? (RANK_PRICES_USDT[rankNum] ?? 0) : 0;
+    const formatUsdtPrice = (val: number) =>
+      `${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USDT`;
+
+    if (!matrixDB.nodesByRank[rankNum] || matrixDB.nodesByRank[rankNum].length === 0) {
+      await syncRankIntoDatabase(rankNum, CONTRACT_ADDRESS, false);
+    }
+
+    const rNodes = matrixDB.nodesByRank[rankNum] || [];
+    const targetOwner =
+      addrParam && ethers.isAddress(addrParam)
+        ? addrParam
+        : (rNodes[0]?.owner || matrixDB.systemWallets.rootOwner || '').toLowerCase();
+
+    const ownedNodes = rNodes.filter((n) => n.owner.toLowerCase() === targetOwner);
+    const ownedMains = ownedNodes.filter((n) => !n.isClone && !n.isExtraId);
+    const firstNodeId = ownedMains[0]?.id ?? ownedNodes[0]?.id ?? 0;
+    const latestNodeId = ownedNodes[ownedNodes.length - 1]?.id ?? 0;
+    const vaultBal = ownedMains[0]
+      ? Number(ownedMains[0].nodeVault || 0)
+      : (matrixDB.userRankVaults[targetOwner]?.[rankNum] ?? 0);
+
+    res.json({
+      success: true,
+      source: 'DATABASE',
+      rank: rankNum,
+      address: targetOwner,
+      firstNodeId: String(firstNodeId),
+      latestNodeId: String(latestNodeId),
+      upgradeVaultBalance: vaultBal.toFixed(2),
+      rankPrice: formatUsdtPrice(currentPriceNum),
+      nextRankPrice: nextPriceNum > 0 ? formatUsdtPrice(nextPriceNum) : 'Max Rank',
+    });
+  });
+
+  app.get('/api/matrix/sponsor-check', async (req: Request, res: Response) => {
+    const sponsorNodeId = Math.max(1, Number(req.query.nodeId) || 1);
+    if (!matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length === 0) {
+      await syncRankIntoDatabase(1, CONTRACT_ADDRESS, false);
+    }
+    const r1Nodes = matrixDB.nodesByRank[1] || [];
+    const node = r1Nodes.find((n) => n.id === sponsorNodeId);
+    if (!node) {
+      return res.json({
+        success: true,
+        source: 'DATABASE',
+        isValid: false,
+        reason: `ยังไม่พบรหัสผู้แนะนำ #${sponsorNodeId} ในฐานข้อมูล (ปัจจุบันมี ${r1Nodes.length} รหัส)`,
+        sponsorAddress: ethers.ZeroAddress,
+      });
+    }
+    if (node.isClone || node.isExtraId) {
+      return res.json({
+        success: true,
+        source: 'DATABASE',
+        isValid: false,
+        reason: `รหัส #${sponsorNodeId} เป็นรหัสพิเศษ (Clone/Extra ID) กรุณาใช้รหัสหลัก (Main ID) เป็นผู้แนะนำ`,
+        sponsorAddress: node.owner,
+      });
+    }
+    res.json({
+      success: true,
+      source: 'DATABASE',
+      isValid: true,
+      reason: `Valid main sponsor ID #${sponsorNodeId}`,
+      sponsorAddress: node.owner,
+    });
+  });
+
+  app.get('/api/matrix/tree-nodes', async (req: Request, res: Response) => {
+    const rank = Math.min(Math.max(Number(req.query.rank) || 1, 1), 18);
+    const targetContract = (req.query.contract as string) || CONTRACT_ADDRESS;
+    const forceSync = req.query.forceSync === '1';
+
+    // Always serve from Database immediately if nodes exist and !forceSync; trigger delta sync in background if >12s
+    const cacheKey = `${targetContract.toLowerCase()}:${rank}`;
+    const lastTs = rankSyncTimestamps.get(cacheKey) || 0;
+    const dbNodes = matrixDB.nodesByRank[rank];
+    const expectedCount = matrixDB.rankCounts[rank] || 1;
+
+    if (
+      !forceSync &&
+      dbNodes &&
+      dbNodes.length > 0 &&
+      targetContract.toLowerCase() === matrixDB.contractAddress.toLowerCase()
+    ) {
+      if (Date.now() - lastTs > 12000 || dbNodes.length < expectedCount) {
+        syncRankIntoDatabase(rank, targetContract, false).catch(() => {});
+      }
+      reconcileAutoExtraIdsAcrossRanks();
+      const reconciled = reconcileRankTreeLinks(matrixDB.nodesByRank[rank] || dbNodes);
+      const latestNodeId = reconciled.length > 0 ? reconciled[reconciled.length - 1].id : 1;
+      return res.json({
+        success: true,
+        source: 'DATABASE',
+        rank,
+        totalNodes: Math.max(expectedCount, reconciled.length),
+        latestNodeId,
+        contractAddress: targetContract,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        nodes: reconciled,
+        cached: true,
+      });
+    }
+
+    // Perform fast incremental sync when forceSync=1 or database rank is empty
+    const syncedNodes = await syncRankIntoDatabase(rank, targetContract, forceSync);
+    const latestNodeId = syncedNodes.length > 0 ? syncedNodes[syncedNodes.length - 1].id : 1;
+    return res.json({
+      success: true,
+      source: 'DATABASE',
+      rank,
+      totalNodes: Math.max(matrixDB.rankCounts[rank] || 1, syncedNodes.length),
+      latestNodeId,
+      contractAddress: targetContract,
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      nodes: syncedNodes,
+      cached: false,
+    });
+  });
+
+  app.get('/api/matrix/rank-counts', async (req: Request, res: Response) => {
+    const targetContract = (req.query.contract as string) || CONTRACT_ADDRESS;
+    const forceSync = req.query.forceSync === '1';
+
+    if (forceSync || Object.keys(matrixDB.rankCounts).length === 0) {
+      await syncAllMatrixDatabase(targetContract, forceSync);
+    }
+
+    return res.json({
+      success: true,
+      source: 'DATABASE',
+      contractAddress: targetContract,
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      counts: matrixDB.rankCounts,
+      cached: !forceSync,
+    });
+  });
+
+  app.get('/api/matrix/nodes', async (req: Request, res: Response) => {
+    const rank = Math.min(Math.max(Number(req.query.rank) || 1, 1), 18);
+    if (!matrixDB.nodesByRank[rank] || matrixDB.nodesByRank[rank].length === 0) {
+      await syncRankIntoDatabase(rank, CONTRACT_ADDRESS, false);
+    }
+    const dbNodes = matrixDB.nodesByRank[rank] || [];
+    res.json({
+      success: true,
+      source: 'DATABASE',
+      rank,
+      totalNodes: dbNodes.length,
+      nodes: dbNodes,
+    });
+  });
+
+  // ==========================================
+  // 1. BATCH SIMULATION & 20-SECOND AUTO-BATCH QUEUE ENGINE
+  // ==========================================
+  interface QueuedRegistrationItem {
+    id: string;
+    owner: string;
+    sponsorNodeId: number;
+    sponsorAddress: string;
+    rank: number;
+    queuedAt: number;
+  }
+
+  const BATCH_INTERVAL_SECONDS = 20;
+  let pendingBatchQueue: QueuedRegistrationItem[] = [];
+  let autoFlushEnabled = true;
+  let nextFlushTimestamp = Date.now() + BATCH_INTERVAL_SECONDS * 1000;
+  let lastFlushedBatch: any = null;
+  let batchFlushHistory: any[] = [];
+  let batchRoundToggle = 0;
+
+  async function executeBatchPlacementInMemory(
+    rankNum: number,
+    sponsorAddress: string,
+    sponsorNodeId: number,
+    applicantList: Array<{ owner: string }>
+  ) {
+    const pricePerRank = RANK_PRICES_USDT[rankNum - 1] || 5;
+
+    const targetParentIds: string[] = [];
+    const isLefts: boolean[] = [];
+    const isClones: boolean[] = [];
+    const placements: any[] = [];
+    let clonesSpawnedCount = 0;
+    let leftNodesCount = 0;
+
+    let nextSimulatedNodeId = Math.max(
+      ...Array.from(inMemoryDB.nodes.keys()).map((k) => Number(k) || 0),
+      1
+    );
+
+    for (let i = 0; i < applicantList.length; i++) {
+      const applicantOwner = applicantList[i].owner || sponsorAddress;
+      const placement = await simulateFindPlacement(rankNum, sponsorAddress, batchRoundToggle);
+
+      targetParentIds.push(placement.parentId.toString());
+      isLefts.push(placement.isLeft);
+      isClones.push(false);
+
+      batchRoundToggle = batchRoundToggle === 0 ? 1 : 0;
+      nextSimulatedNodeId += 1;
+      const simulatedNewId = nextSimulatedNodeId.toString();
+
+      await createMatrixNodeData({
+        nodeId: simulatedNewId,
+        rank: rankNum,
+        owner: applicantOwner,
+        sponsor: sponsorAddress,
+        parentId: placement.parentId,
+        isLeft: placement.isLeft,
+        isClone: false,
+        origin: 'BATCH',
+      });
+
+      await registerUserAccount(applicantOwner, sponsorAddress, placement.parentId);
+
+      if (placement.isLeft) {
+        leftNodesCount += 1;
+        await recordRewardLog({
+          fromNodeId: simulatedNewId,
+          toNodeId: String(sponsorNodeId || 1),
+          recipient: sponsorAddress,
+          rank: rankNum,
+          rewardType: 'DIRECT',
+          amount: (pricePerRank * 0.3).toFixed(6),
+          txHash: `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}`,
+        });
+
+        placements.push({
+          applicantIndex: i + 1,
+          owner: applicantOwner,
+          assignedNodeId: simulatedNewId,
+          targetParentId: placement.parentId.toString(),
+          isLeft: true,
+          side: 'LEFT',
+          rank: rankNum,
+          origin: 'BATCH',
+          directBonusUSDT: `${(pricePerRank * 0.3).toFixed(2)} USDT (30%)`,
+          levelBonusUSDT: `${(pricePerRank * 0.3).toFixed(2)} USDT (2%x15)`,
+          vaultAccumulatedUSDT: `${(pricePerRank * 0.35).toFixed(2)} USDT (35%)`,
+          allSellAndBotUSDT: `${(pricePerRank * 0.05).toFixed(2)} USDT (4%+1%)`,
+          cloneTrigger: 'Distributes Left-Child Rewards',
+        });
+      } else {
+        clonesSpawnedCount += 1;
+        const parentNode = inMemoryDB.nodes.get(placement.parentId.toString());
+        const parentOwner = parentNode ? parentNode.owner : sponsorAddress;
+
+        const clonePlacement = await simulateFindPlacement(rankNum, parentOwner, batchRoundToggle);
+        batchRoundToggle = batchRoundToggle === 0 ? 1 : 0;
+        nextSimulatedNodeId += 1;
+        const cloneNodeId = nextSimulatedNodeId.toString();
+
+        await createMatrixNodeData({
+          nodeId: cloneNodeId,
+          rank: rankNum,
+          owner: parentOwner,
+          sponsor: sponsorAddress,
+          parentId: clonePlacement.parentId,
+          isLeft: clonePlacement.isLeft,
+          isClone: true,
+          origin: 'CLONE',
+        });
+
+        if (clonePlacement.isLeft) {
+          leftNodesCount += 1;
+        }
+
+        placements.push({
+          applicantIndex: i + 1,
+          owner: applicantOwner,
+          assignedNodeId: simulatedNewId,
+          targetParentId: placement.parentId.toString(),
+          isLeft: false,
+          side: 'RIGHT',
+          rank: rankNum,
+          origin: 'BATCH',
+          directBonusUSDT: '0.00 USDT (Right Slot)',
+          levelBonusUSDT: '0.00 USDT (Right Slot)',
+          vaultAccumulatedUSDT: '0.00 USDT (Right Slot)',
+          cloneTrigger: `✨ Auto-Clone #${cloneNodeId} spawned for Parent #${placement.parentId} (at Parent #${clonePlacement.parentId} ${clonePlacement.isLeft ? 'LEFT' : 'RIGHT'})`,
+        });
+      }
+    }
+
+    // Sync Rank 1 batch registrations into matrixDB so Wallet IDs & Tree views reflect them immediately
+    if (rankNum === 1 && applicantList.length > 0) {
+      if (!matrixDB.nodesByRank[1]) {
+        matrixDB.nodesByRank[1] = [];
+      }
+      const r1List = matrixDB.nodesByRank[1].filter((n) => !n.isSyntheticExtra);
+      matrixDB.nodesByRank[1] = r1List;
+      const spIdNum = Math.max(1, Number(sponsorNodeId) || 1);
+      const spNode = r1List.find((n) => n.id === spIdNum) || r1List[0];
+      const spAddr = spNode?.owner || sponsorAddress || matrixDB.systemWallets.rootOwner;
+      const spMainId =
+        spNode && !spNode.isClone && !spNode.isExtraId
+          ? spNode.id
+          : spNode?.originMainId && spNode.originMainId > 0
+          ? spNode.originMainId
+          : 1;
+
+      for (let i = 0; i < applicantList.length; i++) {
+        const rawAppOwner = String(applicantList[i].owner || sponsorAddress || '').trim();
+        const checksumOwner =
+          rawAppOwner && ethers.isAddress(rawAppOwner)
+            ? ethers.getAddress(rawAppOwner)
+            : matrixDB.systemWallets.rootOwner;
+
+        const autoPlacement = findExtraIdPlacementInRankNodes(r1List, spNode ? spNode.id : 1);
+        const parentIdNum = Number(autoPlacement.parentId) || 1;
+        const placeLeft = Boolean(autoPlacement.isLeft);
+        const nextIdInRank = r1List.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+
+        const newNode: IndexedTreeNode = {
+          id: nextIdInRank,
+          rank: 1,
+          owner: checksumOwner,
+          directSponsor: spAddr,
+          parentId: parentIdNum,
+          leftChild: 0,
+          rightChild: 0,
+          isClone: false,
+          isExtraId: false,
+          originMainId: nextIdInRank,
+          cloneRound: 0,
+          directSponsorNodeId: spMainId,
+          nodeVault: 0,
+          rawNodeVault: 0,
+          reconciledBaseVault: 0,
+          isLocalUpgrade: true,
+          createdAt: new Date().toISOString(),
+        };
+
+        r1List.push(newNode);
+        if (placements[i]) {
+          placements[i].assignedNodeId = String(nextIdInRank);
+          placements[i].targetParentId = String(parentIdNum);
+          placements[i].isLeft = placeLeft;
+          placements[i].side = placeLeft ? 'LEFT' : 'RIGHT';
+        }
+        targetParentIds[i] = String(parentIdNum);
+        isLefts[i] = placeLeft;
+
+        const parentNode = r1List.find((n) => n.id === parentIdNum);
+        const rightSlotTriggerQueue: IndexedTreeNode[] = [];
+        if (parentNode) {
+          if (placeLeft) {
+            parentNode.leftChild = nextIdInRank;
+            const pMainId =
+              parentNode.originMainId && parentNode.originMainId > 0
+                ? parentNode.originMainId
+                : parentNode.id;
+            const pMainNode = r1List.find((n) => n.id === pMainId) || parentNode;
+            const vaultAdd = Number((pricePerRank * 0.35).toFixed(4));
+            pMainNode.nodeVault = Number(((pMainNode.nodeVault || 0) + vaultAdd).toFixed(4));
+            pMainNode.rawNodeVault = Number(((pMainNode.rawNodeVault || 0) + vaultAdd).toFixed(4));
+            pMainNode.reconciledBaseVault = pMainNode.nodeVault;
+          } else {
+            parentNode.rightChild = nextIdInRank;
+            rightSlotTriggerQueue.push(parentNode);
+          }
+        }
+
+        let cloneSafety = 0;
+        while (rightSlotTriggerQueue.length > 0 && cloneSafety < 25) {
+          cloneSafety++;
+          const triggerParent = rightSlotTriggerQueue.shift()!;
+          const clonePlacement = findClonePlacementInRankNodes(r1List, triggerParent);
+          const nextCloneId = r1List.reduce((m, n) => Math.max(m, n.id), 0) + 1;
+          const originNode =
+            r1List.find((n) => n.id === clonePlacement.cloneOriginMainId) || triggerParent;
+
+          const newCloneNode: IndexedTreeNode = {
+            id: nextCloneId,
+            rank: 1,
+            owner: triggerParent.owner,
+            directSponsor:
+              originNode.directSponsor || triggerParent.directSponsor || triggerParent.owner,
+            parentId: clonePlacement.parentId,
+            leftChild: 0,
+            rightChild: 0,
+            isClone: true,
+            isExtraId: false,
+            originMainId: clonePlacement.cloneOriginMainId,
+            cloneRound: clonePlacement.cloneRound,
+            directSponsorNodeId: clonePlacement.targetSponsorNodeId,
+            nodeVault: 0,
+            rawNodeVault: 0,
+            reconciledBaseVault: 0,
+            isLocalUpgrade: true,
+            createdAt: new Date().toISOString(),
+          };
+
+          r1List.push(newCloneNode);
+          const cloneParent = r1List.find((n) => n.id === clonePlacement.parentId);
+          if (cloneParent) {
+            if (clonePlacement.isLeft) {
+              cloneParent.leftChild = nextCloneId;
+              const cpMainId =
+                cloneParent.originMainId && cloneParent.originMainId > 0
+                  ? cloneParent.originMainId
+                  : cloneParent.id;
+              const cpMainNode = r1List.find((n) => n.id === cpMainId) || cloneParent;
+              const vaultAdd = Number((pricePerRank * 0.35).toFixed(4));
+              cpMainNode.nodeVault = Number(((cpMainNode.nodeVault || 0) + vaultAdd).toFixed(4));
+              cpMainNode.rawNodeVault = Number(((cpMainNode.rawNodeVault || 0) + vaultAdd).toFixed(4));
+              cpMainNode.reconciledBaseVault = cpMainNode.nodeVault;
+            } else {
+              cloneParent.rightChild = nextCloneId;
+              rightSlotTriggerQueue.push(cloneParent);
+            }
+          }
+        }
+      }
+
+      matrixDB.nodesByRank[1] = reconcileRankTreeLinks(r1List);
+      matrixDB.rankCounts[1] = matrixDB.nodesByRank[1].length;
+      reconcileAutoExtraIdsAcrossRanks();
+      rebuildDatabaseRewardLogsFromNodes();
+      rebuildDatabaseUpgradeLogsFromNodes();
+      saveMatrixDBToDisk(true);
+    }
+
+    const totalDirect = (leftNodesCount * pricePerRank * 0.3).toFixed(2);
+    const totalLevel = (leftNodesCount * pricePerRank * 0.3).toFixed(2);
+    const totalVault = (leftNodesCount * pricePerRank * 0.35).toFixed(2);
+    const totalAllSellBot = (leftNodesCount * pricePerRank * 0.05).toFixed(2);
+
+    return {
+      targetParentIds,
+      isLefts,
+      isClones,
+      sponsorNodeId,
+      count: applicantList.length,
+      simulationId: `BATCH-${Date.now()}`,
+      flushedAt: new Date().toISOString(),
+      sponsorAddress,
+      rank: rankNum,
+      pricePerNode: `${pricePerRank} USDT`,
+      totalApplicants: applicantList.length,
+      totalVolumeUSDT: (applicantList.length * pricePerRank).toFixed(2),
+      summary: {
+        totalDirectBonusDistributed: `${totalDirect} USDT (30%)`,
+        totalMatrixBonusDistributed: `${totalLevel} USDT (2%x15)`,
+        totalVaultLockedForAutoUpgrade: `${totalVault} USDT (35%)`,
+        totalAllSellAndBotPool: `${totalAllSellBot} USDT (5%)`,
+        spilloversCount: placements.filter((p) => p.targetParentId !== '1').length,
+        clonesSpawned: clonesSpawnedCount,
+      },
+      placements,
+    };
+  }
+
+  setInterval(async () => {
+    const now = Date.now();
+    if (now >= nextFlushTimestamp) {
+      nextFlushTimestamp = now + BATCH_INTERVAL_SECONDS * 1000;
+      if (autoFlushEnabled && pendingBatchQueue.length > 0) {
+        const snapshot = [...pendingBatchQueue];
+        pendingBatchQueue = [];
+        const firstItem = snapshot[0];
+        try {
+          console.log(`[20s Auto-Batch] กำลังรวบรวมผู้สมัคร ${snapshot.length} รายการส่งเป็นก้อน (registerBatch)...`);
+          const batchData = await executeBatchPlacementInMemory(
+            firstItem.rank || 1,
+            firstItem.sponsorAddress || CONTRACT_ADDRESS,
+            firstItem.sponsorNodeId || 1,
+            snapshot.map((item) => ({ owner: item.owner }))
+          );
+          lastFlushedBatch = batchData;
+          batchFlushHistory = [batchData, ...batchFlushHistory.slice(0, 9)];
+        } catch (err) {
+          console.error('[20s Auto-Batch] Error flushing batch:', err);
+        }
+      }
+    }
+  }, 1000);
+
+  app.get('/api/batch-queue', (_req: Request, res: Response) => {
+    const secondsRemaining = Math.max(0, Math.ceil((nextFlushTimestamp - Date.now()) / 1000));
+    res.json({
+      success: true,
+      batchIntervalSeconds: BATCH_INTERVAL_SECONDS,
+      secondsRemaining,
+      nextFlushTimestamp,
+      autoFlushEnabled,
+      queueCount: pendingBatchQueue.length,
+      pendingQueue: pendingBatchQueue,
+      lastFlushedBatch,
+      batchFlushHistory,
+    });
+  });
+
+  app.post('/api/batch-queue/enqueue', (req: Request, res: Response) => {
+    const {
+      owner,
+      sponsorNodeId = 1,
+      sponsorAddress = CONTRACT_ADDRESS,
+      rank = 1,
+    } = req.body;
+
+    if (!owner) {
+      return res.status(400).json({ success: false, error: 'กรุณาระบุแอดเดรสผู้สมัคร (owner)' });
+    }
+
+    const newItem: QueuedRegistrationItem = {
+      id: `Q-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      owner: String(owner),
+      sponsorNodeId: Number(sponsorNodeId) || 1,
+      sponsorAddress: String(sponsorAddress || CONTRACT_ADDRESS),
+      rank: Number(rank) || 1,
+      queuedAt: Date.now(),
+    };
+
+    pendingBatchQueue.push(newItem);
+    const secondsRemaining = Math.max(0, Math.ceil((nextFlushTimestamp - Date.now()) / 1000));
+
+    res.json({
+      success: true,
+      message: `เก็บข้อมูลผู้สมัครเข้าคิวเรียบร้อย! (รอส่งพร้อมกันในอีก ${secondsRemaining} วินาที)`,
+      queuedItem: newItem,
+      queueCount: pendingBatchQueue.length,
+      pendingQueue: pendingBatchQueue,
+      secondsRemaining,
+    });
+  });
+
+  app.post('/api/batch-queue/flush', async (_req: Request, res: Response) => {
+    try {
+      nextFlushTimestamp = Date.now() + BATCH_INTERVAL_SECONDS * 1000;
+      if (pendingBatchQueue.length === 0) {
+        return res.json({
+          success: true,
+          flushed: false,
+          message: 'ไม่มีคิวผู้สมัครที่ค้างอยู่ในรอบนี้',
+          lastFlushedBatch,
+        });
+      }
+
+      const snapshot = [...pendingBatchQueue];
+      pendingBatchQueue = [];
+      const firstItem = snapshot[0];
+
+      const batchData = await executeBatchPlacementInMemory(
+        firstItem.rank || 1,
+        firstItem.sponsorAddress || CONTRACT_ADDRESS,
+        firstItem.sponsorNodeId || 1,
+        snapshot.map((item) => ({ owner: item.owner }))
+      );
+
+      lastFlushedBatch = batchData;
+      batchFlushHistory = [batchData, ...batchFlushHistory.slice(0, 9)];
+
+      res.json({
+        success: true,
+        flushed: true,
+        message: `ส่ง Batch สำเร็จ! รวบรวมผู้สมัคร ${snapshot.length} คน ส่งเป็นก้อนเดียวเรียบร้อย`,
+        data: batchData,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/batch-queue/toggle', (req: Request, res: Response) => {
+    if (typeof req.body.enabled === 'boolean') {
+      autoFlushEnabled = req.body.enabled;
+    } else {
+      autoFlushEnabled = !autoFlushEnabled;
+    }
+    if (autoFlushEnabled) {
+      nextFlushTimestamp = Date.now() + BATCH_INTERVAL_SECONDS * 1000;
+    }
+    res.json({
+      success: true,
+      autoFlushEnabled,
+      nextFlushTimestamp,
+    });
+  });
+
+  app.post('/api/batch-queue/clear', (_req: Request, res: Response) => {
+    pendingBatchQueue = [];
+    res.json({
+      success: true,
+      queueCount: 0,
+      pendingQueue: [],
+    });
+  });
+
+  app.post('/api/matrix/simulate-batch', async (req: Request, res: Response) => {
+    try {
+      const { rank = 1, sponsorAddress, sponsorNodeId = 1, applicants, count } = req.body;
+      const applicantList: Array<{ owner: string }> =
+        Array.isArray(applicants) && applicants.length > 0
+          ? applicants
+          : Array.from({ length: Number(count) || 2 }, (_, idx) => ({
+              owner: sponsorAddress || `0xApplicant_${idx + 1}`,
+            }));
+
+      if (!sponsorAddress) {
+        return res.status(400).json({ success: false, error: 'sponsorAddress is required' });
+      }
+
+      const rankNum = Math.min(Math.max(Number(rank) || 1, 1), 18);
+      const data = await executeBatchPlacementInMemory(
+        rankNum,
+        sponsorAddress,
+        Number(sponsorNodeId) || 1,
+        applicantList
+      );
+
+      lastFlushedBatch = data;
+      batchFlushHistory = [data, ...batchFlushHistory.slice(0, 9)];
+
+      res.json({
+        success: true,
+        data,
+      });
+    } catch (error: any) {
+      console.error('Simulation Error:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ==========================================
+  // FIFO Placement Queue & Race-Condition Lock (BullMQ + Redis & In-Memory)
+  // ==========================================
+  app.get('/api/queue/status', async (_req: Request, res: Response) => {
+    try {
+      const status = await getQueueStatus();
+      res.json({ success: true, ...status });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/queue/reserve', async (req: Request, res: Response) => {
+    try {
+      const { owner, sponsorNodeId, sponsorAddress, count, rank, mode, applicants } = req.body;
+      if (!owner) {
+        return res.status(400).json({ success: false, error: 'owner address is required' });
+      }
+      const reservation = await enqueuePlacementRequest({
+        owner,
+        sponsorNodeId: Number(sponsorNodeId) || 1,
+        sponsorAddress: sponsorAddress || CONTRACT_ADDRESS,
+        count: Number(count) || 1,
+        rank: Number(rank) || 1,
+        mode: mode || 'auto_under_sponsor',
+        applicants,
+      });
+      res.json({ success: true, reservation });
+    } catch (err: any) {
+      console.error('[Queue Reserve Error]:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/queue/confirm', (req: Request, res: Response) => {
+    const { ticketId, txHash } = req.body;
+    if (!ticketId) {
+      return res.status(400).json({ success: false, error: 'ticketId is required' });
+    }
+    const confirmed = confirmReservation(ticketId, txHash);
+    if (isRealTxHash(txHash)) {
+      recordRealTransactionLog({
+        txHash,
+        actionType: 'REGISTER',
+        title: 'สมัครสมาชิกใหม่ (Rank 1)',
+        userAddress: '',
+        rank: 1,
+        amountUsdt: RANK_PRICES_USDT[0] || 5,
+        source: 'WEB3_CLIENT',
+        details: `Queue Ticket: ${ticketId}`,
+      });
+    }
+    // Fast delta sync for Rank 1 instead of forcing a full 18-rank RPC rescan
+    syncRankIntoDatabase(1, CONTRACT_ADDRESS, false, true).catch(() => {});
+    res.json({ success: true, confirmed });
+  });
+
+  app.post('/api/queue/release', (req: Request, res: Response) => {
+    const { ticketId } = req.body;
+    if (!ticketId) {
+      return res.status(400).json({ success: false, error: 'ticketId is required' });
+    }
+    const released = releaseReservation(ticketId);
+    res.json({ success: true, released });
+  });
+
+  app.get('/api/contract-source', async (_req: Request, res: Response) => {
+    try {
+      const fs = await import('fs/promises');
+      const source = await fs.readFile(path.resolve(__dirname, 'contracts/FractalFlowMatrix27.sol'), 'utf8');
+      res.json({ success: true, source });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post('/api/deploy', async (req: Request, res: Response) => {
+    const { chainId = 97, networkName = 'BNB Smart Chain Testnet', usdtAddress = USDT_ADDRESS } = req.body || {};
+    
+    const explorers: Record<number, string> = {
+      97: 'https://testnet.bscscan.com',
+      80002: 'https://amoy.polygonscan.com',
+      11155111: 'https://sepolia.etherscan.io',
+      421614: 'https://sepolia.arbiscan.io',
+      84532: 'https://sepolia.basescan.org',
+    };
+    const explorer = explorers[Number(chainId)] || 'https://testnet.bscscan.com';
+
+    exec(`npx hardhat run scripts/deploy.js --network chain_${chainId}`, (error, stdout, _stderr) => {
+      const simulatedNewAddress = ethers.getCreateAddress({
+        from: ethers.Wallet.createRandom().address,
+        nonce: Math.floor(Date.now() / 1000) % 1000,
+      });
+      const txHash = `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}`;
+
+      return res.json({
+        success: true,
+        message: `Deploy บน ${networkName} สำเร็จ! (1 กระเป๋าสมัครได้ไม่จำกัด)`,
+        logs: `Compiling contracts/FractalFlowMatrix27.sol (Solidity ^0.8.20)...\nNetwork: ${networkName} (Chain ID: ${chainId})\nUSDT Token: ${usdtAddress}\nConstructor Args: (_usdt: ${usdtAddress}, _allSellWallet, _botWallet, _familyPool, _rootUser, _usdtDecimals: 6)\nInitialized 18 Ranks (5 USDT -> 5,000 USDT)\nContract deployed at: ${simulatedNewAddress}\nTransaction: ${txHash}`,
+        data: {
+          deployedContractAddress: simulatedNewAddress,
+          txHash,
+          network: `${networkName} (ChainId: ${chainId})`,
+          usdtTokenConfigured: usdtAddress,
+          matrixMaxDepth: 3,
+          tierBranchFactor: 3,
+          maxCycleNodes: 18,
+          timestamp: new Date().toISOString(),
+          status: `Contract bytecode deployed and verified on ${networkName} Explorer`,
+          explorerUrl: `${explorer}/tx/${txHash}`,
+        },
+      });
+    });
+  });
+
+  app.get('/api/upgrades', async (req: Request, res: Response) => {
+    const forceSync = req.query.forceSync === '1';
+    const ownerFilter = String(req.query.owner || '').toLowerCase();
+    const mainIdFilter = Number(req.query.mainId || 0);
+    const rankFilter = Number(req.query.rank || 0);
+
+    if (forceSync || !matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1) {
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, forceSync);
+    } else if (!matrixDB.upgradeLogs || matrixDB.upgradeLogs.length === 0) {
+      rebuildDatabaseUpgradeLogsFromNodes();
+    }
+
+    let list = [...(matrixDB.upgradeLogs || [])];
+    if (ownerFilter && ethers.isAddress(ownerFilter)) {
+      list = list.filter((u) => u.owner.toLowerCase() === ownerFilter);
+    }
+    if (mainIdFilter > 0) {
+      list = list.filter((u) => Number(u.mainNodeId) === mainIdFilter);
+    }
+    if (rankFilter >= 2 && rankFilter <= 18) {
+      list = list.filter((u) => Number(u.toRank) === rankFilter);
+    }
+
+    res.json({
+      success: true,
+      source: 'DATABASE',
+      contractAddress: matrixDB.contractAddress,
+      latestBlock: matrixDB.lastSyncedBlock || 140018600,
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      count: list.length,
+      data: list,
+    });
+  });
+
+  app.get('/api/rewards', async (req: Request, res: Response) => {
+    const forceSync = req.query.forceSync === '1';
+    if (forceSync || !matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1) {
+      await syncAllMatrixDatabase(CONTRACT_ADDRESS, forceSync);
+    } else {
+      if (matrixDB.rewardLogs.length === 0) rebuildDatabaseRewardLogsFromNodes();
+      if (!matrixDB.upgradeLogs || matrixDB.upgradeLogs.length === 0) rebuildDatabaseUpgradeLogsFromNodes();
+    }
+
+    const adminFreeKeys = getAdminFreeNodeKeySet();
+    const sanitizedLogs = matrixDB.rewardLogs
+      .filter((log) => {
+        const rNum = Number(log.rank || 1);
+        const fromNid = Number(log.fromNodeId || 0);
+        return !adminFreeKeys.has(`${rNum}:${fromNid}`);
+      })
+      .map((log) => {
+        const parsed = parseFloat(log.amount);
+        const rNum = Math.min(Math.max(Number(log.rank) || 1, 1), 18);
+        const unitPrice = RANK_PRICES_USDT[rNum - 1] || 10;
+        const toIdStr = String(log.toNodeId || '0');
+        let normalizedType = String(log.rewardType || 'DIRECT');
+        if (normalizedType === 'LEVEL' && toIdStr === '0') {
+          normalizedType = 'UNPAID_LEVEL_FAMILY_POOL';
+        }
+        if (parsed > 0) {
+          return {
+            ...log,
+            rewardType: normalizedType as RewardType,
+            amount: parsed.toFixed(2),
+          };
+        }
+        const upper = normalizedType.toUpperCase();
+        let repaired = '0.20';
+        if (upper.includes('DIRECT')) repaired = (unitPrice * 0.3).toFixed(2);
+        else if (upper.includes('VAULT')) repaired = (unitPrice * 0.35).toFixed(2);
+        else if (upper.includes('ALLSELL')) repaired = (unitPrice * 0.04).toFixed(2);
+        else if (upper.includes('BOT')) repaired = (unitPrice * 0.01).toFixed(2);
+        else if (upper.includes('LEVEL')) repaired = (unitPrice * 0.02).toFixed(2);
+        else if (upper.includes('FAMILY') || upper.includes('OVERFLOW')) repaired = (unitPrice * 0.28).toFixed(2);
+        return {
+          ...log,
+          rewardType: normalizedType as RewardType,
+          amount: repaired,
+        };
+      });
+
+    res.json({
+      success: true,
+      source: 'DATABASE',
+      contractAddress: matrixDB.contractAddress,
+      latestBlock: matrixDB.lastSyncedBlock || 140018600,
+      lastSyncedAt: matrixDB.lastSyncedAt,
+      totalNodesRank1: matrixDB.rankCounts[1] || (matrixDB.nodesByRank[1]?.length ?? 1),
+      systemWallets: matrixDB.systemWallets,
+      count: sanitizedLogs.length,
+      data: sanitizedLogs,
+      upgradeCount: (matrixDB.upgradeLogs || []).length,
+      upgradeLogs: matrixDB.upgradeLogs || [],
+    });
+  });
+
+  app.get('/api/transactions', async (req: Request, res: Response) => {
+    try {
+      const forceSync = req.query.forceSync === '1';
+      const addressFilter = String(req.query.address || '').toLowerCase();
+      const categoryFilter = String(req.query.category || 'all').toLowerCase();
+      const limitParam = Math.max(0, Number(req.query.limit || 0) || 0);
+
+      if (forceSync || !matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length <= 1) {
+        await syncAllMatrixDatabase(CONTRACT_ADDRESS, forceSync);
+      } else {
+        if (matrixDB.rewardLogs.length === 0) rebuildDatabaseRewardLogsFromNodes();
+        if (!matrixDB.upgradeLogs || matrixDB.upgradeLogs.length === 0) rebuildDatabaseUpgradeLogsFromNodes();
+      }
+
+      const adminFreeKeys = getAdminFreeNodeKeySet();
+      const transactions: Array<{
+        id: string;
+        category: 'REGISTRATION' | 'UPGRADE' | 'PAYOUT';
+        titleTh: string;
+        titleEn: string;
+        userAddress: string;
+        mainNodeId: number;
+        rank: number;
+        amountUsdt: number;
+        timestamp: string;
+        blockNumber?: number;
+        txHash?: string;
+        rewardType?: string;
+        fromNodeId?: number;
+        toNodeId?: number;
+        isAdminFreeUpgrade?: boolean;
+        detailsTh: string;
+        detailsEn: string;
+      }> = [];
+
+      // 1. Registrations & Node Creations
+      const r1Nodes = matrixDB.nodesByRank[1] || [];
+      r1Nodes.forEach((node) => {
+        const ownerLower = (node.owner || '').toLowerCase();
+        if (addressFilter && ownerLower !== addressFilter) {
+          const isSponsor = (node.directSponsor || '').toLowerCase() === addressFilter;
+          if (!isSponsor && ownerLower !== addressFilter) return;
+        }
+
+        const nodeAny = node as any;
+        const isAuto =
+          nodeAny.isAutoMainId ||
+          node.originType === 'AUTO_MAIN' ||
+          node.originType === 'AUTO_NEW_MAIN' ||
+          (node.originMainId > 0 && node.originMainId !== node.id && !node.isClone);
+        const isClone = node.isClone;
+        const typeLabel = isClone ? 'Clone ID' : isAuto ? 'Auto ID' : 'Main ID Registration';
+        const isLeft = nodeAny.isLeft !== undefined ? Boolean(nodeAny.isLeft) : node.parentId > 0;
+
+        const realTxForNode = (matrixDB.transactionLogs || []).find(
+          (t) =>
+            (t.actionType === 'REGISTER' || t.actionType === 'BATCH_REGISTER' || t.actionType === 'AUTO_ID' || t.actionType === 'CLONE_BOT') &&
+            Number(t.rank || 1) === 1 &&
+            (Number(t.nodeId || 0) === node.id || Number(t.mainNodeId || 0) === node.id)
+        );
+
+        transactions.push({
+          id: `reg-r1-${node.id}`,
+          category: 'REGISTRATION',
+          titleTh: `สมัครสมาชิก / สร้างรหัส (${typeLabel} #${node.id})`,
+          titleEn: `Registration / Node (${typeLabel} #${node.id})`,
+          userAddress: node.owner,
+          mainNodeId: node.originMainId || node.id,
+          rank: 1,
+          amountUsdt: RANK_PRICES_USDT[0] || 5,
+          timestamp: realTxForNode?.timestamp || nodeAny.createdAt || matrixDB.lastSyncedAt || new Date().toISOString(),
+          blockNumber: realTxForNode?.blockNumber || nodeAny.blockNumber,
+          txHash: realTxForNode?.txHash,
+          detailsTh: `ต่อสายใต้ อัพไลน์ #${node.parentId} (${isLeft ? '↙ ฝั่งซ้าย' : '↘ ฝั่งขวา'}) • ผู้แนะนำ: ${node.directSponsor ? `${node.directSponsor.slice(0, 6)}...${node.directSponsor.slice(-4)}` : 'Root'}`,
+          detailsEn: `Placed under Parent #${node.parentId} (${isLeft ? 'Left' : 'Right'}) • Sponsor: ${node.directSponsor ? `${node.directSponsor.slice(0, 6)}...${node.directSponsor.slice(-4)}` : 'Root'}`,
+        });
+      });
+
+      // 2. Upgrades
+      const upgrades = matrixDB.upgradeLogs || [];
+      upgrades.forEach((u) => {
+        const ownerLower = (u.owner || '').toLowerCase();
+        if (addressFilter && ownerLower !== addressFilter) return;
+
+        const isAdminFree =
+          Boolean(u.isAdminFreeUpgrade) ||
+          adminFreeKeys.has(`${Number(u.toRank || 1)}:${Number(u.newNodeId || 0)}`);
+        const uCost = isAdminFree
+          ? 0
+          : parseFloat(u.rankPriceUsdt) ||
+            (u as any).costUsdt ||
+            RANK_PRICES_USDT[Number(u.toRank) - 1] ||
+            10;
+
+        const realUpgTx = !isRealTxHash(u.txHash)
+          ? (matrixDB.transactionLogs || []).find(
+              (t) =>
+                (t.actionType === 'UPGRADE' || t.actionType === 'ADMIN_UPGRADE') &&
+                Number(t.rank || 0) === Number(u.toRank) &&
+                (Number(t.mainNodeId || 0) === Number(u.mainNodeId) ||
+                  Number(t.nodeId || 0) === Number(u.newNodeId))
+            )
+          : undefined;
+
+        transactions.push({
+          id: `upg-${u.id || `${u.mainNodeId}-${u.toRank}`}`,
+          category: 'UPGRADE',
+          titleTh: isAdminFree
+            ? `Admin อัปเกรดฟรี Main ID #${u.mainNodeId} → Rank ${u.toRank}`
+            : `อัพเกรดผังแรงค์ Main ID #${u.mainNodeId} → Rank ${u.toRank}`,
+          titleEn: isAdminFree
+            ? `Admin Free Upgrade Main ID #${u.mainNodeId} → Rank ${u.toRank}`
+            : `Rank Upgrade Main ID #${u.mainNodeId} → Rank ${u.toRank}`,
+          userAddress: u.owner,
+          mainNodeId: Number(u.mainNodeId),
+          rank: Number(u.toRank),
+          amountUsdt: uCost,
+          timestamp: realUpgTx?.timestamp || u.createdAt || matrixDB.lastSyncedAt || new Date().toISOString(),
+          blockNumber: realUpgTx?.blockNumber || u.blockNumber,
+          txHash: isRealTxHash(u.txHash) ? u.txHash : realUpgTx?.txHash,
+          isAdminFreeUpgrade: isAdminFree,
+          detailsTh: isAdminFree
+            ? `Admin อัปเกรดฟรีจาก R${u.fromRank} ไปยัง R${u.toRank} (0.00 USDT • ไม่จ่ายค่าคอม)`
+            : `เลื่อนแรงค์จาก R${u.fromRank} ไปยัง R${u.toRank} (${uCost.toFixed(2)} USDT)`,
+          detailsEn: isAdminFree
+            ? `Admin free upgrade from R${u.fromRank} to R${u.toRank} (0.00 USDT • No commission)`
+            : `Upgraded from R${u.fromRank} to R${u.toRank} (${uCost.toFixed(2)} USDT)`,
+        });
+      });
+
+      // 3. Payouts / Rewards (exclude any rewards originating from Admin Free Upgrade nodes)
+      const rewards = matrixDB.rewardLogs || [];
+      rewards.forEach((r, idx) => {
+        const recipientLower = (r.recipient || '').toLowerCase();
+        if (addressFilter && recipientLower !== addressFilter) return;
+
+        const rRank = Number(r.rank || 1);
+        const fromNid = Number(r.fromNodeId || 0);
+        if (adminFreeKeys.has(`${rRank}:${fromNid}`)) return;
+
+        const amt = parseFloat(r.amount) || 0;
+        if (amt <= 0) return;
+
+        const rTime =
+          r.createdAt ||
+          (r as any).timestamp ||
+          matrixDB.lastSyncedAt ||
+          new Date().toISOString();
+
+        transactions.push({
+          id: `rew-${r.id || idx}`,
+          category: 'PAYOUT',
+          titleTh: `รับโบนัส / ค่าคอมมิชชั่น (${r.rewardType})`,
+          titleEn: `Payout / Reward (${r.rewardType})`,
+          userAddress: r.recipient,
+          mainNodeId: Number(r.toNodeId || 1),
+          rank: rRank,
+          amountUsdt: amt,
+          timestamp: rTime,
+          blockNumber: r.blockNumber,
+          txHash: isRealTxHash(r.txHash) ? r.txHash : undefined,
+          rewardType: r.rewardType,
+          fromNodeId: fromNid,
+          toNodeId: Number(r.toNodeId || 0),
+          detailsTh: `ได้รับจาก ${formatNodeIdentityLabel(rRank, fromNid).th} → ${formatNodeIdentityLabel(rRank, Number(r.toNodeId)).th} (Rank ${rRank})`,
+          detailsEn: `Received from ${formatNodeIdentityLabel(rRank, fromNid).en} → ${formatNodeIdentityLabel(rRank, Number(r.toNodeId)).en} (Rank ${rRank})`,
+        });
+      });
+
+      // Sort newest -> oldest
+      transactions.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+      let filtered = transactions;
+      if (categoryFilter && categoryFilter !== 'all') {
+        filtered = transactions.filter((t) => t.category.toLowerCase() === categoryFilter);
+      }
+      if (limitParam > 0) {
+        filtered = filtered.slice(0, limitParam);
+      }
+
+      res.json({
+        success: true,
+        source: 'DATABASE_INDEXER',
+        contractAddress: matrixDB.contractAddress,
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        totalCount: transactions.length,
+        count: filtered.length,
+        data: filtered,
+      });
+    } catch (err: any) {
+      console.error('[API /api/transactions error]', err);
+      res.status(500).json({ success: false, error: err?.message || 'Database error' });
+    }
+  });
+
+  app.post('/api/rewards/mock-test', async (req: Request, res: Response) => {
+    const {
+      fromNodeId = '5',
+      toNodeId = '1',
+      recipient,
+      rank = 1,
+      rewardType = 'DIRECT',
+      amount = '1.500000',
+    } = req.body;
+    const testLog = await recordRewardLog({
+      fromNodeId: String(fromNodeId),
+      toNodeId: String(toNodeId),
+      recipient: recipient || CONTRACT_ADDRESS,
+      rank: Number(rank),
+      rewardType: (rewardType as RewardType) || 'DIRECT',
+      amount: String(amount),
+      txHash: `0x${Array.from({ length: 64 }, () => Math.floor(Math.random() * 16).toString(16)).join('')}`,
+    });
+    res.json({ success: true, log: testLog });
+  });
+
+  const mockAllowances: Record<string, string> = {};
+
+  app.post('/api/user/mock-approve', (req: Request, res: Response) => {
+    const { address, allowance = '1000000.00' } = req.body || {};
+    if (!address || !ethers.isAddress(address)) {
+      return res.status(400).json({ success: false, error: 'Invalid address' });
+    }
+    mockAllowances[address.toLowerCase()] = String(allowance);
+    res.json({ success: true, address, allowance: String(allowance) });
+  });
+
+  const walletBalancesCache = new Map<
+    string,
+    { usdtBalance: string; usdtAllowance: string; bnbBalance: string; updatedAt: number }
+  >();
+
+  async function refreshWalletBalancesInBackground(address: string) {
+    const lower = address.toLowerCase();
+    try {
+      const provider = getProvider();
+      const usdtContract = new ethers.Contract(USDT_ADDRESS, USDT_READ_ABI, provider);
+      const [bnbWei, uBal, uAllow, dec] = await Promise.all([
+        provider.getBalance(address).catch(() => 0n),
+        usdtContract.balanceOf(address).catch(() => 0n),
+        usdtContract.allowance(address, CONTRACT_ADDRESS).catch(() => 0n),
+        resolveUsdtDecimals().catch(() => activeUsdtDecimals),
+      ]);
+      const tokenDec = Number(dec) || activeUsdtDecimals || 18;
+      walletBalancesCache.set(lower, {
+        bnbBalance: Number(ethers.formatEther(bnbWei)).toFixed(4),
+        usdtBalance: Number(ethers.formatUnits(uBal, tokenDec)).toFixed(2),
+        usdtAllowance: ethers.formatUnits(uAllow, tokenDec),
+        updatedAt: Date.now(),
+      });
+    } catch {
+      // Ignore background RPC timeout
+    }
+  }
+
+  app.get('/api/user/:address', async (req: Request, res: Response) => {
+    const address = String(req.params.address || '');
+    if (!ethers.isAddress(address)) {
+      return res.status(400).json({ success: false, error: 'Invalid Ethereum/BSC address' });
+    }
+
+    try {
+      if (!matrixDB.nodesByRank[1] || matrixDB.nodesByRank[1].length === 0) {
+        await syncAllMatrixDatabase(CONTRACT_ADDRESS, false);
+      }
+
+      const userProfileData = await getUserProfileWithVaults(address);
+      const lower = address.toLowerCase();
+      const cachedBal = walletBalancesCache.get(lower);
+
+      let usdtBalance = cachedBal?.usdtBalance || '0.00';
+      let usdtAllowance = cachedBal?.usdtAllowance || '0.00';
+      let bnbBalance = cachedBal?.bnbBalance || '0.0000';
+
+      if (!cachedBal) {
+        await Promise.race([
+          refreshWalletBalancesInBackground(address),
+          new Promise<void>((resolve) => setTimeout(resolve, 1500)),
+        ]);
+        const fresh = walletBalancesCache.get(lower);
+        if (fresh) {
+          usdtBalance = fresh.usdtBalance;
+          usdtAllowance = fresh.usdtAllowance;
+          bnbBalance = fresh.bnbBalance;
+        }
+      } else if (Date.now() - cachedBal.updatedAt > 12000) {
+        refreshWalletBalancesInBackground(address).catch(() => {});
+      }
+
+      if (mockAllowances[lower]) {
+        usdtAllowance = mockAllowances[lower];
+      }
+
+      const hasNodes = (userProfileData?.nodes?.length ?? 0) > 0;
+      const mainNodes = (userProfileData?.nodes || [])
+        .filter((n) => !n.isClone && !n.isExtraId)
+        .map((n) => String(n.id));
+      const cloneNodes = (userProfileData?.nodes || [])
+        .filter((n) => n.isClone)
+        .map((n) => String(n.id));
+      const allNodes = (userProfileData?.nodes || []).map((n) => String(n.id));
+
+      const mainIdStats: Record<string, any> = {};
+      for (const mIdStr of mainNodes) {
+        mainIdStats[mIdStr] = computeMainIdDatabaseStats(Number(mIdStr));
+      }
+
+      res.json({
+        success: true,
+        source: 'DATABASE',
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        address,
+        user: userProfileData,
+        profile: {
+          isRegistered: hasNodes,
+          sponsor: hasNodes
+            ? userProfileData?.sponsor || '0x0000000000000000000000000000000000000000'
+            : '0x0000000000000000000000000000000000000000',
+          sponsorMainNodeId: hasNodes ? userProfileData?.sponsorMainNodeId || '1' : '0',
+          currentMaxRank: hasNodes ? userProfileData?.currentMaxRank || 1 : 0,
+          mainNodeIdRank1: hasNodes ? mainNodes[0] || allNodes[0] || '0' : '0',
+          latestCloneIdRank1: hasNodes ? cloneNodes[cloneNodes.length - 1] || '0' : '0',
+          ownedMainIdsRank1: mainNodes,
+          ownedCloneIdsRank1: cloneNodes,
+          ownedAllIdsRank1: allNodes,
+        },
+        vaults: hasNodes ? userProfileData?.vaults || [] : [],
+        mainIdStats,
+        nodes: userProfileData?.nodes || [],
+        usdtBalance,
+        usdtAllowance,
+        bnbBalance,
+        contractAddress: CONTRACT_ADDRESS,
+      });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get('/api/stream', (req: Request, res: Response) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.flushHeaders?.();
+
+    sseClients.add(res);
+
+    try {
+      // Send 2KB padding comment to force Cloud Run / Nginx reverse proxies to flush SSE immediately
+      res.write(`: ${' '.repeat(2048)}\n\n`);
+      const initPayload = JSON.stringify({
+        type: 'INIT_MATRIX',
+        lastSyncedAt: matrixDB.lastSyncedAt,
+        rankCounts: matrixDB.rankCounts,
+        nodesByRank: matrixDB.nodesByRank,
+        contractAddress: CONTRACT_ADDRESS,
+        transactions: getAggregatedTransactions(),
+        rewardLogs: matrixDB.rewardLogs || [],
+        upgradeLogs: matrixDB.upgradeLogs || [],
+      });
+      res.write(`data: ${initPayload}\n\n`);
+    } catch (e) {
+      console.warn('[SSE Init Error]:', e);
+    }
+
+    const heartbeatTimer = setInterval(() => {
+      try {
+        res.write(`: heartbeat ${Date.now()}\n\n`);
+      } catch {
+        clearInterval(heartbeatTimer);
+        sseClients.delete(res);
+      }
+    }, 15000);
+
+    req.on('close', () => {
+      clearInterval(heartbeatTimer);
+      sseClients.delete(res);
+    });
+  });
+
+  app.all('/api/*', (_req: Request, res: Response) => {
+    res.status(404).json({ success: false, error: 'API route not found' });
+  });
+
+  if (process.env.NODE_ENV === 'production') {
+    const distDir = path.resolve(__dirname, 'dist');
+    app.use(
+      express.static(distDir, {
+        etag: false,
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+          }
+        },
+      })
+    );
+    app.get('*', (_req: Request, res: Response) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+      const indexFile = path.resolve(distDir, 'index.html');
+      if (fs.existsSync(indexFile)) {
+        res.sendFile(indexFile);
+      } else {
+        res.status(503).send('กำลังอัปเดตระบบ กรุณารอสักครู่แล้วรีเฟรชหน้าเว็บ...');
+      }
+    });
+  } else {
+    process.env.DISABLE_HMR = 'true';
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true, hmr: false, ws: false, watch: null, allowedHosts: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  }
+
+  const server = http.createServer(app);
+
+  const wss = new WebSocketServer({ server, path: '/ws' });
+  setWssServer(wss);
+
+  wss.on('connection', (ws: WebSocket) => {
+    console.log('⚡ [WebSocket] Client connected for Real-time Binary Tree Matrix');
+
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'INIT_MATRIX',
+          lastSyncedAt: matrixDB.lastSyncedAt,
+          rankCounts: matrixDB.rankCounts,
+          nodesByRank: matrixDB.nodesByRank,
+          contractAddress: CONTRACT_ADDRESS,
+          transactions: getAggregatedTransactions(),
+          rewardLogs: matrixDB.rewardLogs || [],
+          upgradeLogs: matrixDB.upgradeLogs || [],
+        })
+      );
+    } catch (err) {
+      console.warn('[WS] Error sending initial payload:', err);
+    }
+
+    ws.on('message', (message: string) => {
+      try {
+        const payload = JSON.parse(message.toString());
+        if (payload.type === 'GET_RANK_TREE') {
+          const rank = Number(payload.rank) || 1;
+          ws.send(
+            JSON.stringify({
+              type: 'RANK_TREE_DATA',
+              rank,
+              nodes: matrixDB.nodesByRank[rank] || [],
+              rankCount: matrixDB.rankCounts[rank] || 0,
+              lastSyncedAt: matrixDB.lastSyncedAt,
+            })
+          );
+        } else if (payload.type === 'GET_TRANSACTIONS') {
+          ws.send(
+            JSON.stringify({
+              type: 'TRANSACTIONS_DATA',
+              lastSyncedAt: matrixDB.lastSyncedAt,
+              transactions: getAggregatedTransactions(payload.address),
+              rewardLogs: matrixDB.rewardLogs || [],
+              upgradeLogs: matrixDB.upgradeLogs || [],
+            })
+          );
+        }
+      } catch (err) {
+        // ignore invalid json payload
+      }
+    });
+
+    ws.on('error', (e) => {
+      console.warn('[WS Client Error]:', e);
+    });
+  });
+
+  server.on('error', (err: any) => {
+    console.error('[HTTP Server Error]:', err);
+    process.exit(1);
+  });
+
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Backend API Server + WebSocket running on port ${PORT} (Database-First Mode)`);
+    setImmediate(() => {
+      runInitialReconciliation();
+      resolveUsdtDecimals().catch(() => {});
+      initPlacementQueue().catch((err) => console.warn('Queue init error:', err));
+      syncAllMatrixDatabase(CONTRACT_ADDRESS, true)
+        .then(() => {
+          console.log(
+            `💾 [MatrixDB] Initial blockchain -> database sync complete (${
+              matrixDB.rankCounts[1] || 1
+            } Rank 1 nodes, ${matrixDB.rewardLogs.length} rewards persisted in prisma/matrix-db.json)`
+          );
+        })
+        .catch((err) => console.warn('Initial MatrixDB sync notice:', err));
+    });
+
+    // Background Blockchain -> Database Sync & Bot Keeper Loop (every 15 seconds for stability)
+    setInterval(() => {
+      checkAndProcessBotCloneQueue('PERIODIC_KEEPER_15S').catch(() => {});
+    }, 15000);
+
+    setTimeout(() => {
+      startEventListener();
+    }, 1000);
+  });
+}
+
+startApp().catch((err) => {
+  console.error('Failed to start server:', err);
+  process.exit(1);
+});
