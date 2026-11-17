@@ -711,6 +711,27 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
   const inFlightRankRef = useRef<number | null>(null);
   const inFlightTreePromiseRef = useRef<Promise<void> | null>(null);
   const lastHandledTxRefreshRef = useRef<string>('');
+  const enrichedRankCacheRef = useRef<
+    Map<
+      number,
+      {
+        contract: string;
+        nodesMap: Map<number, EnrichedBinaryNode>;
+        totalNodes: number;
+        cachedAt: number;
+      }
+    >
+  >(new Map());
+  const dbSnapshotCacheRef = useRef<{
+    nodesByRank: Record<number, any[]>;
+    cachedAt: number;
+  } | null>(null);
+  const lastPerIdHistoryFetchAtRef = useRef<number>(0);
+  const rankButtonRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const treeViewportSectionRef = useRef<HTMLDivElement | null>(null);
+  const pendingCenterTreeRef = useRef<boolean>(true);
+  const hasInitialTreeLoadedRef = useRef<boolean>(false);
+  const [switchingRankTarget, setSwitchingRankTarget] = useState<number | null>(null);
   const [postTxBanner, setPostTxBanner] = useState<PostTxViewTarget | null>(() => {
     if (!initialPostTxTarget) return null;
     if (
@@ -1325,12 +1346,22 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
     });
   };
 
-  const fetchPerIdHistoryForModal = useCallback(async () => {
+  const fetchPerIdHistoryForModal = useCallback(async (options?: { force?: boolean }) => {
+    const force = Boolean(options?.force);
+    const now = Date.now();
+    if (
+      !force &&
+      perIdReportsMapRef.current.size > 0 &&
+      now - lastPerIdHistoryFetchAtRef.current < 8000
+    ) {
+      return;
+    }
     try {
       const res = await fetch('/api/matrix/per-id-history');
       if (res.ok) {
         const data = await res.json();
         if (data?.success) {
+          lastPerIdHistoryFetchAtRef.current = Date.now();
           if (Array.isArray(data.reports)) {
             const map = new Map<number, any>();
             for (const rep of data.reports) {
@@ -1361,12 +1392,15 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
     if (userAddress) {
       setSelectedInspectWallet(userAddress);
     }
-    fetchPerIdHistoryForModal();
+    fetchPerIdHistoryForModal({ force: Boolean(refreshTrigger || lastTxSuccess) });
     fetchBotWalletHistory();
-  }, [fetchPerIdHistoryForModal, fetchBotWalletHistory, selectedRank, refreshTrigger, lastTxSuccess, userAddress]);
+  }, [fetchPerIdHistoryForModal, fetchBotWalletHistory, refreshTrigger, lastTxSuccess, userAddress]);
 
   const [isLoadingTree, setIsLoadingTree] = useState<boolean>(true);
   const [hasInitialTreeLoaded, setHasInitialTreeLoaded] = useState<boolean>(false);
+  useEffect(() => {
+    hasInitialTreeLoadedRef.current = hasInitialTreeLoaded;
+  }, [hasInitialTreeLoaded]);
   const [totalNodesInRank, setTotalNodesInRank] = useState<number>(1);
   const [onChainNodesMap, setOnChainNodesMap] = useState<Map<number, EnrichedBinaryNode>>(new Map());
   const [multiRankSnapshotsState, setMultiRankSnapshotsState] = useState<Map<number, Map<number, SimRawNode>>>(
@@ -1930,18 +1964,44 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
       const activeRank = targetRankParam !== undefined ? targetRankParam : selectedRankRef.current;
       const isSilent = Boolean(options?.silent);
       const forceSync = Boolean(options?.forceSync);
+      const activeContract = contractAddress || CONTRACT_ADDRESS;
+
+      if (forceSync) {
+        enrichedRankCacheRef.current.clear();
+        dbSnapshotCacheRef.current = null;
+      }
+
+      const cachedRankEntry = !forceSync ? enrichedRankCacheRef.current.get(activeRank) : undefined;
+      const hasValidCache = Boolean(cachedRankEntry && cachedRankEntry.contract === activeContract);
+
+      if (hasValidCache && cachedRankEntry && !isSilent) {
+        setOnChainNodesMap(cachedRankEntry.nodesMap);
+        setTotalNodesInRank(cachedRankEntry.totalNodes);
+        setHasInitialTreeLoaded(true);
+        setIsLoadingTree(false);
+        setSwitchingRankTarget(null);
+        // If cache is still fresh (< 10s), instant render without redundant refetch
+        if (Date.now() - cachedRankEntry.cachedAt < 10000) {
+          return;
+        }
+      }
+
+      const effectiveSilent = isSilent || hasValidCache;
 
       if (inFlightTreePromiseRef.current && inFlightRankRef.current === activeRank && !forceSync) {
         return inFlightTreePromiseRef.current;
       }
-      if (isTreeSyncInFlightRef.current && isSilent && !forceSync) {
+      if (isTreeSyncInFlightRef.current && effectiveSilent && !forceSync) {
         return;
       }
       const reqSeq = ++treeLoadSeqRef.current;
       inFlightRankRef.current = activeRank;
       isTreeSyncInFlightRef.current = true;
 
-      if (!isSilent) {
+      if (!effectiveSilent) {
+        if (hasInitialTreeLoadedRef.current) {
+          setSwitchingRankTarget(activeRank);
+        }
         setIsLoadingTree(true);
       } else {
         setIsLiveSyncing(true);
@@ -1949,7 +2009,6 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
 
       const runPromise = (async () => {
       try {
-        const activeContract = contractAddress || CONTRACT_ADDRESS;
         let lazyContract: ethers.Contract | null = null;
         const getFallbackContract = async (): Promise<ethers.Contract> => {
           if (!lazyContract) {
@@ -2069,6 +2128,10 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
             );
           }
           // Fallback to RPC below
+        }
+
+        if (reqSeq !== treeLoadSeqRef.current || activeRank !== selectedRankRef.current) {
+          return;
         }
 
         // 2. Fallback: Chunked direct RPC calls (only used if backend Database API is unreachable)
@@ -2243,22 +2306,41 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
 
       const multiRankSnapshots = new Map<number, Map<number, RankNodeSnapshot>>();
       let snapshotNodesByRank: Record<number, any[]> | null = null;
-      try {
-        const snapRes = await fetch('/api/db/snapshot');
-        if (snapRes.ok) {
-          const snapData = await snapRes.json();
-          if (snapData?.success && snapData.nodesByRank) {
-            snapshotNodesByRank = snapData.nodesByRank;
-            for (const [rKey, rArr] of Object.entries(snapData.nodesByRank)) {
-              const rNum = Number(rKey);
-              if (rNum >= 1 && rNum <= 18 && Array.isArray(rArr) && rArr.length > 0) {
-                ranksToSnapshot.add(rNum);
+      const cachedSnap = dbSnapshotCacheRef.current;
+      if (!forceSync && cachedSnap && Date.now() - cachedSnap.cachedAt < 10000) {
+        snapshotNodesByRank = cachedSnap.nodesByRank;
+        for (const [rKey, rArr] of Object.entries(snapshotNodesByRank)) {
+          const rNum = Number(rKey);
+          if (rNum >= 1 && rNum <= 18 && Array.isArray(rArr) && rArr.length > 0) {
+            ranksToSnapshot.add(rNum);
+          }
+        }
+      } else {
+        try {
+          const snapRes = await fetch('/api/db/snapshot');
+          if (snapRes.ok) {
+            const snapData = await snapRes.json();
+            if (snapData?.success && snapData.nodesByRank) {
+              snapshotNodesByRank = snapData.nodesByRank;
+              dbSnapshotCacheRef.current = {
+                nodesByRank: snapData.nodesByRank,
+                cachedAt: Date.now(),
+              };
+              for (const [rKey, rArr] of Object.entries(snapData.nodesByRank)) {
+                const rNum = Number(rKey);
+                if (rNum >= 1 && rNum <= 18 && Array.isArray(rArr) && rArr.length > 0) {
+                  ranksToSnapshot.add(rNum);
+                }
               }
             }
           }
+        } catch {
+          // Fallback to per-rank fetch below
         }
-      } catch {
-        // Fallback to per-rank fetch below
+      }
+
+      if (reqSeq !== treeLoadSeqRef.current || activeRank !== selectedRankRef.current) {
+        return;
       }
 
       await Promise.all(
@@ -2283,30 +2365,34 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
           const rMap = new Map<number, RankNodeSnapshot>();
           let rLoadedFromApi = false;
 
-          if (snapshotNodesByRank && Array.isArray(snapshotNodesByRank[r]) && snapshotNodesByRank[r].length > 0) {
-            for (const item of snapshotNodesByRank[r]) {
-              const nid = Number(item.id);
-              if (nid > 0) {
-                rMap.set(nid, {
-                  id: nid,
-                  owner: String(item.owner || ethers.ZeroAddress),
-                  directSponsor: String(item.directSponsor || ethers.ZeroAddress),
-                  parentId: Number(item.parentId || 0),
-                  leftChild: Number(item.leftChild || 0),
-                  rightChild: Number(item.rightChild || 0),
-                  isClone: Boolean(item.isClone),
-                  isExtraId: Boolean(item.isExtraId) && !Boolean(item.isClone),
-                  isAdminFreeUpgrade: Boolean(item.isAdminFreeUpgrade),
-                  originMainId: Number(item.originMainId) > 0 ? Number(item.originMainId) : nid,
-                  directSponsorNodeId: Number(item.directSponsorNodeId || 0),
-                  nodeVault: Number(item.nodeVault ?? 0),
-                  originType: item.originType ? String(item.originType) : undefined,
-                  confirmedOriginType: item.confirmedOriginType ? String(item.confirmedOriginType) : undefined,
-                  autoSourceMainId: Number(item.autoSourceMainId) > 0 ? Number(item.autoSourceMainId) : undefined,
-                });
+          if (snapshotNodesByRank !== null) {
+            const snapArr = snapshotNodesByRank[r];
+            if (Array.isArray(snapArr)) {
+              for (const item of snapArr) {
+                const nid = Number(item.id);
+                if (nid > 0) {
+                  rMap.set(nid, {
+                    id: nid,
+                    owner: String(item.owner || ethers.ZeroAddress),
+                    directSponsor: String(item.directSponsor || ethers.ZeroAddress),
+                    parentId: Number(item.parentId || 0),
+                    leftChild: Number(item.leftChild || 0),
+                    rightChild: Number(item.rightChild || 0),
+                    isClone: Boolean(item.isClone),
+                    isExtraId: Boolean(item.isExtraId) && !Boolean(item.isClone),
+                    isAdminFreeUpgrade: Boolean(item.isAdminFreeUpgrade),
+                    originMainId: Number(item.originMainId) > 0 ? Number(item.originMainId) : nid,
+                    directSponsorNodeId: Number(item.directSponsorNodeId || 0),
+                    nodeVault: Number(item.nodeVault ?? 0),
+                    originType: item.originType ? String(item.originType) : undefined,
+                    confirmedOriginType: item.confirmedOriginType ? String(item.confirmedOriginType) : undefined,
+                    autoSourceMainId: Number(item.autoSourceMainId) > 0 ? Number(item.autoSourceMainId) : undefined,
+                  });
+                }
               }
             }
-            rLoadedFromApi = rMap.size > 0;
+            // /api/db/snapshot covers all populated ranks; empty/absent ranks don't need RPC fallback
+            rLoadedFromApi = true;
           }
 
           if (!rLoadedFromApi) {
@@ -2314,7 +2400,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
               const res = await fetch(`/api/matrix/tree-nodes?rank=${r}&contract=${activeContract}`);
               if (res.ok) {
                 const data = await res.json();
-                if (data.success && Array.isArray(data.nodes) && data.nodes.length > 0) {
+                if (data.success && Array.isArray(data.nodes)) {
                   for (const item of data.nodes) {
                     const nid = Number(item.id);
                     if (nid > 0) {
@@ -5063,18 +5149,26 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
           }
         }
 
-        if (!isSilent) {
-          await fetchPerIdHistoryForModal();
+        if (!effectiveSilent) {
+          void fetchPerIdHistoryForModal({ force: forceSync });
         }
 
         if (reqSeq !== treeLoadSeqRef.current || activeRank !== selectedRankRef.current) {
           return;
         }
 
+        enrichedRankCacheRef.current.set(activeRank, {
+          contract: activeContract,
+          nodesMap: enrichedMap,
+          totalNodes,
+          cachedAt: Date.now(),
+        });
+
         knownNodeIdsByRankRef.current.set(activeRank, currentIdsSet);
         setTotalNodesInRank(totalNodes);
         setMultiRankSnapshotsState(new Map(multiRankSnapshots as unknown as Map<number, Map<number, SimRawNode>>));
         setOnChainNodesMap(enrichedMap);
+        setSwitchingRankTarget(null);
         setLastSyncTime(
           new Date().toLocaleTimeString('th-TH', {
             hour: '2-digit',
@@ -5099,6 +5193,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
           inFlightTreePromiseRef.current = null;
           setIsLoadingTree(false);
           setIsLiveSyncing(false);
+          setSwitchingRankTarget(null);
           setHasInitialTreeLoaded(true);
         }
       }
@@ -6021,10 +6116,26 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
     });
   }, []);
 
-  // Reset horizontal scroll position to center Root Node whenever rank, viewMode, or focusRootId changes
+  // Mark horizontal scroll center pending whenever rank, viewMode, or focusRootId changes
+  useEffect(() => {
+    pendingCenterTreeRef.current = true;
+  }, [selectedRank, viewMode, focusRootId]);
+
+  // Keep the active rank button centered inside the horizontal Rank Selector Bar
+  useEffect(() => {
+    const activeBtn = rankButtonRefs.current.get(selectedRank);
+    if (activeBtn && typeof activeBtn.scrollIntoView === 'function') {
+      activeBtn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    }
+  }, [selectedRank]);
+
+  // Center Root Node horizontally AFTER the new rank's tree nodes have rendered
   useLayoutEffect(() => {
     const viewportEl = scrollViewportRef.current;
-    if (!viewportEl) return;
+    if (!viewportEl || isLoadingTree || switchingRankTarget !== null || activeNodesMap.size === 0) {
+      return;
+    }
+    if (!pendingCenterTreeRef.current) return;
     const centerScroll = () => {
       const maxScrollLeft = Math.max(0, viewportEl.scrollWidth - viewportEl.clientWidth);
       viewportEl.scrollLeft = maxScrollLeft > 0 ? Math.floor(maxScrollLeft / 2) : 0;
@@ -6032,9 +6143,20 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
       updateHorizontalScrollIndicators();
     };
     centerScroll();
-    const timer = setTimeout(centerScroll, 50);
+    const timer = setTimeout(() => {
+      centerScroll();
+      pendingCenterTreeRef.current = false;
+    }, 50);
     return () => clearTimeout(timer);
-  }, [selectedRank, viewMode, focusRootId, updateHorizontalScrollIndicators]);
+  }, [
+    selectedRank,
+    viewMode,
+    focusRootId,
+    isLoadingTree,
+    switchingRankTarget,
+    activeNodesMap.size,
+    updateHorizontalScrollIndicators,
+  ]);
 
   useLayoutEffect(() => {
     recalculateTreeConnectors();
@@ -6061,19 +6183,22 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
   useEffect(() => {
     const containerEl = treeContentRef.current;
     if (!containerEl || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => {
-      recalculateTreeConnectors();
-      updateHorizontalScrollIndicators();
-    });
-    observer.observe(containerEl);
-    const handleWindowResize = () => {
-      recalculateTreeConnectors();
-      updateHorizontalScrollIndicators();
+    let rafId: number | null = null;
+    const scheduleRecalc = () => {
+      if (rafId !== null) return;
+      rafId = window.requestAnimationFrame(() => {
+        rafId = null;
+        recalculateTreeConnectors();
+        updateHorizontalScrollIndicators();
+      });
     };
-    window.addEventListener('resize', handleWindowResize);
+    const observer = new ResizeObserver(scheduleRecalc);
+    observer.observe(containerEl);
+    window.addEventListener('resize', scheduleRecalc);
     return () => {
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
       observer.disconnect();
-      window.removeEventListener('resize', handleWindowResize);
+      window.removeEventListener('resize', scheduleRecalc);
     };
   }, [recalculateTreeConnectors, updateHorizontalScrollIndicators]);
 
@@ -6646,6 +6771,44 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
       fetchPerIdHistoryForModal,
       loadOnChainTree,
     ]
+  );
+
+  const handleSelectRank = useCallback(
+    (targetRank: number, options?: { scrollToViewport?: boolean }) => {
+      const clampedRank = Math.max(1, Math.min(18, Math.round(targetRank)));
+      const isSameRank = clampedRank === selectedRankRef.current;
+      selectedRankRef.current = clampedRank;
+      pendingCenterTreeRef.current = true;
+      setSelectedRank(clampedRank);
+
+      if (selectedWalletSwitchItem) {
+        const snapNodeId = resolveSwitchNodeInSnapshot(selectedWalletSwitchItem, clampedRank);
+        const initialTarget = snapNodeId ?? selectedWalletSwitchItem.id;
+        setFocusRootId(initialTarget);
+        setNavigationHistory([initialTarget]);
+        setSearchInput(String(initialTarget));
+        setSelectedTreeNodeId(snapNodeId ?? null);
+      } else {
+        setFocusRootId(1);
+        setNavigationHistory([1]);
+        setSearchInput('1');
+        setSelectedTreeNodeId(null);
+      }
+
+      setExpandedBenefitNodeId(null);
+      setLatestNewNodeAlert(null);
+      setCollapsedNodeIds(new Set());
+      setRealtimeCountdown(realtimeInterval);
+
+      if (isSameRank) {
+        loadOnChainTree(clampedRank, { silent: true });
+      }
+
+      if (options?.scrollToViewport && treeViewportSectionRef.current) {
+        treeViewportSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    },
+    [selectedWalletSwitchItem, resolveSwitchNodeInSnapshot, realtimeInterval, loadOnChainTree]
   );
 
   const navigateToNode = (targetId: number) => {
@@ -7610,22 +7773,61 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
         </div>
       )}
 
-      {/* Dashboard2 Sapphire Hero Strip for Full Matrix Tree */}
-      <div className="p-3.5 sm:p-4 text-white rounded-[20px] bg-[radial-gradient(ellipse_at_85%_90%,rgba(71,225,255,0.42),transparent_40%),linear-gradient(120deg,#031c5c,#075ed0_65%,#031d61)] shadow-[0_8px_22px_rgba(0,60,155,0.38)] border border-[#42bfff]/60 space-y-3">
-        <div className="flex items-center justify-between gap-2.5 flex-wrap">
-          <div className="min-w-0">
+      {/* Dashboard2 Sapphire Hero Strip for Full Matrix Tree (Emphasizes Selected Rank, Default Rank 1) */}
+      <div className="p-3.5 sm:p-4 text-white rounded-[20px] bg-[radial-gradient(ellipse_at_85%_90%,rgba(71,225,255,0.42),transparent_40%),linear-gradient(120deg,#031c5c,#075ed0_65%,#031d61)] shadow-[0_8px_22px_rgba(0,60,155,0.38)] border border-[#42bfff]/60">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="min-w-0 flex items-center gap-3 flex-wrap">
             <FractalFlowBrandCard size="md" />
+            <div className="hidden sm:block h-8 w-px bg-white/20" aria-hidden="true" />
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <h1 className="text-lg sm:text-xl font-black tracking-tight text-[#ffdf6d] tabular-nums leading-none">
+                  RANK {selectedRank}
+                </h1>
+                <span className="text-xs sm:text-sm font-extrabold text-white whitespace-nowrap">
+                  {language === 'th' ? 'ผัง Matrix 15 ชั้น' : '15-Layer Binary Matrix'}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center gap-1.5 flex-wrap text-[11px] font-semibold text-[#cbeeff] tabular-nums">
+                <span className="font-mono text-white font-bold">
+                  {RANK_PRICES_USDT[selectedRank - 1] || 5} USDT
+                </span>
+                <span aria-hidden="true">·</span>
+                <span>
+                  {selectedRank === 1
+                    ? language === 'th'
+                      ? 'ผังหลักเริ่มต้น'
+                      : 'Default Rank'
+                    : currentUserRank >= selectedRank
+                    ? language === 'th'
+                      ? 'ปลดล็อกแล้ว'
+                      : 'Unlocked'
+                    : language === 'th'
+                    ? 'ยังไม่ปลดล็อก'
+                    : 'Locked'}
+                </span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono">Root #{focusRootId}</span>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono text-white font-bold">
+                  {totalNodesInRank.toLocaleString('en-US')} โหนด
+                </span>
+              </div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="px-2.5 py-1 rounded-full bg-[#ffdf6d] text-[#09265f] font-black text-[11px] whitespace-nowrap">
-              {language === 'th'
-                ? `ผัง MATRIX 15 ชั้น (กราฟเต็มจอ) · Rank ${selectedRank}`
-                : `BINARY MATRIX 15 LAYERS · Rank ${selectedRank}`}
-            </span>
-            <span className="px-2.5 py-1 rounded-full bg-white/15 border border-[#9eeaff] text-[11px] font-bold whitespace-nowrap">
-              Root #{focusRootId} · {totalNodesInRank} โหนด
-            </span>
+          <div className="flex items-center gap-2 flex-wrap shrink-0">
+            {selectedRank !== 1 && (
+              <button
+                type="button"
+                onClick={() => handleSelectRank(1)}
+                className="px-3 py-1.5 rounded-xl bg-white/15 hover:bg-white/25 border border-[#72e5ff]/60 text-[#e8faff] text-xs font-extrabold inline-flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                title="กลับไปแสดงข้อมูล Rank 1 (ค่าเริ่มต้น)"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>กลับ Rank 1</span>
+              </button>
+            )}
             {onBackToMemberHome && (
               <button
                 type="button"
@@ -8191,10 +8393,34 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
           </div>
         </div>
 
-        {/* Row 5: Rank Matrices Button Bar (Dashboard 2 Sapphire & Ice-Blue Theme) */}
-        <div className="pt-2 border-t border-[#b4e0ff] dark:border-[#3898ff]/35">
+        {/* Row 5: Rank Matrices Selector Bar (Active Rank Emphasized, Rank 1 Default) */}
+        <div className="pt-2.5 border-t border-[#b4e0ff] dark:border-[#3898ff]/35 space-y-1.5">
+          <div className="flex items-center justify-between gap-2 flex-wrap px-0.5 text-[11px]">
+            <div className="flex items-center gap-2 flex-wrap text-[#09265f] dark:text-[#e6f6ff]">
+              <span className="font-black text-[#0754b9] dark:text-[#7af1ff]">
+                เลือกกระดาน Rank 1–18
+              </span>
+              <span aria-hidden="true" className="text-[#5e8ac2]">·</span>
+              <span className="font-bold tabular-nums">
+                กำลังแสดง: <strong className="text-[#087cf4] dark:text-[#ffdf6d]">Rank {selectedRank}</strong> ({RANK_PRICES_USDT[selectedRank - 1] || 5} USDT)
+              </span>
+            </div>
+            <div className="flex items-center gap-2 text-[10.5px] text-[#45668f] dark:text-[#9bd8ff] tabular-nums">
+              <span>ระดับสูงสุดของคุณ: R{currentUserRank}</span>
+              {selectedRank !== 1 && (
+                <button
+                  type="button"
+                  onClick={() => handleSelectRank(1)}
+                  className="px-2 py-0.5 rounded-md bg-[#e6f5ff] hover:bg-[#d5eeff] border border-[#8fd0ff] text-[#0754b9] dark:bg-[#082874] dark:border-[#42bfff]/50 dark:text-[#9bd8ff] font-bold cursor-pointer transition whitespace-nowrap"
+                >
+                  กลับ Rank 1
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* Horizontal Scrollable Rank Buttons Bar */}
-          <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden touch-pan-x overscroll-x-contain pb-2 pt-0.5 matrix-scroll-container matrix-horizontal-scroll-only flex items-center gap-2 select-none">
+          <div className="w-full max-w-full min-w-0 overflow-x-auto overflow-y-hidden touch-pan-x overscroll-x-contain pb-2 pt-1 px-0.5 matrix-scroll-container matrix-horizontal-scroll-only flex items-center gap-2 select-none">
             {RANK_PRICES_USDT.map((price, idx) => {
               const r = idx + 1;
               const isSelected = selectedRank === r;
@@ -8216,16 +8442,16 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
 
               if (isSelected) {
                 buttonClasses =
-                  'bg-gradient-to-r from-[#22caff] to-[#0758d4] border-2 border-[#72e5ff] shadow-[0_4px_14px_rgba(8,124,244,0.4)] ring-2 ring-[#42bfff]/30';
-                textColor = 'text-white font-extrabold';
-                countBadgeStyle = 'bg-white/25 text-white border border-white/35 font-bold';
-                priceBadgeStyle = 'bg-white/20 text-[#e8faff] border border-white/30 font-bold';
+                  'bg-gradient-to-r from-[#087cf4] to-[#0441a8] border-2 border-[#72e5ff] shadow-[0_6px_16px_rgba(8,124,244,0.42)] ring-2 ring-[#22caff]/45 scale-[1.03]';
+                textColor = 'text-white font-black';
+                countBadgeStyle = 'bg-white/25 text-white border border-white/40 font-extrabold';
+                priceBadgeStyle = 'bg-[#ffdf6d] text-[#09265f] border border-amber-300 font-black';
               } else if (isCurrent) {
                 buttonClasses =
-                  'bg-gradient-to-r from-[#ffdf6d] to-[#fff1a8] hover:brightness-105 border border-[#f5c43d] shadow-2xs text-[#09265f]';
-                textColor = 'text-[#09265f] font-extrabold';
-                countBadgeStyle = 'bg-white/85 text-[#0754b9] border border-[#9fd4ff] font-bold';
-                priceBadgeStyle = 'bg-white/85 text-[#09265f] border border-amber-400/60 font-bold';
+                  'bg-amber-50/95 hover:bg-amber-100 dark:bg-amber-950/45 dark:hover:bg-amber-900/55 border border-amber-400/80 dark:border-amber-400/55 text-[#09265f] dark:text-amber-200';
+                textColor = 'text-amber-950 dark:text-amber-200 font-extrabold';
+                countBadgeStyle = 'bg-white text-[#0754b9] border border-amber-300 dark:bg-slate-900 dark:text-amber-200 dark:border-amber-500/40 font-bold';
+                priceBadgeStyle = 'bg-amber-100/80 text-amber-900 border border-amber-300/80 dark:bg-amber-900/40 dark:text-amber-200 dark:border-amber-500/40 font-bold';
               } else if (isPassed) {
                 buttonClasses =
                   'bg-gradient-to-r from-[#eef8ff] to-[#d5edff] hover:from-[#e0f3ff] hover:to-[#c7e6ff] dark:from-[#08256a] dark:to-[#061c52] border border-[#72c4ff] dark:border-[#3898ff]/55 text-[#0754b9] dark:text-[#cbeeff]';
@@ -8243,30 +8469,15 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
               return (
                 <button
                   key={r}
-                  type="button"
-                  onClick={() => {
-                    const targetRank = r;
-                    selectedRankRef.current = targetRank;
-                    setSelectedRank(targetRank);
-                    if (selectedWalletSwitchItem) {
-                      const snapNodeId = resolveSwitchNodeInSnapshot(selectedWalletSwitchItem, targetRank);
-                      const initialTarget = snapNodeId ?? selectedWalletSwitchItem.id;
-                      setFocusRootId(initialTarget);
-                      setNavigationHistory([initialTarget]);
-                      setSearchInput(String(initialTarget));
-                      setSelectedTreeNodeId(snapNodeId ?? null);
-                    } else {
-                      setFocusRootId(1);
-                      setNavigationHistory([1]);
-                      setSearchInput('1');
-                    }
-                    setExpandedBenefitNodeId(null);
-                    setLatestNewNodeAlert(null);
-                    setZoomScale(0.55);
-                    setRealtimeCountdown(realtimeInterval);
-                    loadOnChainTree(targetRank);
+                  ref={(el) => {
+                    if (el) rankButtonRefs.current.set(r, el);
+                    else rankButtonRefs.current.delete(r);
                   }}
-                  className={`px-3 py-1.5 rounded-full transition-all duration-200 cursor-pointer shrink-0 flex items-center gap-1.5 text-xs ${buttonClasses}`}
+                  type="button"
+                  aria-pressed={isSelected}
+                  aria-current={isSelected ? 'true' : undefined}
+                  onClick={() => handleSelectRank(r)}
+                  className={`px-3 py-1.5 rounded-xl transition-all duration-150 cursor-pointer shrink-0 flex items-center gap-1.5 text-xs tabular-nums ${buttonClasses}`}
                   title={
                     selectedWalletSwitchItem
                       ? language === 'th'
@@ -8276,27 +8487,27 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                   }
                 >
                   {(isSelected || isPassed) && (
-                    <span className={`${isSelected ? 'text-white dark:text-emerald-400' : 'text-[#15803D] dark:text-emerald-400'} font-black text-xs leading-none`}>
-                      ✓
+                    <span className={`${isSelected ? 'text-[#ffdf6d]' : 'text-[#15803D] dark:text-emerald-400'} font-black text-xs leading-none`}>
+                      {isSelected ? '●' : '✓'}
                     </span>
                   )}
 
-                  {(isSelected || isCurrent) && (
+                  {isCurrent && !isSelected && (
                     <span className="text-xs leading-none">👑</span>
                   )}
 
                   <span className={`${textColor} text-xs tracking-tight whitespace-nowrap`}>
-                    {language === 'th' ? `ผัง ${r}` : `Rank ${r}`}
+                    {language === 'th' ? `Rank ${r}` : `Rank ${r}`}
                   </span>
 
                   <span
-                    className={`px-2 py-0.5 rounded-md font-mono text-[10.5px] leading-tight ${countBadgeStyle}`}
+                    className={`px-1.5 py-0.5 rounded-md font-mono text-[10.5px] leading-tight tabular-nums ${countBadgeStyle}`}
                   >
                     {count}
                   </span>
 
                   <span
-                    className={`px-2 py-0.5 rounded-md font-mono text-[10.5px] leading-tight ${priceBadgeStyle}`}
+                    className={`px-1.5 py-0.5 rounded-md font-mono text-[10.5px] leading-tight tabular-nums ${priceBadgeStyle}`}
                   >
                     {price}U
                   </span>
@@ -8766,7 +8977,76 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
           }
         >
         {/* Relative Wrapper for Interactive 2D Pan & Zoom Binary Tree + Edge Touch Indicators (Dashboard 2 Ice-Blue Canvas) */}
-        <div className="relative w-full max-w-full min-w-0 h-[68vh] sm:h-[76vh] min-h-[420px] max-h-[820px] flex flex-col rounded-[20px] overflow-hidden border-[1.5px] border-[#a9ddff] dark:border-[#3898ff]/45 bg-[#ebf3fb] dark:bg-[#041236] shadow-inner">
+        <div
+          ref={treeViewportSectionRef}
+          className="relative w-full max-w-full min-w-0 h-[68vh] sm:h-[76vh] min-h-[420px] max-h-[820px] flex flex-col rounded-[20px] overflow-hidden border-[1.5px] border-[#a9ddff] dark:border-[#3898ff]/45 bg-[#ebf3fb] dark:bg-[#041236] shadow-inner"
+        >
+          {/* Active Rank Context Strip pinned directly above the Binary Tree Canvas */}
+          <div className="shrink-0 z-20 px-3 py-2 border-b border-[#b4e0ff] dark:border-[#3898ff]/35 bg-white/90 dark:bg-[#061c52]/92 backdrop-blur-xs flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 text-xs tabular-nums">
+              <span className="font-black text-sm text-[#0754b9] dark:text-[#ffdf6d] whitespace-nowrap">
+                ผัง Rank {selectedRank}
+              </span>
+              <span aria-hidden="true" className="text-[#8fb6db]">·</span>
+              <span className="font-mono font-bold text-[#09265f] dark:text-white whitespace-nowrap">
+                {RANK_PRICES_USDT[selectedRank - 1] || 5} USDT
+              </span>
+              <span aria-hidden="true" className="text-[#8fb6db]">·</span>
+              <span className="text-[11px] font-semibold text-[#35567e] dark:text-[#cbeeff] whitespace-nowrap">
+                รวม <strong className="font-mono text-[#09265f] dark:text-white">{activeNodesMap.size.toLocaleString('en-US')}</strong> โหนด
+                {' '}(Main {statusCountsInRank.main} · Auto {statusCountsInRank.auto} · Extra {statusCountsInRank.extra} · Clone {statusCountsInRank.clone})
+              </span>
+              {(switchingRankTarget !== null || isLiveSyncing) && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#087cf4] dark:text-[#7af1ff] whitespace-nowrap">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  <span>{switchingRankTarget !== null ? `กำลังโหลด Rank ${switchingRankTarget}...` : 'กำลังอัปเดต...'}</span>
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                disabled={selectedRank <= 1}
+                onClick={() => handleSelectRank(selectedRank - 1)}
+                className="px-2 py-1 rounded-lg bg-[#edf8ff] hover:bg-[#dff4ff] disabled:opacity-40 border border-[#b4e0ff] dark:bg-[#041238] dark:hover:bg-[#08256a] dark:border-[#3898ff]/40 text-[#0754b9] dark:text-[#9bd8ff] font-bold text-[11px] transition cursor-pointer disabled:cursor-not-allowed whitespace-nowrap"
+                title="ดู Rank ก่อนหน้า"
+              >
+                ‹ R{Math.max(1, selectedRank - 1)}
+              </button>
+              <button
+                type="button"
+                disabled={selectedRank >= 18}
+                onClick={() => handleSelectRank(selectedRank + 1)}
+                className="px-2 py-1 rounded-lg bg-[#edf8ff] hover:bg-[#dff4ff] disabled:opacity-40 border border-[#b4e0ff] dark:bg-[#041238] dark:hover:bg-[#08256a] dark:border-[#3898ff]/40 text-[#0754b9] dark:text-[#9bd8ff] font-bold text-[11px] transition cursor-pointer disabled:cursor-not-allowed whitespace-nowrap"
+                title="ดู Rank ถัดไป"
+              >
+                R{Math.min(18, selectedRank + 1)} ›
+              </button>
+              <button
+                type="button"
+                onClick={scrollTreeToCenter}
+                className="px-2.5 py-1 rounded-lg bg-[#0754b9] hover:bg-[#087cf4] text-white font-bold text-[11px] font-mono transition cursor-pointer whitespace-nowrap"
+                title="จัดกึ่งกลางโหนด Root ของ Rank ปัจจุบัน"
+              >
+                จัดกลาง #{focusRootId}
+              </button>
+            </div>
+          </div>
+
+          {/* Non-collapsing loading overlay when switching to an uncached rank */}
+          {switchingRankTarget !== null && (
+            <div className="absolute inset-0 top-[42px] z-30 bg-[#ebf3fb]/75 dark:bg-[#041236]/80 backdrop-blur-[2px] flex flex-col items-center justify-center gap-2.5 pointer-events-auto">
+              <div className="p-3 rounded-2xl bg-white/95 dark:bg-[#071f5e] border border-[#9fd4ff] dark:border-[#42bfff]/50 shadow-lg flex items-center gap-3">
+                <RefreshCw className="w-5 h-5 text-[#087cf4] dark:text-[#7af1ff] animate-spin shrink-0" />
+                <div className="text-xs sm:text-sm font-extrabold text-[#09265f] dark:text-white tabular-nums">
+                  {language === 'th'
+                    ? `กำลังโหลดผัง Rank ${switchingRankTarget} (${RANK_PRICES_USDT[switchingRankTarget - 1] || 5} USDT)...`
+                    : `Loading Rank ${switchingRankTarget} matrix...`}
+                </div>
+              </div>
+            </div>
+          )}
           {/* Left Overflow Edge Gradient & Floating Touch Button */}
           {canScrollLeft && (
             <>
@@ -8858,7 +9138,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                 className="relative inline-flex flex-col items-center h-max w-max px-6 sm:px-10 py-4 pb-16"
               >
                 {/* Dynamic SVG Curved Connector Lines Overlay */}
-                {!isLoadingTree && (
+                {(!isLoadingTree || switchingRankTarget !== null) && (
                   <svg className="absolute inset-0 w-full h-full pointer-events-none z-0 overflow-visible">
                     {connectorLines.map((line) => {
                       const midY = line.y1 + (line.y2 - line.y1) * 0.5;
@@ -8885,7 +9165,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                 )}
 
                 {/* Recursive Binary Tree Nodes */}
-                {isLoadingTree || activeNodesMap.size === 0 ? (
+                {(isLoadingTree && switchingRankTarget === null) || activeNodesMap.size === 0 ? (
                   <div className="py-16 flex flex-col items-center justify-center gap-3 text-[#64748B] dark:text-slate-400">
                     <RefreshCw className="w-8 h-8 text-[#2563EB] dark:text-emerald-400 animate-spin" />
                     <span className="text-sm font-semibold">

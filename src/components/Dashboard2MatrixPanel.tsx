@@ -97,52 +97,52 @@ const fmtNum = (n: number): string => n.toLocaleString('en-US');
 const MATRIX_ORB_LEGEND_ITEMS = [
   {
     key: 'owner',
-    label: 'เจ้าของผัง / สายเลือดใต้เจ้าของผัง',
-    desc: 'รหัสหลักเจ้าของผังและสมาชิกในสายเลือดใต้เจ้าของผัง',
+    label: 'เจ้าของผัง / Main / โคลน-Auto-Extra ผู้อื่น',
+    desc: 'รหัสหลักเจ้าของผัง สมาชิกในสายเลือด รวมทั้ง Main ID, Auto ID, Clone ID และ Extra ID ที่ไม่ใช่ของเจ้าของผัง',
     orbClass:
       'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border border-[#9cbcd6]/80 shadow-[0_0_5px_rgba(115,175,230,0.28)]',
   },
   {
     key: 'clone_owner',
     label: 'Clone ID (เจ้าของผัง)',
-    desc: 'รหัสโคลนนิ่งของเจ้าของผังที่เกิดจากเม็ดขวา 100%',
+    desc: 'รหัสโคลนนิ่งของเจ้าของผังที่เกิดจากเม็ดขวา 100% (โคลนนิ่งอื่นใช้สีเหมือนเจ้าของผัง)',
     orbClass:
       'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_28%,#c1e2d0_58%,#55866d_100%)] border border-[#8fc4a9]/80 shadow-[0_0_5px_rgba(80,210,145,0.28)]',
   },
   {
     key: 'auto_owner',
     label: 'Auto ID (เจ้าของผัง)',
-    desc: 'รหัสอัตโนมัติของเจ้าของผังที่แตกจาก Auto ID Pool',
+    desc: 'รหัสอัตโนมัติของเจ้าของผังที่แตกจาก Auto ID Pool (สีเหลือง/ทอง · Auto ID อื่นใช้สีเหมือนเจ้าของผัง)',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#f8f5ea_28%,#e3dec3_58%,#8d8356_100%)] border border-[#cfc698]/80 shadow-[0_0_5px_rgba(220,200,115,0.28)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#fffbe0_0%,#fde047_28%,#eab308_58%,#854d0e_100%)] border border-[#fde047]/85 shadow-[0_0_6px_rgba(250,204,21,0.38)]',
   },
   {
     key: 'extra_owner',
     label: 'Extra ID (เจ้าของผัง)',
-    desc: 'รหัสพิเศษของเจ้าของผังที่แตกจาก Extra ID Pool',
+    desc: 'รหัสพิเศษของเจ้าของผังที่แตกจาก Extra ID Pool (สีชมพูทับทิม · Extra ID อื่นใช้สีเหมือนเจ้าของผัง)',
     orbClass:
       'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_28%,#e2c1c7_58%,#8f5661_100%)] border border-[#d4a5ae]/80 shadow-[0_0_5px_rgba(220,125,145,0.28)]',
   },
   {
-    key: 'root_one',
-    label: 'เฉพาะรหัส #1 / โคลน #1',
-    desc: 'รหัส #1 และโคลนนิ่งของรหัส #1 ในระบบ',
-    orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#ebd6ff_26%,#c58aff_56%,#7022c4_100%)] border border-[#d8b4fe]/85 shadow-[0_0_5px_rgba(168,85,247,0.28)]',
-  },
-  {
     key: 'upline_clone',
-    label: 'โคลนนิ่งอัพไลน์ในสายเลือด',
-    desc: 'โคลนนิ่งจากอัพไลน์ในสายเลือดเดียวกันที่ตกลงมาในผัง',
+    label: 'Clone ID อัพไลน์ (กรอบเขียว)',
+    desc: 'โคลนนิ่งของอัพไลน์เจ้าของผัง (ลูกแก้วสีเหมือนเจ้าของผัง กรอบสีเขียว)',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#eef8ff_0%,#8ad0ff_26%,#3da3f5_56%,#0f4e99_100%)] border border-[#8ad0ff]/80 shadow-[0_0_5px_rgba(56,178,255,0.28)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border-2 border-[#16a34a] shadow-[0_0_5px_rgba(34,197,94,0.38)]',
   },
   {
-    key: 'other_line',
-    label: 'รหัสที่ไม่ได้อยู่ในสายเลือด',
-    desc: 'รหัสที่มาจากสายงานอื่นนอกสายเลือดเจ้าของผัง',
+    key: 'upline_auto',
+    label: 'Auto ID อัพไลน์ (กรอบเหลือง/ทอง)',
+    desc: 'Auto ID ของอัพไลน์เจ้าของผัง (ลูกแก้วสีเหมือนเจ้าของผัง กรอบสีเหลือง/ทอง)',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#fff8c2_0%,#fbd966_28%,#e3ab25_58%,#8d5905_100%)] border border-[#f2c95c]/80 shadow-[0_0_5px_rgba(245,180,35,0.28)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border-2 border-[#eab308] shadow-[0_0_5px_rgba(234,179,8,0.42)]',
+  },
+  {
+    key: 'upline_extra',
+    label: 'Extra ID อัพไลน์ (กรอบชมพู-ทับทิม)',
+    desc: 'Extra ID ของอัพไลน์เจ้าของผัง (ลูกแก้วสีเหมือนเจ้าของผัง กรอบสีมุกชมพู-ทับทิมเงิน)',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border-2 border-[#c86b7d] shadow-[0_0_5px_rgba(220,125,145,0.40)]',
   },
   {
     key: 'empty',
@@ -529,9 +529,11 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
     return layers;
   }, [rootNode, nodeMap]);
 
-  // Bloodline context relative to the current tree owner (ownerMainId)
+  // Bloodline context relative to the active/logged-in ID (เจ้าของผัง = ไอดีที่เข้าใช้งานอยู่)
   const bloodlineContext = useMemo(() => {
-    const ownerMainId = getMainId(rootNode, effectiveRootId);
+    const activeOwnerMainId = Number(activeIdSummary?.mainId || displayId || 0);
+    const ownerMainId =
+      activeOwnerMainId > 0 ? activeOwnerMainId : getMainId(rootNode, effectiveRootId);
     const sponsorOfMainId = new Map<number, number>();
 
     const registerSponsorLinks = (list: MatrixTreeNodeRaw[]) => {
@@ -548,7 +550,18 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
     registerSponsorLinks(rank1Nodes);
     registerSponsorLinks(nodes);
 
-    // 1. Uplines above ownerMainId in bloodline (excluding #1 which is handled by rules 5 & 6)
+    if (
+      ownerMainId > 1 &&
+      activeIdSummary?.directSponsorNodeId &&
+      activeIdSummary.directSponsorNodeId > 0 &&
+      activeIdSummary.directSponsorNodeId !== ownerMainId &&
+      !sponsorOfMainId.has(ownerMainId)
+    ) {
+      sponsorOfMainId.set(ownerMainId, Number(activeIdSummary.directSponsorNodeId));
+    }
+
+    // 1. Uplines above ownerMainId in bloodline (including #1 when #1 is an upline)
+    const uplineMainIds = new Set<number>();
     const uplineNonRootMainIds = new Set<number>();
     let cur = ownerMainId;
     const seenUp = new Set<number>([ownerMainId]);
@@ -556,6 +569,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       const sp = sponsorOfMainId.get(cur) || 0;
       if (!sp || seenUp.has(sp)) break;
       seenUp.add(sp);
+      uplineMainIds.add(sp);
       if (sp !== 1) uplineNonRootMainIds.add(sp);
       cur = sp;
     }
@@ -593,15 +607,24 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
     return {
       ownerMainId,
       sponsorOfMainId,
+      uplineMainIds,
       uplineNonRootMainIds,
       directReferralMainIds,
       downlineBloodlineMainIds,
     };
-  }, [rootNode, effectiveRootId, rank1Nodes, nodes]);
+  }, [
+    activeIdSummary?.mainId,
+    activeIdSummary?.directSponsorNodeId,
+    displayId,
+    rootNode,
+    effectiveRootId,
+    rank1Nodes,
+    nodes,
+  ]);
 
   const getCardAppearance = useCallback(
     (node: MatrixTreeNodeRaw) => {
-      const { ownerMainId, sponsorOfMainId, uplineNonRootMainIds, downlineBloodlineMainIds } =
+      const { ownerMainId, sponsorOfMainId, uplineMainIds, downlineBloodlineMainIds } =
         bloodlineContext;
       const nodeMainId = getMainId(node);
       const isClone = isCloneNode(node);
@@ -611,72 +634,30 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         node.autoSourceMainId || node.directSponsorNodeId || sponsorOfMainId.get(nodeMainId) || 0
       );
 
-      // 5 & 6. เฉพาะรหัส #1 และโคลนนิ่งของ #1 -> ทรงกลมสีม่วงสว่างสดใส + ข้อความสีม่วงเข้มคมชัด
-      if (nodeMainId === 1 && (!isAuto && !isExtra)) {
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#ebd6ff_24%,#c58aff_54%,#9848ec_84%,#7022c4_100%)] border border-[#d8b4fe]/85 shadow-[0_0_13px_rgba(168,85,247,0.26),0_4px_10px_rgba(101,30,184,0.20),inset_0_-4px_9px_rgba(88,28,135,0.26)]',
-          topTextClass: 'text-[#2e085c] [text-shadow:0_1px_1px_rgba(255,255,255,0.45)]',
-          idTextClass: 'text-[#1b033b] [text-shadow:0_1px_1px_rgba(255,255,255,0.45)]',
-          subTextClass: 'text-[#270650] [text-shadow:0_1px_1px_rgba(255,255,255,0.4)]',
-          metaTextClass: 'text-[#390c70] [text-shadow:0_1px_1px_rgba(255,255,255,0.38)]',
-          categoryHint: isClone ? 'โคลนนิ่งของ #1' : 'เฉพาะรหัส #1',
-        };
-      }
-      // 2. Auto ID ของรหัสหลักเจ้าของผัง -> ทรงกลมมุกแชมเปญ-ทอง (เรืองแสงขอบอ่อน ~25%)
-      if (isAuto && (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId)) {
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#f8f5ea_26%,#e3dec3_56%,#aba274_84%,#6c6440_100%)] border border-[#cfc698]/75 shadow-[0_0_13px_rgba(220,200,115,0.25),0_4px_10px_rgba(55,45,15,0.18),inset_0_-4px_9px_rgba(80,70,35,0.28)]',
-          topTextClass: 'text-[#524a20]',
-          idTextClass: 'text-[#242009]',
-          subTextClass: 'text-[#453e19]',
-          metaTextClass: 'text-[#5b5225]',
-          categoryHint: 'Auto ID ของเจ้าของผัง',
-        };
-      }
-      // 3. Extra ID ของรหัสหลักเจ้าของผัง -> ทรงกลมมุกชมพู-ทับทิมเงิน (เรืองแสงขอบอ่อน ~25%)
-      if (isExtra && (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId)) {
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_26%,#e2c1c7_56%,#ac717c_84%,#6a3b44_100%)] border border-[#d4a5ae]/75 shadow-[0_0_13px_rgba(220,125,145,0.25),0_4px_10px_rgba(65,25,35,0.18),inset_0_-4px_9px_rgba(85,35,45,0.28)]',
-          topTextClass: 'text-[#612c38]',
-          idTextClass: 'text-[#341119]',
-          subTextClass: 'text-[#562430]',
-          metaTextClass: 'text-[#6a3541]',
-          categoryHint: 'Extra ID ของเจ้าของผัง',
-        };
-      }
-      // 4. Clone ID ของรหัสหลักเจ้าของผัง -> ทรงกลมมุกเขียวมรกต-เงิน (เรืองแสงขอบอ่อน ~25%)
-      if (isClone && nodeMainId === ownerMainId) {
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_26%,#c1e2d0_56%,#6fa389_84%,#3d6552_100%)] border border-[#8fc4a9]/75 shadow-[0_0_13px_rgba(80,210,145,0.25),0_4px_10px_rgba(20,55,35,0.18),inset_0_-4px_9px_rgba(35,75,55,0.28)]',
-          topTextClass: 'text-[#245740]',
-          idTextClass: 'text-[#0b3121]',
-          subTextClass: 'text-[#1c4b36]',
-          metaTextClass: 'text-[#2b6149]',
-          categoryHint: 'Clone ID ของเจ้าของผัง',
-        };
-      }
-      // 7. เฉพาะรหัสโคลนนิ่งของอัพไลน์ในสายเลือด -> ทรงกลมน้ำเงินสดสว่าง + ข้อความสีกรมท่าเข้มคมชัด
-      if (isClone && nodeMainId !== 1 && uplineNonRootMainIds.has(nodeMainId)) {
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#eef8ff_0%,#8ad0ff_25%,#3da3f5_55%,#1b73cb_84%,#0f4e99_100%)] border border-[#8ad0ff]/80 shadow-[0_0_14px_rgba(56,178,255,0.26),0_4px_11px_rgba(12,68,140,0.22),inset_0_-5px_10px_rgba(9,56,118,0.28)]',
-          topTextClass: 'text-[#062654] [text-shadow:0_1px_1px_rgba(235,248,255,0.45)]',
-          idTextClass: 'text-[#031636] [text-shadow:0_1px_1px_rgba(235,248,255,0.45)]',
-          subTextClass: 'text-[#052047] [text-shadow:0_1px_1px_rgba(235,248,255,0.4)]',
-          metaTextClass: 'text-[#0a3066] [text-shadow:0_1px_1px_rgba(235,248,255,0.38)]',
-          categoryHint: 'โคลนนิ่งของอัพไลน์ในสายเลือด',
-        };
-      }
-      // 1. รหัสหลักเจ้าของผัง และรหัสในสายเลือดที่อยู่ใต้รหัสของเจ้าของผัง -> ทรงกลมมุกฟ้า-เงิน (เรืองแสงขอบอ่อน ~25%)
-      if (
-        nodeMainId === ownerMainId ||
-        downlineBloodlineMainIds.has(nodeMainId) ||
-        (!isClone && sourceSponsorId === ownerMainId)
-      ) {
+      // 1. Auto ID: ของเจ้าของผัง -> ทรงกลมสีเหลือง/ทอง · ของอัพไลน์ -> มุกฟ้า-เงิน + กรอบสีเหลือง/ทอง · อื่นๆ -> มุกฟ้า-เงิน
+      if (isAuto) {
+        if (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId) {
+          return {
+            sphereClass:
+              'bg-[radial-gradient(circle_at_30%_24%,#fffbe0_0%,#fde047_26%,#eab308_56%,#b45309_84%,#713f12_100%)] border border-[#fde047]/85 shadow-[0_0_14px_rgba(250,204,21,0.34),0_4px_10px_rgba(113,63,18,0.22),inset_0_-4px_9px_rgba(146,64,14,0.28)]',
+            topTextClass: 'text-[#5c3204]',
+            idTextClass: 'text-[#2e1600]',
+            subTextClass: 'text-[#4a2602]',
+            metaTextClass: 'text-[#633807]',
+            categoryHint: 'Auto ID ของเจ้าของผัง',
+          };
+        }
+        if (uplineMainIds.has(sourceSponsorId) || uplineMainIds.has(nodeMainId)) {
+          return {
+            sphereClass:
+              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border-[3px] border-[#eab308] shadow-[0_0_14px_rgba(234,179,8,0.48),0_4px_10px_rgba(113,63,18,0.20),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+            topTextClass: 'text-[#315076]',
+            idTextClass: 'text-[#09275f]',
+            subTextClass: 'text-[#24446b]',
+            metaTextClass: 'text-[#3e5e84]',
+            categoryHint: 'Auto ID ของอัพไลน์ (กรอบสีเหลือง/ทอง)',
+          };
+        }
         return {
           sphereClass:
             'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
@@ -684,23 +665,93 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           idTextClass: 'text-[#09275f]',
           subTextClass: 'text-[#24446b]',
           metaTextClass: 'text-[#3e5e84]',
-          categoryHint:
-            nodeMainId === ownerMainId
-              ? 'เจ้าของผัง'
-              : sourceSponsorId === ownerMainId
-              ? 'ลูกที่แนะนำตรง (สายเลือดใต้เจ้าของผัง)'
-              : 'สายเลือดใต้เจ้าของผัง',
+          categoryHint: 'Auto ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
         };
       }
-      // 8. เฉพาะรหัสที่ไม่ได้อยู่ในสายเลือด -> ทรงกลมสีทองคำอำพัน (เรืองแสงขอบอ่อน ~25%)
+      // 2. Clone ID: ของเจ้าของผัง -> มุกเขียวมรกต · ของอัพไลน์ -> มุกฟ้า-เงิน + กรอบสีเขียว · อื่นๆ -> มุกฟ้า-เงิน
+      if (isClone) {
+        if (nodeMainId === ownerMainId) {
+          return {
+            sphereClass:
+              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_26%,#c1e2d0_56%,#6fa389_84%,#3d6552_100%)] border border-[#8fc4a9]/75 shadow-[0_0_13px_rgba(80,210,145,0.25),0_4px_10px_rgba(20,55,35,0.18),inset_0_-4px_9px_rgba(35,75,55,0.28)]',
+            topTextClass: 'text-[#245740]',
+            idTextClass: 'text-[#0b3121]',
+            subTextClass: 'text-[#1c4b36]',
+            metaTextClass: 'text-[#2b6149]',
+            categoryHint: 'Clone ID ของเจ้าของผัง',
+          };
+        }
+        if (uplineMainIds.has(nodeMainId)) {
+          return {
+            sphereClass:
+              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border-[3px] border-[#16a34a] shadow-[0_0_13px_rgba(34,197,94,0.45),0_4px_10px_rgba(20,55,35,0.18),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+            topTextClass: 'text-[#315076]',
+            idTextClass: 'text-[#09275f]',
+            subTextClass: 'text-[#24446b]',
+            metaTextClass: 'text-[#3e5e84]',
+            categoryHint: 'Clone ID ของอัพไลน์ (กรอบสีเขียว)',
+          };
+        }
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+          topTextClass: 'text-[#315076]',
+          idTextClass: 'text-[#09275f]',
+          subTextClass: 'text-[#24446b]',
+          metaTextClass: 'text-[#3e5e84]',
+          categoryHint: 'Clone ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
+        };
+      }
+      // 3. Extra ID: ของเจ้าของผัง -> มุกชมพู-ทับทิมเงิน · ของอัพไลน์ -> มุกฟ้า-เงิน + กรอบสีมุกชมพู-ทับทิมเงิน · อื่นๆ -> มุกฟ้า-เงิน
+      if (isExtra) {
+        if (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId) {
+          return {
+            sphereClass:
+              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_26%,#e2c1c7_56%,#ac717c_84%,#6a3b44_100%)] border border-[#d4a5ae]/75 shadow-[0_0_13px_rgba(220,125,145,0.25),0_4px_10px_rgba(65,25,35,0.18),inset_0_-4px_9px_rgba(85,35,45,0.28)]',
+            topTextClass: 'text-[#612c38]',
+            idTextClass: 'text-[#341119]',
+            subTextClass: 'text-[#562430]',
+            metaTextClass: 'text-[#6a3541]',
+            categoryHint: 'Extra ID ของเจ้าของผัง',
+          };
+        }
+        if (uplineMainIds.has(sourceSponsorId) || uplineMainIds.has(nodeMainId)) {
+          return {
+            sphereClass:
+              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border-[3px] border-[#c86b7d] shadow-[0_0_13px_rgba(220,125,145,0.45),0_4px_10px_rgba(85,35,45,0.20),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+            topTextClass: 'text-[#315076]',
+            idTextClass: 'text-[#09275f]',
+            subTextClass: 'text-[#24446b]',
+            metaTextClass: 'text-[#3e5e84]',
+            categoryHint: 'Extra ID ของอัพไลน์ (กรอบสีชมพู-ทับทิมเงิน)',
+          };
+        }
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+          topTextClass: 'text-[#315076]',
+          idTextClass: 'text-[#09275f]',
+          subTextClass: 'text-[#24446b]',
+          metaTextClass: 'text-[#3e5e84]',
+          categoryHint: 'Extra ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
+        };
+      }
+      // 4. รหัสหลักเจ้าของผัง สายเลือด และ Main ID ที่ไม่ใช่ของเจ้าของผัง -> ทรงกลมมุกฟ้า-เงิน (สีเหมือนเจ้าของผัง)
+      const isBloodlineMember =
+        downlineBloodlineMainIds.has(nodeMainId) || sourceSponsorId === ownerMainId;
       return {
         sphereClass:
-          'bg-[radial-gradient(circle_at_30%_24%,#fff8c2_0%,#fbd966_26%,#e3ab25_56%,#b1740b_84%,#6c4102_100%)] border border-[#f2c95c]/75 shadow-[0_0_13px_rgba(245,180,35,0.25),0_4px_10px_rgba(70,40,4,0.22),inset_0_-4px_9px_rgba(95,55,5,0.34)]',
-        topTextClass: 'text-[#4d2c03]',
-        idTextClass: 'text-[#2a1600]',
-        subTextClass: 'text-[#422502]',
-        metaTextClass: 'text-[#573306]',
-        categoryHint: 'รหัสที่ไม่ได้อยู่ในสายเลือด',
+          'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+        topTextClass: 'text-[#315076]',
+        idTextClass: 'text-[#09275f]',
+        subTextClass: 'text-[#24446b]',
+        metaTextClass: 'text-[#3e5e84]',
+        categoryHint:
+          nodeMainId === ownerMainId
+            ? 'เจ้าของผัง'
+            : isBloodlineMember
+            ? 'สายเลือดใต้เจ้าของผัง'
+            : 'Main ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
       };
     },
     [bloodlineContext]
@@ -1956,15 +2007,15 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               type="button"
               onClick={() => setIsLegendModalOpen(true)}
               className="px-2.5 py-1.5 rounded-lg bg-[#f4faff] hover:bg-[#e5f3ff] border border-[#a5d6ff] text-[10.5px] font-bold text-[#0754b9] cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition"
-              title="เปิดดูความหมายสีลูกแก้วทั้ง 8 ประเภท"
+              title={`เปิดดูความหมายสีลูกแก้วทั้ง ${MATRIX_ORB_LEGEND_ITEMS.length} ประเภท`}
             >
               <span className="inline-flex items-center -space-x-1" aria-hidden="true">
-                {MATRIX_ORB_LEGEND_ITEMS.slice(0, 7).map((item) => (
+                {MATRIX_ORB_LEGEND_ITEMS.slice(0, MATRIX_ORB_LEGEND_ITEMS.length - 1).map((item) => (
                   <i key={`mini-orb-${item.key}`} className={`inline-block w-2.5 h-2.5 rounded-full ${item.orbClass}`} />
                 ))}
                 <i className="inline-block w-2.5 h-2.5 rounded-full bg-[#f4f8fd] border border-dashed border-[#6d98c4]" />
               </span>
-              <span>คำอธิบายสี (8)</span>
+              <span>คำอธิบายสี ({MATRIX_ORB_LEGEND_ITEMS.length})</span>
             </button>
             <button
               type="button"
@@ -3219,7 +3270,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
             <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
               <div>
                 <h3 className="text-base font-black text-[#09265f]">
-                  ความหมายสีลูกแก้วในผัง Matrix (8 ประเภท)
+                  ความหมายสีลูกแก้วในผัง Matrix ({MATRIX_ORB_LEGEND_ITEMS.length} ประเภท)
                 </h3>
                 <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
                   ใช้แยกสถานะของแต่ละรหัสและสายเลือดบนโครงสร้าง Matrix
