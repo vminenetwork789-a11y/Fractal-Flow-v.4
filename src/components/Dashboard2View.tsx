@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { Dashboard2MatrixPanel, type MatrixActiveIdSummary } from './Dashboard2MatrixPanel';
 import { Dashboard2UnilevelPanel } from './Dashboard2UnilevelPanel';
+import { Dashboard2IdVaultPanel } from './Dashboard2IdVaultPanel';
 import { WalletIncomeNotifier } from './WalletIncomeNotifier';
 
 async function safeReadJson(res: Response | null): Promise<any> {
@@ -99,7 +100,7 @@ interface Dashboard2ViewProps {
   refreshTrigger?: any;
 }
 
-type BottomTabKey = 'home' | 'matrix' | 'unilevel' | 'history' | 'help';
+type BottomTabKey = 'home' | 'matrix' | 'unilevel' | 'id_vault' | 'history' | 'help';
 type DetailModalKey =
   | null
   | 'switch_id'
@@ -2125,7 +2126,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   return (
     <div className="relative min-h-screen w-full overflow-x-clip bg-gradient-to-br from-[#043b9c] via-[#087fe9] via-25% to-[#e7f6ff] dark:from-[#021238] dark:via-[#062b78] dark:to-[#071636] text-[#09265f] pb-28 lg:pb-32">
       <div className="relative z-10 mx-auto w-full max-w-[1260px] px-2.5 sm:px-5 lg:px-6 pt-0 space-y-3.5 sm:space-y-4">
-        {bottomTab !== 'matrix' && bottomTab !== 'unilevel' && (
+        {bottomTab !== 'matrix' && bottomTab !== 'unilevel' && bottomTab !== 'id_vault' && (
           <>
             {/* 1. SAPPHIRE HERO HEADER */}
         <header className="relative min-h-[164px] text-white px-4 sm:px-6 pt-4 pb-9 overflow-hidden bg-[radial-gradient(ellipse_at_80%_72%,rgba(64,217,255,0.53),transparent_35%),linear-gradient(125deg,#05256d,#0066d7_58%,#031e68)] rounded-b-[26px] sm:rounded-b-[28px] shadow-[0_8px_28px_rgba(0,62,155,0.53)] space-y-3">
@@ -2490,6 +2491,67 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               setBottomTab('home');
             }}
             onOpenSwitchId={() => setActiveModal('switch_id')}
+          />
+        )}
+
+        {/* TAB: ID VAULT (คลังไอดีทั้งหมด: Main ID / Auto ID / Extra ID / โคลนนิ่ง) */}
+        {bottomTab === 'id_vault' && (
+          <Dashboard2IdVaultPanel
+            account={account}
+            usdtBalance={usdtBalance}
+            bnbBalance={bnbBalance}
+            profile={profile}
+            reports={reports}
+            displayId={displayId}
+            effectiveMainId={effectiveMainId}
+            selectedSubIdTarget={selectedSubIdTarget}
+            isSyncing={isSyncing}
+            onRefresh={handleRefreshAll}
+            onConnectWallet={onConnectWallet}
+            onOpenRegisterModal={onOpenRegisterModal}
+            onBackToHome={() => setBottomTab('home')}
+            onSelectMainId={(mainId) => {
+              setSelectedSubIdTarget(null);
+              setMatrixTargetRootNodeId(null);
+              setMatrixTargetRank(undefined);
+              setMatrixFocusVersion((v) => v + 1);
+              onSelectMainId(String(mainId));
+              setBottomTab('home');
+            }}
+            onSelectSubId={(target) => {
+              setSelectedSubIdTarget(target);
+              onSelectMainId(String(target.mainId));
+              setMatrixTargetRank(target.rank);
+              setMatrixTargetRootNodeId(target.nodeId);
+              setMatrixFocusVersion((v) => v + 1);
+              setBottomTab('home');
+            }}
+            onOpenMatrixForNode={(targetRank, nodeId, subTarget) => {
+              if (subTarget) {
+                setSelectedSubIdTarget(subTarget);
+                onSelectMainId(String(subTarget.mainId));
+              } else {
+                setSelectedSubIdTarget(null);
+                onSelectMainId(String(nodeId));
+              }
+              openDashboard2Matrix(targetRank, nodeId);
+            }}
+            onOpenUnilevelForNode={(nodeId, mainId, subTarget) => {
+              if (subTarget) {
+                setSelectedSubIdTarget(subTarget);
+                onSelectMainId(String(subTarget.mainId));
+                openDashboard2Unilevel(nodeId);
+              } else {
+                setSelectedSubIdTarget(null);
+                onSelectMainId(String(mainId));
+                openDashboard2Unilevel(mainId);
+              }
+            }}
+            onOpenUpgradeForMainId={(mainId) => {
+              setSelectedSubIdTarget(null);
+              onSelectMainId(String(mainId));
+              setActiveModal('upgrade');
+            }}
           />
         )}
 
@@ -3538,10 +3600,11 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       </div>
 
       {/* STICKY BOTTOM NAVIGATION BAR (MOBILE FULL DOCK / PC FLOATING PILL) */}
-      <nav className="fixed bottom-0 lg:bottom-3 left-1/2 -translate-x-1/2 w-full lg:w-[min(920px,calc(100%-2rem))] grid grid-cols-5 px-1 sm:px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:py-2 bg-white/[0.97] dark:bg-[#061d56]/[0.97] border-t lg:border border-[#a9ddff] dark:border-[#3898ff]/50 rounded-t-[22px] lg:rounded-[24px] shadow-[0_-6px_22px_rgba(7,85,181,0.18)] lg:shadow-[0_12px_32px_rgba(2,28,88,0.35)] z-40">
+      <nav className="fixed bottom-0 lg:bottom-3 left-1/2 -translate-x-1/2 w-full lg:w-[min(920px,calc(100%-2rem))] grid grid-cols-6 px-1 sm:px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:py-2 bg-white/[0.97] dark:bg-[#061d56]/[0.97] border-t lg:border border-[#a9ddff] dark:border-[#3898ff]/50 rounded-t-[22px] lg:rounded-[24px] shadow-[0_-6px_22px_rgba(7,85,181,0.18)] lg:shadow-[0_12px_32px_rgba(2,28,88,0.35)] z-40">
         {(
           [
             { key: 'home', icon: '⌂', label: 'หน้าหลัก' },
+            { key: 'id_vault', icon: '◈', label: 'คลังไอดี' },
             { key: 'matrix', icon: '⌘', label: 'Matrix' },
             { key: 'unilevel', icon: '❖', label: 'ยูนิ15ชั้น' },
             { key: 'history', icon: '▥', label: 'ประวัติ' },
@@ -3656,6 +3719,16 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                             ownedExtraIds.length}{' '}
                           IDs
                         </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveModal(null);
+                            setBottomTab('id_vault');
+                          }}
+                          className="px-2.5 py-1 rounded-xl bg-[#087cf4] hover:bg-[#0568d0] text-white font-bold text-[11px] inline-flex items-center gap-1 cursor-pointer shadow-xs transition"
+                        >
+                          <span>◈ เปิดหน้าคลังไอดี ›</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
