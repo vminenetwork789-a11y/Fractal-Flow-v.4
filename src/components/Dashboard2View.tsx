@@ -2515,6 +2515,10 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
             }}
             onOpenFullMatrixCanvas={(targetRank) => onOpenMatrixTree(targetRank)}
             onOpenSwitchId={() => setActiveModal('switch_id')}
+            account={account}
+            language={language}
+            theme={theme}
+            onRefreshNotifications={handleRefreshAll}
           />
         )}
 
@@ -2543,6 +2547,10 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               setBottomTab('home');
             }}
             onOpenSwitchId={() => setActiveModal('switch_id')}
+            account={account}
+            language={language}
+            theme={theme}
+            onRefreshNotifications={handleRefreshAll}
           />
         )}
 
@@ -2558,6 +2566,8 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
             effectiveMainId={effectiveMainId}
             selectedSubIdTarget={selectedSubIdTarget}
             isSyncing={isSyncing}
+            language={language}
+            theme={theme}
             onRefresh={handleRefreshAll}
             onConnectWallet={onConnectWallet}
             onOpenRegisterModal={onOpenRegisterModal}

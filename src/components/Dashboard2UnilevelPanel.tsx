@@ -8,6 +8,7 @@ import {
   Coins,
 } from 'lucide-react';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
+import { WalletIncomeNotifier } from './WalletIncomeNotifier';
 import { RANK_PRICES_USDT } from '../contracts/config';
 import type { MatrixActiveIdSummary, MatrixTreeNodeRaw } from './Dashboard2MatrixPanel';
 
@@ -45,6 +46,10 @@ interface Dashboard2UnilevelPanelProps {
   onOpenMatrixForId: (mainId: number, targetRank?: number) => void;
   onSelectMainId: (idStr: string) => void;
   onOpenSwitchId?: () => void;
+  account?: string | null;
+  language?: 'th' | 'en';
+  theme?: 'light' | 'dark';
+  onRefreshNotifications?: () => void;
 }
 
 const fmtNum = (n: number): string => n.toLocaleString('en-US');
@@ -110,6 +115,10 @@ export const Dashboard2UnilevelPanel: React.FC<Dashboard2UnilevelPanelProps> = (
   onBackToHome,
   onOpenMatrixForId,
   onOpenSwitchId,
+  account = null,
+  language = 'th',
+  theme = 'light',
+  onRefreshNotifications,
 }) => {
   const [unilevelRank, setUnilevelRank] = useState<number>(1);
   const [rankNodes, setRankNodes] = useState<MatrixTreeNodeRaw[]>([]);
@@ -584,6 +593,12 @@ export const Dashboard2UnilevelPanel: React.FC<Dashboard2UnilevelPanelProps> = (
             >
               <Search className="w-3.5 h-3.5" /> ค้นหา ID
             </button>
+            <WalletIncomeNotifier
+              account={account}
+              language={language}
+              theme={theme}
+              onRefresh={onRefreshNotifications || fetchRankNodes}
+            />
             <button
               type="button"
               onClick={() => fetchRankNodes()}

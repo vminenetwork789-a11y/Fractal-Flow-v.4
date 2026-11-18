@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
+import { WalletIncomeNotifier } from './WalletIncomeNotifier';
 import { RANK_PRICES_USDT } from '../contracts/config';
 
 export type IdVaultCategory = 'ALL' | 'MAIN' | 'AUTO' | 'EXTRA' | 'CLONE';
@@ -65,6 +66,8 @@ interface Dashboard2IdVaultPanelProps {
     mainId: number;
   } | null;
   isSyncing?: boolean;
+  language?: 'th' | 'en';
+  theme?: 'light' | 'dark';
   onRefresh: () => void;
   onConnectWallet: () => void;
   onOpenRegisterModal: (sponsorId?: number | null) => void;
@@ -108,6 +111,8 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
   effectiveMainId,
   selectedSubIdTarget,
   isSyncing = false,
+  language = 'th',
+  theme = 'light',
   onRefresh,
   onConnectWallet,
   onOpenRegisterModal,
@@ -557,6 +562,12 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                 <Wallet className="w-3.5 h-3.5" /> เชื่อมต่อกระเป๋า
               </button>
             )}
+            <WalletIncomeNotifier
+              account={account}
+              language={language}
+              theme={theme}
+              onRefresh={onRefresh}
+            />
             <button
               type="button"
               onClick={onRefresh}

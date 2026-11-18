@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { RefreshCw, Search, ArrowLeft, ExternalLink, ArrowUp, X, Users, ChevronDown, Coins } from 'lucide-react';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
+import { WalletIncomeNotifier } from './WalletIncomeNotifier';
 import { RANK_PRICES_USDT } from '../contracts/config';
 
 async function safeReadJson(res: Response | null): Promise<any> {
@@ -90,6 +91,10 @@ interface Dashboard2MatrixPanelProps {
   onSelectSubId?: (target: { kind: 'CLONE' | 'EXTRA'; rank: number; nodeId: number; mainId: number }) => void;
   onOpenFullMatrixCanvas: (targetRank?: number) => void;
   onOpenSwitchId?: () => void;
+  account?: string | null;
+  language?: 'th' | 'en';
+  theme?: 'light' | 'dark';
+  onRefreshNotifications?: () => void;
 }
 
 const fmtNum = (n: number): string => n.toLocaleString('en-US');
@@ -239,6 +244,10 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   onSelectSubId,
   onOpenFullMatrixCanvas,
   onOpenSwitchId,
+  account = null,
+  language = 'th',
+  theme = 'light',
+  onRefreshNotifications,
 }) => {
   const [matrixRank, setMatrixRank] = useState<number>(() =>
     Math.max(1, Math.min(18, Number(initialRank || 1)))
@@ -1542,6 +1551,12 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
             >
               <Search className="w-3.5 h-3.5" /> ค้นหา ID
             </button>
+            <WalletIncomeNotifier
+              account={account}
+              language={language}
+              theme={theme}
+              onRefresh={onRefreshNotifications || fetchRankNodes}
+            />
             <button
               type="button"
               onClick={fetchRankNodes}
