@@ -33,6 +33,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { Dashboard2MatrixPanel, type MatrixActiveIdSummary } from './Dashboard2MatrixPanel';
+import { Dashboard2UnilevelPanel } from './Dashboard2UnilevelPanel';
 import { WalletIncomeNotifier } from './WalletIncomeNotifier';
 
 async function safeReadJson(res: Response | null): Promise<any> {
@@ -98,7 +99,7 @@ interface Dashboard2ViewProps {
   refreshTrigger?: any;
 }
 
-type BottomTabKey = 'home' | 'matrix' | 'history' | 'transactions' | 'help';
+type BottomTabKey = 'home' | 'matrix' | 'unilevel' | 'history' | 'help';
 type DetailModalKey =
   | null
   | 'switch_id'
@@ -260,6 +261,8 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   const [matrixTargetRank, setMatrixTargetRank] = useState<number | undefined>(undefined);
   const [matrixTargetRootNodeId, setMatrixTargetRootNodeId] = useState<number | null>(null);
   const [matrixFocusVersion, setMatrixFocusVersion] = useState<number>(0);
+  const [unilevelTargetRootId, setUnilevelTargetRootId] = useState<number | null>(null);
+  const [unilevelFocusVersion, setUnilevelFocusVersion] = useState<number>(0);
   const [selectedSubIdTarget, setSelectedSubIdTarget] = useState<{
     kind: 'CLONE' | 'EXTRA';
     rank: number;
@@ -329,6 +332,13 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
     },
     []
   );
+
+  const openDashboard2Unilevel = useCallback((targetRootId?: number | null) => {
+    setUnilevelTargetRootId(targetRootId ?? null);
+    setUnilevelFocusVersion((v) => v + 1);
+    setActiveModal(null);
+    setBottomTab('unilevel');
+  }, []);
 
   const activeIdNum = Math.max(1, Number(selectedMainId || profile?.mainNodeIdRank1 || 1));
 
@@ -885,7 +895,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
         .catch(() => {});
     };
     loadIdUpgrades();
-    if (bottomTab !== 'history' && bottomTab !== 'transactions') {
+    if (bottomTab !== 'history') {
       return () => {
         cancelled = true;
       };
@@ -2115,7 +2125,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   return (
     <div className="relative min-h-screen w-full overflow-x-clip bg-gradient-to-br from-[#043b9c] via-[#087fe9] via-25% to-[#e7f6ff] dark:from-[#021238] dark:via-[#062b78] dark:to-[#071636] text-[#09265f] pb-28 lg:pb-32">
       <div className="relative z-10 mx-auto w-full max-w-[1260px] px-2.5 sm:px-5 lg:px-6 pt-0 space-y-3.5 sm:space-y-4">
-        {bottomTab !== 'matrix' && (
+        {bottomTab !== 'matrix' && bottomTab !== 'unilevel' && (
           <>
             {/* 1. SAPPHIRE HERO HEADER */}
         <header className="relative min-h-[164px] text-white px-4 sm:px-6 pt-4 pb-9 overflow-hidden bg-[radial-gradient(ellipse_at_80%_72%,rgba(64,217,255,0.53),transparent_35%),linear-gradient(125deg,#05256d,#0066d7_58%,#031e68)] rounded-b-[26px] sm:rounded-b-[28px] shadow-[0_8px_28px_rgba(0,62,155,0.53)] space-y-3">
@@ -2131,19 +2141,30 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               <span className="px-2.5 py-0.5 rounded-full bg-[#22caff]/20 border border-[#72e5ff]/55 text-[10px] font-extrabold text-[#dffbff] whitespace-nowrap shadow-[0_0_10px_rgba(34,202,255,0.28)]">
                 {language === 'th' ? 'หน้าหลักสมาชิก' : 'Member Home'}
               </span>
-              <button
-                type="button"
-                onClick={() =>
-                  isViewingSubId
-                    ? openDashboard2Matrix(selectedSubIdTarget!.rank, selectedSubIdTarget!.nodeId)
-                    : openDashboard2Matrix(1)
-                }
-                className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-white/15 hover:bg-white/25 border border-cyan-300/45 text-white font-bold text-[11px] sm:text-xs flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
-                title={language === 'th' ? 'เปิดหน้าผัง Matrix 15 ชั้น' : 'Open Matrix 15 Layers'}
-              >
-                <span className="text-sm sm:text-base leading-none">♟</span>
-                <span>Matrix 15 ชั้น</span>
-              </button>
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                <button
+                  type="button"
+                  onClick={() => openDashboard2Unilevel(effectiveMainId)}
+                  className="px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-emerald-500/25 hover:bg-emerald-500/40 border border-emerald-300/50 text-white font-bold text-[11px] sm:text-xs flex items-center gap-1 transition cursor-pointer whitespace-nowrap shadow-sm"
+                  title={language === 'th' ? 'เปิดหน้าผัง ยูนิเลเวล 15 ชั้น' : 'Open 15-Level Unilevel Chart'}
+                >
+                  <span className="text-xs sm:text-sm leading-none">❖</span>
+                  <span>ยูนิ 15 ชั้น</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    isViewingSubId
+                      ? openDashboard2Matrix(selectedSubIdTarget!.rank, selectedSubIdTarget!.nodeId)
+                      : openDashboard2Matrix(1)
+                  }
+                  className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-white/15 hover:bg-white/25 border border-cyan-300/45 text-white font-bold text-[11px] sm:text-xs flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap shadow-sm"
+                  title={language === 'th' ? 'เปิดหน้าผัง Matrix 15 ชั้น' : 'Open Matrix 15 Layers'}
+                >
+                  <span className="text-sm sm:text-base leading-none">♟</span>
+                  <span>Matrix 15 ชั้น</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -2444,6 +2465,34 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           />
         )}
 
+        {/* TAB: UNILEVEL 15 LAYERS (DIRECT SPONSOR GENEALOGY TREE) */}
+        {bottomTab === 'unilevel' && (
+          <Dashboard2UnilevelPanel
+            displayId={effectiveMainId}
+            currentRank={currentRank}
+            initialRootId={unilevelTargetRootId}
+            focusVersion={unilevelFocusVersion}
+            rankCounts={rankCounts}
+            contractAddress={contractAddress}
+            refreshTrigger={refreshTrigger}
+            activeIdSummary={matrixActiveIdSummary}
+            allReports={reports}
+            onBackToHome={() => setBottomTab('home')}
+            onOpenMatrixForId={(targetMainId, targetRank) => {
+              setSelectedSubIdTarget(null);
+              onSelectMainId(String(targetMainId));
+              openDashboard2Matrix(targetRank ?? 1, targetMainId);
+            }}
+            onSelectMainId={(idStr) => {
+              setSelectedSubIdTarget(null);
+              setMatrixTargetRootNodeId(null);
+              onSelectMainId(idStr);
+              setBottomTab('home');
+            }}
+            onOpenSwitchId={() => setActiveModal('switch_id')}
+          />
+        )}
+
         {/* TAB: HOME (DASHBOARD OVERVIEW — MOBILE & PC CLEAN HIERARCHY) */}
         {bottomTab === 'home' && (
           <>
@@ -2540,7 +2589,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               </article>
             </section>
 
-            {/* 4. QUICK MAIN MENU (6 ACTION SHORTCUTS — 3x2 MOBILE / 6x1 PC) */}
+            {/* 4. QUICK MAIN MENU (8 BALANCED ACTION SHORTCUTS — 2x4 MOBILE / 4x2 SM+) */}
             <section className="mx-0.5 sm:mx-1 p-3.5 sm:p-4 rounded-[24px] bg-gradient-to-br from-white/95 to-[#dff4ff]/95 border-[1.5px] border-[#a9ddff] shadow-[0_8px_22px_rgba(0,72,190,0.23)]">
               <div className="flex items-center justify-between gap-2 mb-2.5 sm:mb-3 px-0.5">
                 <h2 className="text-[15px] sm:text-[17px] font-black text-[#09265f] m-0">
@@ -2549,7 +2598,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                 <span className="text-[11px] font-bold text-[#0756bc]">ทางลัดจัดการบัญชี</span>
               </div>
 
-              <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 sm:gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5">
                 <button
                   type="button"
                   onClick={() => {
@@ -2575,6 +2624,15 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                 >
                   <b className="block text-[24px] sm:text-[26px] text-[#087cf4] mb-1 leading-none">⌘</b>
                   <span className="block truncate">ผัง Matrix</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openDashboard2Unilevel(effectiveMainId)}
+                  className="p-2.5 sm:p-3 text-center rounded-[16px] sm:rounded-[18px] bg-gradient-to-br from-white to-[#d5edff] border border-[#a7d8ff] shadow-[0_4px_12px_rgba(7,86,165,0.14)] text-[11px] sm:text-xs font-black text-[#09265f] hover:border-[#087cf4] hover:-translate-y-0.5 transition-transform duration-150 cursor-pointer"
+                >
+                  <b className="block text-[24px] sm:text-[26px] text-emerald-600 mb-1 leading-none">❖</b>
+                  <span className="block truncate">ผัง ยูนิ15ชั้น</span>
                 </button>
 
                 <button
@@ -2611,6 +2669,15 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                 >
                   <b className="block text-[24px] sm:text-[26px] text-[#087cf4] mb-1 leading-none">🎁</b>
                   <span className="block truncate">AllSell Pool</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setBottomTab('history')}
+                  className="p-2.5 sm:p-3 text-center rounded-[16px] sm:rounded-[18px] bg-gradient-to-br from-white to-[#d5edff] border border-[#a7d8ff] shadow-[0_4px_12px_rgba(7,86,165,0.14)] text-[11px] sm:text-xs font-black text-[#09265f] hover:border-[#087cf4] hover:-translate-y-0.5 transition-transform duration-150 cursor-pointer"
+                >
+                  <b className="block text-[24px] sm:text-[26px] text-[#087cf4] mb-1 leading-none">▥</b>
+                  <span className="block truncate">ประวัติรายรับ</span>
                 </button>
               </div>
             </section>
@@ -3434,175 +3501,6 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           </section>
         )}
 
-        {/* TAB: TRANSACTIONS (SCOPED TO SWITCHED ID) */}
-        {bottomTab === 'transactions' && (() => {
-          const idSpecificRows =
-            idSpecificUpgradesState.mainId === displayId ? idSpecificUpgradesState.rows : [];
-          const upMap = new Map<string, any>();
-          [...recentUpgrades, ...idSpecificRows].forEach((u: any) => {
-            if (Number(u.mainNodeId) !== displayId) return;
-            const key = `${u.toRank}-${u.newNodeId}-${u.isClone ? 'c' : 'm'}-${u.isExtraId ? 'e' : 'n'}`;
-            upMap.set(key, u);
-          });
-          const idUpgradesRaw = isViewingSubId ? [] : upMap.values();
-          const idUpgrades = Array.from(idUpgradesRaw).sort(
-            (a, b) =>
-              new Date(b.createdAt || b.timestamp || 0).getTime() -
-              new Date(a.createdAt || a.timestamp || 0).getTime()
-          );
-
-          const idTransactions = recentTransactions.filter((tx: any) => {
-            const mId = Number(tx.mainNodeId || 0);
-            const tId = Number(tx.toNodeId || 0);
-            const txRank = Number(tx.rank || 1);
-            if (isViewingSubId) {
-              return (
-                txRank === selectedSubIdTarget!.rank &&
-                (tId === selectedSubIdTarget!.nodeId || mId === selectedSubIdTarget!.nodeId)
-              );
-            }
-            const regNodeId =
-              String(tx.category || '').toUpperCase() === 'REGISTRATION'
-                ? Number(String(tx.id || '').replace('reg-r1-', '') || mId)
-                : 0;
-            return (
-              mId === displayId ||
-              tId === displayId ||
-              regNodeId === displayId ||
-              idCloneNodeIds.has(mId) ||
-              idCloneNodeIds.has(tId)
-            );
-          });
-
-          return (
-          <section className="mx-0.5 sm:mx-1 p-3 sm:p-4 rounded-[24px] bg-gradient-to-br from-white/95 to-[#dff4ff]/95 border-[1.5px] border-[#a9ddff] shadow-[0_8px_22px_rgba(0,72,190,0.23)] space-y-3 min-w-0">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <div>
-                <h2 className="text-base sm:text-lg font-black text-[#09265f]">
-                  ⇄ ธุรกรรมและประวัติอัปเกรดของ ID #{displayId}
-                </h2>
-                <p className="text-[11px] font-semibold text-[#3f6493]">
-                  แสดงเฉพาะธุรกรรม On-Chain และประวัติอัปเกรดของ ID #{displayId} ({idTransactions.length} ธุรกรรม · {idUpgrades.length} อัปเกรด)
-                </p>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setActiveModal('switch_id')}
-                  className="px-2.5 py-1 rounded-xl bg-white border border-[#a9ddff] text-xs font-bold text-[#0756bc] cursor-pointer"
-                >
-                  ⇄ สลับ ID (#{displayId})
-                </button>
-                <button
-                  type="button"
-                  onClick={fetchDashboardData}
-                  className="px-3 py-1 rounded-xl bg-[#087cf4] text-white text-xs font-bold cursor-pointer"
-                >
-                  รีเฟรช
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
-              {idUpgrades.map((up: any, i: number) => (
-                <div
-                  key={`up-${i}-${up.newNodeId}-${up.toRank}`}
-                  className="p-3 rounded-xl bg-white/90 border border-[#b8e5ff] flex items-center justify-between gap-2 text-xs"
-                >
-                  <div className="min-w-0">
-                    <div className="font-bold text-[#09265f] flex items-center gap-1.5 flex-wrap">
-                      <span className="px-2 py-0.5 rounded bg-blue-100 text-[#0754b9] font-mono text-[10px]">
-                        R{up.fromRank} ➔ R{up.toRank}
-                      </span>
-                      <span>
-                        Main #{up.mainNodeId} · Node #{up.newNodeId}
-                      </span>
-                      {up.isClone && (
-                        <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 text-[10px] font-bold">
-                          โคลนนิ่ง
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[11px] text-[#55769b] font-mono mt-0.5">
-                      ผู้แนะนำ #{up.directSponsorNodeId} · อัพไลน์ #{up.parentId} ({up.side}) ·{' '}
-                      {formatThaiDateTime(up.createdAt || up.timestamp)}
-                    </div>
-                  </div>
-                  <div className="text-right font-mono shrink-0 space-y-0.5">
-                    <strong className="text-sm font-black text-[#0754b9] block">
-                      {Number(up.rankPriceUsdt || 0).toFixed(2)} U
-                    </strong>
-                    {Number(up.vaultDeductedUsdt || 0) > 0 && (
-                      <span className="text-[10px] text-emerald-700 block">
-                        Vault -{Number(up.vaultDeductedUsdt || 0).toFixed(2)} U
-                      </span>
-                    )}
-                    {isRealChainTxHash(up.txHash) && (
-                      <a
-                        href={`https://testnet.bscscan.com/tx/${up.txHash}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-[10px] text-[#087cf4] hover:underline inline-flex items-center gap-0.5 justify-end"
-                      >
-                        BscScan <ArrowUpRight className="w-2.5 h-2.5" />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {idTransactions.map((tx: any, i: number) => (
-                <div
-                  key={`tx-${i}-${tx.txHash || tx.id}`}
-                  className="p-3 rounded-xl bg-white/90 border border-[#b8e5ff] flex items-center justify-between gap-2 text-xs"
-                >
-                  <div className="min-w-0 space-y-0.5">
-                    <div className="font-bold text-[#09265f] flex items-center gap-1.5 flex-wrap">
-                      <span className="px-2 py-0.5 rounded bg-[#e0f2ff] text-[#0754b9] font-mono text-[10px]">
-                        {tx.rewardType || tx.category || 'ONCHAIN'}
-                      </span>
-                      <span>{tx.titleTh || `Node #${tx.toNodeId || tx.mainNodeId || displayId}`}</span>
-                      <span className="text-[10px] font-mono text-[#55769b]">
-                        (Rank {tx.rank || 1})
-                      </span>
-                    </div>
-                    <div className="text-[11px] text-[#45668f] break-words">
-                      {tx.detailsTh || tx.titleEn || ''}
-                    </div>
-                    <div className="text-[10px] text-[#6283aa] font-mono">
-                      {formatThaiDateTime(tx.timestamp)}
-                    </div>
-                  </div>
-                  <div className="text-right font-mono shrink-0 space-y-0.5">
-                    {Number(tx.amountUsdt || 0) > 0 && (
-                      <strong className="text-sm font-black text-emerald-600 block">
-                        {String(tx.category || '').toUpperCase() === 'PAYOUT' ? '+' : ''}
-                        {Number(tx.amountUsdt).toFixed(2)} U
-                      </strong>
-                    )}
-                    {isRealChainTxHash(tx.txHash) && (
-                      <a
-                        href={`https://testnet.bscscan.com/tx/${tx.txHash}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="px-2 py-0.5 rounded-lg bg-[#eff8ff] border border-[#a9d7ff] text-[10px] font-bold text-[#0756bc] hover:underline inline-flex items-center gap-1"
-                      >
-                        BscScan <ArrowUpRight className="w-2.5 h-2.5" />
-                      </a>
-                    )}
-                  </div>
-                </div>
-              ))}
-
-              {idUpgrades.length === 0 && idTransactions.length === 0 && (
-                <div className="p-6 text-center rounded-2xl bg-white/70 border border-[#b8e5ff] text-xs font-semibold text-[#54759c]">
-                  ยังไม่มีข้อมูลธุรกรรมสำหรับ ID #{displayId}
-                </div>
-              )}
-            </div>
-          </section>
-          );
-        })()}
 
         {/* TAB: HELP */}
         {bottomTab === 'help' && (
@@ -3640,13 +3538,13 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
       </div>
 
       {/* STICKY BOTTOM NAVIGATION BAR (MOBILE FULL DOCK / PC FLOATING PILL) */}
-      <nav className="fixed bottom-0 lg:bottom-3 left-1/2 -translate-x-1/2 w-full lg:w-[min(860px,calc(100%-2rem))] grid grid-cols-5 px-1.5 sm:px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:py-2 bg-white/[0.97] dark:bg-[#061d56]/[0.97] border-t lg:border border-[#a9ddff] dark:border-[#3898ff]/50 rounded-t-[22px] lg:rounded-[24px] shadow-[0_-6px_22px_rgba(7,85,181,0.18)] lg:shadow-[0_12px_32px_rgba(2,28,88,0.35)] z-40">
+      <nav className="fixed bottom-0 lg:bottom-3 left-1/2 -translate-x-1/2 w-full lg:w-[min(920px,calc(100%-2rem))] grid grid-cols-5 px-1 sm:px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:py-2 bg-white/[0.97] dark:bg-[#061d56]/[0.97] border-t lg:border border-[#a9ddff] dark:border-[#3898ff]/50 rounded-t-[22px] lg:rounded-[24px] shadow-[0_-6px_22px_rgba(7,85,181,0.18)] lg:shadow-[0_12px_32px_rgba(2,28,88,0.35)] z-40">
         {(
           [
             { key: 'home', icon: '⌂', label: 'หน้าหลัก' },
             { key: 'matrix', icon: '⌘', label: 'Matrix' },
+            { key: 'unilevel', icon: '❖', label: 'ยูนิ15ชั้น' },
             { key: 'history', icon: '▥', label: 'ประวัติ' },
-            { key: 'transactions', icon: '⇄', label: 'ธุรกรรม' },
             { key: 'help', icon: '◉', label: 'ช่วยเหลือ' },
           ] as const
         ).map((tab) => {
@@ -3662,17 +3560,19 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                   } else {
                     openDashboard2Matrix(1);
                   }
+                } else if (tab.key === 'unilevel') {
+                  openDashboard2Unilevel(effectiveMainId);
                 } else {
                   setBottomTab(tab.key);
                 }
               }}
-              className={`text-center text-[10px] sm:text-[11px] font-bold py-1.5 rounded-[16px] transition cursor-pointer whitespace-nowrap ${
+              className={`text-center text-[9.5px] sm:text-[11px] font-bold py-1.5 px-0.5 rounded-[14px] sm:rounded-[16px] transition cursor-pointer whitespace-nowrap ${
                 isActive
                   ? 'text-white bg-gradient-to-br from-[#21bfff] to-[#0754d2] shadow-[0_4px_12px_rgba(5,119,223,0.47)]'
                   : 'text-[#42689c] dark:text-[#b6e4ff] hover:text-[#087cf4] dark:hover:text-white'
               }`}
             >
-              <b className="block text-[18px] sm:text-[20px] leading-tight">{tab.icon}</b>
+              <b className="block text-[17px] sm:text-[20px] leading-tight">{tab.icon}</b>
               <span>{tab.label}</span>
             </button>
           );
