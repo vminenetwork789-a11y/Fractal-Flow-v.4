@@ -442,17 +442,6 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
     return { nodeMap: m, cloneIdsByMainId: clonesByMain, cloneSeqByNodeId: seqMap };
   }, [nodes]);
 
-  const mainRankByIdMap = useMemo(() => {
-    const m = new Map<number, number>();
-    for (const r of allReports) {
-      if (!r.isClone && !r.isExtraId && Number(r.id) > 0) {
-        const curR = Number(r.currentMaxRank || 0);
-        if (curR > 0) m.set(Number(r.id), curR);
-      }
-    }
-    return m;
-  }, [allReports]);
-
   const activeIdNodeInCurrentRank = useMemo(() => {
     if (activeIdSummary?.isSubId && activeIdSummary.subRank && activeIdSummary.subNodeId) {
       if (matrixRank !== activeIdSummary.subRank) return null;
@@ -2152,20 +2141,10 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                           const cloneSeq =
                             cloneSeqByNodeId.get(Number(node.id)) ||
                             Number(node.cloneSequence || 0);
-                          const nodeDisplayRank = isExtraNode(node)
-                            ? Math.max(1, Number(node.rank || matrixRank || 1))
-                            : Math.max(
-                                1,
-                                Number(
-                                  mainRankByIdMap.get(mainId) ||
-                                    (activeIdSummary?.mainId === mainId
-                                      ? activeIdSummary.currentRank
-                                      : 0) ||
-                                    node.rank ||
-                                    matrixRank ||
-                                    1
-                                )
-                              );
+                          const nodeDisplayRank = Math.max(
+                            1,
+                            Number(matrixRank || node.rank || 1)
+                          );
                           const appearance = getCardAppearance(node);
 
                           return (
@@ -2211,7 +2190,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                                           : 'text-[11px]'
                                       } font-black font-mono leading-none ${appearance.idTextClass}`}
                                     >
-                                      {mainId}
+                                      #{mainId}
                                     </b>
                                     <span
                                       className={`relative z-10 mt-0.5 ${
@@ -2259,7 +2238,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                                           : 'text-[12.5px]'
                                       } font-black font-mono leading-none ${appearance.idTextClass}`}
                                     >
-                                      {mainId}
+                                      #{mainId}
                                     </b>
                                     <span
                                       className={`relative z-10 mt-1 ${
