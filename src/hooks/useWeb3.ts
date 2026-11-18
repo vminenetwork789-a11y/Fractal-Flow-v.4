@@ -26,7 +26,6 @@ import {
 import {
   savePostTxNotice,
   savePostTxViewTarget,
-  triggerAutoPageRefresh,
 } from '../utils/postTxNotice';
 
 declare global {
@@ -1056,8 +1055,10 @@ export function useWeb3() {
       await refreshUserData(ownerResolved);
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        }, 900);
       }
-      triggerAutoPageRefresh(1300);
       return {
         ...regData,
         hash: regData.txHash || null,
@@ -1355,8 +1356,10 @@ export function useWeb3() {
       // อัปเดตผังต้นไม้ไบนารี่ทันทีเมื่อสมัครสำเร็จ
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        }, 900);
       }
-      triggerAutoPageRefresh(1300);
       return {
         success: true,
         hash: receipt.hash,
@@ -1552,8 +1555,10 @@ export function useWeb3() {
       // อัปเดตผังต้นไม้ไบนารี่ทันทีเมื่อสมัครสำเร็จ
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        }, 900);
       }
-      triggerAutoPageRefresh(1300);
       return {
         success: true,
         hash: receipt.hash,
@@ -1615,8 +1620,10 @@ export function useWeb3() {
               await refreshUserData(regData.owner || targetOwner);
               if (typeof window !== 'undefined') {
                 window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+                window.setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+                }, 900);
               }
-              triggerAutoPageRefresh(1300);
               return { ...regData, assignedNodeIds: fallbackIds };
             }
           }
@@ -1917,8 +1924,10 @@ export function useWeb3() {
       await refreshUserData(userAddr);
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        }, 900);
       }
-      triggerAutoPageRefresh(1300);
       return {
         success: true,
         hash: receipt.hash,
@@ -2250,8 +2259,10 @@ export function useWeb3() {
         // อัปเดตผังต้นไม้ไบนารี่ทันทีเมื่อสมัครแบบกลุ่มสำเร็จ
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+          window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+          }, 900);
         }
-        triggerAutoPageRefresh(1300);
         result.assignedNodeIds = assignedIds;
       } else {
         if (activeBatchTicket?.ticketId) {
@@ -2521,8 +2532,10 @@ export function useWeb3() {
       if (account) await refreshUserData(account);
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        window.setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('matrix:tree:refresh'));
+        }, 900);
       }
-      triggerAutoPageRefresh(1300);
       return {
         success: true,
         txHash,

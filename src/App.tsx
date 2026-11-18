@@ -15,7 +15,7 @@ import { calculateMainIdVaultPools } from './utils/vaultPools';
 import { notifyMatrixNetworkError } from './hooks/useMatrixAutoReconnect';
 import {
   peekPostTxViewTarget,
-  consumePostTxViewTarget,
+  savePostTxViewTarget,
   POST_TX_VIEW_EVENT,
   type PostTxViewTarget,
 } from './utils/postTxNotice';
@@ -86,7 +86,9 @@ export default function App() {
       if (detail.type === 'register') {
         setIsRegisterModalOpen(false);
         setRegisterPrefillSponsorId(null);
+        setBypassGateToDashboard(true);
       }
+      setIsAdminView(false);
     };
     window.addEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
     return () => window.removeEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
@@ -260,18 +262,8 @@ export default function App() {
       } else if (profile.mainNodeIdRank1 && profile.mainNodeIdRank1 !== '0') {
         setSelectedMainId(String(profile.mainNodeIdRank1));
       }
-      if (postTarget && Date.now() - Number(postTarget.createdAtMs || 0) >= 2000) {
-        consumePostTxViewTarget();
-      }
     }
   }, [account, profile]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      consumePostTxViewTarget();
-    }, 6000);
-    return () => window.clearTimeout(timer);
-  }, []);
 
   const [mainIdVaultsOnChain, setMainIdVaultsOnChain] = useState<Record<number, number>>({});
   const [selectedMainIdRankOnChain, setSelectedMainIdRankOnChain] = useState<number | null>(null);
@@ -743,6 +735,8 @@ export default function App() {
               onRegisterSuccess={(res) => {
                 setIsRegisterModalOpen(false);
                 setRegisterPrefillSponsorId(null);
+                setIsAdminView(false);
+                setBypassGateToDashboard(true);
                 const firstAssigned = Array.isArray(res?.assignedNodeIds)
                   ? Number(res.assignedNodeIds[0] || 0)
                   : 0;
@@ -750,6 +744,15 @@ export default function App() {
                   setSelectedMainId(String(firstAssigned));
                 }
                 setSelectedInspectRank(1);
+                if (!peekPostTxViewTarget()) {
+                  savePostTxViewTarget({
+                    type: 'register',
+                    selectedRank: 1,
+                    selectedMainId: firstAssigned > 0 ? firstAssigned : undefined,
+                    focusNodeId: firstAssigned > 0 ? firstAssigned : undefined,
+                    assignedNodeIds: Array.isArray(res?.assignedNodeIds) ? res.assignedNodeIds : undefined,
+                  });
+                }
               }}
               language={language}
               compact={isDashboard2View}

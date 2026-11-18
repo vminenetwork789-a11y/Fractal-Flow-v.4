@@ -10,6 +10,7 @@ import { calculateMainIdVaultPools } from '../utils/vaultPools';
 import { buildReferralLink } from '../utils/referralLink';
 import {
   peekPostTxViewTarget,
+  consumePostTxViewTarget,
   POST_TX_VIEW_EVENT,
   type PostTxViewTarget,
 } from '../utils/postTxNotice';
@@ -371,26 +372,48 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   }, []);
 
   useEffect(() => {
-    const handlePostTxView = (event: Event) => {
-      const detail = (event as CustomEvent<PostTxViewTarget>).detail;
+    let consumeTimer: number | null = null;
+    const applyPostTxTarget = (detail: PostTxViewTarget | null | undefined) => {
       if (!shouldAutoOpenMatrixTarget(detail)) return;
       const targetRank = Math.max(
         1,
-        Math.min(18, Number(detail.selectedRank || detail.targetRank || 1))
+        Math.min(18, Number(detail!.selectedRank || detail!.targetRank || 1))
       );
-      const targetMain = Number(detail.selectedMainId || detail.mainId || 0);
+      const targetMain = Number(detail!.selectedMainId || detail!.mainId || 0);
       setSelectedSubIdTarget(null);
       if (targetMain > 0) {
         onSelectMainId(String(targetMain));
       }
       const targetRoot =
-        detail.type === 'register' && detail.focusNodeId && Number(detail.focusNodeId) > 0
-          ? Number(detail.focusNodeId)
+        detail!.type === 'register' && detail!.focusNodeId && Number(detail!.focusNodeId) > 0
+          ? Number(detail!.focusNodeId)
           : null;
       openDashboard2Matrix(targetRank, targetRoot);
+      if (consumeTimer !== null) {
+        window.clearTimeout(consumeTimer);
+      }
+      consumeTimer = window.setTimeout(() => {
+        consumePostTxViewTarget();
+        consumeTimer = null;
+      }, 2200);
+    };
+
+    const pendingOnMount = peekPostTxViewTarget();
+    if (shouldAutoOpenMatrixTarget(pendingOnMount)) {
+      applyPostTxTarget(pendingOnMount);
+    }
+
+    const handlePostTxView = (event: Event) => {
+      const detail = (event as CustomEvent<PostTxViewTarget>).detail;
+      applyPostTxTarget(detail);
     };
     window.addEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
-    return () => window.removeEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
+    return () => {
+      window.removeEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
+      if (consumeTimer !== null) {
+        window.clearTimeout(consumeTimer);
+      }
+    };
   }, [onSelectMainId, openDashboard2Matrix]);
 
   const activeIdNum = Math.max(1, Number(selectedMainId || profile?.mainNodeIdRank1 || 1));
