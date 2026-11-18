@@ -85,7 +85,7 @@ interface Dashboard2ViewProps {
   selectedMainId: string;
   onSelectMainId: (mainId: string) => void;
   onOpenMatrixTree: (targetRank?: number) => void;
-  onOpenRegisterModal: () => void;
+  onOpenRegisterModal: (sponsorId?: number | null) => void;
   onOpenContractSwitcher: () => void;
   onConnectWallet: () => void;
   onDisconnect?: () => void;
@@ -2232,7 +2232,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
 
               <button
                 type="button"
-                onClick={onOpenRegisterModal}
+                onClick={() => onOpenRegisterModal(null)}
                 className="px-2.5 py-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 border border-emerald-200/60 text-slate-950 text-[11px] font-extrabold inline-flex items-center gap-1 cursor-pointer shadow-xs transition"
                 title={language === 'th' ? 'สมัครสมาชิก / เพิ่ม ID ใหม่' : 'Register / Add ID'}
               >
@@ -2400,7 +2400,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
           <div className="grid grid-cols-2 sm:flex sm:flex-col gap-2 w-full sm:w-auto sm:min-w-[168px] shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#b8e5ff]/70">
             <button
               type="button"
-              onClick={onOpenRegisterModal}
+              onClick={() => onOpenRegisterModal(null)}
               className="border-0 rounded-[14px] px-3 py-2.5 sm:py-2 text-white font-bold text-xs sm:text-sm bg-gradient-to-br from-emerald-500 to-teal-600 shadow-[0_4px_12px_rgba(16,185,129,0.38)] hover:brightness-105 transition whitespace-nowrap cursor-pointer inline-flex items-center justify-center gap-1.5"
             >
               <UserPlus className="w-3.5 h-3.5 shrink-0" />

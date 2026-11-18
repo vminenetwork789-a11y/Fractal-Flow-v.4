@@ -28,6 +28,15 @@ export default function App() {
   const [isDeployModalOpen, setIsDeployModalOpen] = useState<boolean>(false);
   const [isContractSwitcherOpen, setIsContractSwitcherOpen] = useState<boolean>(false);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState<boolean>(false);
+  const [registerPrefillSponsorId, setRegisterPrefillSponsorId] = useState<number | null>(null);
+  const openRegisterModal = (prefillSponsorId?: number | null) => {
+    const validId =
+      typeof prefillSponsorId === 'number' && Number.isFinite(prefillSponsorId) && prefillSponsorId >= 1
+        ? Math.floor(prefillSponsorId)
+        : null;
+    setRegisterPrefillSponsorId(validId);
+    setIsRegisterModalOpen(true);
+  };
   const [selectedInspectRank, setSelectedInspectRank] = useState<number>(() => {
     const t = peekPostTxViewTarget();
     const r = Number(t?.selectedRank || 0);
@@ -605,7 +614,7 @@ export default function App() {
               }
               toggleDashboard2View(false);
             }}
-            onOpenRegisterModal={() => setIsRegisterModalOpen(true)}
+            onOpenRegisterModal={openRegisterModal}
             onOpenContractSwitcher={() => setIsContractSwitcherOpen(true)}
             onConnectWallet={connectWallet}
             onDisconnect={handleFullLogout}
@@ -637,7 +646,7 @@ export default function App() {
               onRegisterWithSponsor={handleRegister}
               onUpgradeToRank={handleUpgradeRank}
               onAdminUpgrade={isAdminUser ? handleAdminUpgrade : undefined}
-              onOpenRegisterModal={() => setIsRegisterModalOpen(true)}
+              onOpenRegisterModal={() => openRegisterModal(null)}
               currentUserRank={profile?.currentMaxRank || 1}
               ownedWalletMainIds={profile?.ownedMainIdsRank1 || []}
               ownedWalletAllIds={profile?.ownedAllIdsRank1 || []}
@@ -656,7 +665,10 @@ export default function App() {
       {isRegisterModalOpen && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/50 dark:bg-black/80 backdrop-blur-sm"
-          onClick={() => setIsRegisterModalOpen(false)}
+          onClick={() => {
+            setIsRegisterModalOpen(false);
+            setRegisterPrefillSponsorId(null);
+          }}
         >
           <div
             className={`relative w-full ${isDashboard2View ? 'max-w-md' : 'max-w-xl'} max-h-[90vh] overflow-y-auto rounded-2xl bg-white dark:bg-slate-950 border border-slate-200/80 dark:border-indigo-500/40 shadow-[0_20px_50px_-10px_rgba(15,23,42,0.15)] dark:shadow-2xl p-2`}
@@ -664,7 +676,10 @@ export default function App() {
           >
             <button
               type="button"
-              onClick={() => setIsRegisterModalOpen(false)}
+              onClick={() => {
+                setIsRegisterModalOpen(false);
+                setRegisterPrefillSponsorId(null);
+              }}
               className="absolute top-4 right-4 z-10 p-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-900 dark:hover:bg-slate-800 text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white border border-slate-200/80 dark:border-slate-700 transition cursor-pointer"
               title="ปิดหน้าต่าง"
             >
@@ -689,10 +704,12 @@ export default function App() {
               onRegisterSuccess={() => {
                 setTimeout(() => {
                   setIsRegisterModalOpen(false);
+                  setRegisterPrefillSponsorId(null);
                 }, 1050);
               }}
               language={language}
               compact={isDashboard2View}
+              initialSponsorId={registerPrefillSponsorId}
             />
           </div>
         </div>

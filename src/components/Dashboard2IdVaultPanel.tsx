@@ -67,7 +67,7 @@ interface Dashboard2IdVaultPanelProps {
   isSyncing?: boolean;
   onRefresh: () => void;
   onConnectWallet: () => void;
-  onOpenRegisterModal: () => void;
+  onOpenRegisterModal: (sponsorId?: number | null) => void;
   onBackToHome: () => void;
   onSelectMainId: (mainId: number) => void;
   onSelectSubId: (target: {
@@ -559,13 +559,6 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
             )}
             <button
               type="button"
-              onClick={onOpenRegisterModal}
-              className="px-2.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 border border-emerald-200/70 text-slate-950 text-[11px] font-black inline-flex items-center gap-1 whitespace-nowrap cursor-pointer shadow-xs"
-            >
-              <UserPlus className="w-3.5 h-3.5" /> สมัคร/เพิ่ม ID
-            </button>
-            <button
-              type="button"
               onClick={onRefresh}
               className="p-2 rounded-xl bg-white/15 hover:bg-white/25 border border-cyan-300/40 text-white cursor-pointer"
               title="รีเฟรชข้อมูลคลังไอดี"
@@ -617,7 +610,7 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
           <div className="text-[11px] font-mono text-cyan-100">
             {account
               ? `Gas: ${Number(bnbBalance || 0).toFixed(4)} tBNB · กำลังดู: #${displayId}`
-              : 'แสดงโหมดทั้งระบบ (เชื่อมต่อกระเป๋าเพื่อกรองเฉพาะ ID ของคุณ)'}
+              : 'เชื่อมต่อกระเป๋าเพื่อจัดการ ID ของคุณ'}
           </div>
         </div>
 
@@ -762,7 +755,7 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
           <div className="flex items-center justify-center gap-2 flex-wrap pt-1">
             <button
               type="button"
-              onClick={onOpenRegisterModal}
+              onClick={() => onOpenRegisterModal(null)}
               className="px-4 py-2 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white text-xs font-black inline-flex items-center gap-1.5 cursor-pointer shadow-sm"
             >
               <UserPlus className="w-4 h-4" /> สมัครสมาชิก / เพิ่ม ID
@@ -802,6 +795,9 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
             const sideTh =
               item.side === 'RIGHT' ? 'ขวา' : item.side === 'LEFT' ? 'ซ้าย' : '';
 
+            const isMainOrAuto = item.category === 'MAIN' || item.category === 'AUTO';
+            const isDarkActiveCard = active && item.category !== 'MAIN';
+
             const cardTheme =
               item.category === 'CLONE'
                 ? active
@@ -816,10 +812,10 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                   ? 'bg-gradient-to-br from-[#b45309] to-[#78350f] border-[#fde68a] text-white'
                   : 'bg-gradient-to-br from-[#fffbeb] to-[#fef3c7] border-amber-300 text-[#78350f]'
                 : active
-                ? 'bg-gradient-to-br from-[#075ed0] to-[#032b83] border-[#69eaff] text-white'
-                : 'bg-gradient-to-br from-white to-[#e6f5ff] border-[#a9ddff] text-[#09265f]';
+                ? 'bg-white border-2 border-[#087cf4] ring-2 ring-[#22caff]/45 text-[#09265f]'
+                : 'bg-white border-[#b8ddff] text-[#09265f]';
 
-            const badgeClass = active
+            const badgeClass = isDarkActiveCard
               ? 'bg-[#ffdf6d] text-[#09265f]'
               : item.category === 'CLONE'
               ? 'bg-emerald-600 text-white'
@@ -829,9 +825,11 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
               ? 'bg-amber-500 text-slate-950'
               : 'bg-[#087cf4] text-white';
 
-            const subTextClass = active ? 'text-white/85' : 'opacity-80';
-            const innerBoxClass = active
+            const subTextClass = isDarkActiveCard ? 'text-white/85' : 'text-[#4e6f99]';
+            const innerBoxClass = isDarkActiveCard
               ? 'bg-white/15 border-white/25 text-white'
+              : item.category === 'MAIN'
+              ? 'bg-[#f4faff] border-[#d5ebff] text-[#09265f]'
               : 'bg-white/80 border-black/10 text-[#09265f]';
 
             return (
@@ -848,9 +846,9 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                       </span>
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono ${
-                          active
+                          isDarkActiveCard
                             ? 'bg-white/20 text-white'
-                            : 'bg-white/90 border border-current/15'
+                            : 'bg-[#eff7ff] border border-[#cde5ff] text-[#0754b9]'
                         }`}
                       >
                         Rank {item.rank} ({fmtNum(rankPrice)} U)
@@ -863,7 +861,7 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                       {item.isOwnedByConnectedWallet && effectiveScope === 'SYSTEM' && (
                         <span
                           className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                            active
+                            isDarkActiveCard
                               ? 'bg-cyan-300/30 text-white'
                               : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                           }`}
@@ -880,20 +878,6 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                       {item.subtitle}
                     </p>
                   </div>
-
-                  {(item.category === 'MAIN' || item.category === 'AUTO') &&
-                    item.isOwnedByConnectedWallet &&
-                    item.rank < 18 &&
-                    onOpenUpgradeForMainId && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenUpgradeForMainId(item.id)}
-                        className="px-2.5 py-1 rounded-xl bg-[#ffdf6d] hover:brightness-105 text-[#09265f] text-[10.5px] font-black inline-flex items-center gap-1 cursor-pointer shrink-0 shadow-xs"
-                      >
-                        <Crown className="w-3 h-3" />
-                        <span>อัปเกรด R{item.rank + 1}</span>
-                      </button>
-                    )}
                 </div>
 
                 {/* Metadata Line */}
@@ -968,78 +952,110 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                   )}
 
                 {/* Actions */}
-                <div className="grid grid-cols-3 gap-1.5 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (item.category === 'CLONE' || item.category === 'EXTRA') {
-                        onSelectSubId({
-                          kind: item.category,
-                          rank: item.rank,
-                          nodeId: item.id,
-                          mainId: item.mainId,
-                        });
-                      } else {
-                        onSelectMainId(item.id);
-                      }
-                    }}
-                    className={`px-2 py-1.5 rounded-xl text-[10.5px] font-black inline-flex items-center justify-center gap-1 cursor-pointer transition ${
-                      active
-                        ? 'bg-white text-[#0754b9]'
-                        : 'bg-[#087cf4] hover:bg-[#0568d0] text-white'
-                    }`}
-                  >
-                    <ArrowUpRight className="w-3 h-3 shrink-0" />
-                    <span className="truncate">เปิดหน้าหลัก</span>
-                  </button>
+                <div className="space-y-1.5 pt-1">
+                  {isMainOrAuto && (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {onOpenUpgradeForMainId && (
+                        <button
+                          type="button"
+                          disabled={item.rank >= 18}
+                          onClick={() => onOpenUpgradeForMainId(item.id)}
+                          className={`px-2.5 py-2 rounded-xl text-[11px] font-black inline-flex items-center justify-center gap-1 transition shadow-xs ${
+                            item.rank >= 18
+                              ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-700 cursor-default'
+                              : 'bg-gradient-to-r from-[#ffdf6d] to-[#fbbf24] hover:brightness-105 text-[#09265f] cursor-pointer'
+                          }`}
+                        >
+                          <Crown className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate">
+                            {item.rank >= 18 ? 'สูงสุด R18' : `อัพ Rank R${item.rank + 1}`}
+                          </span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onOpenRegisterModal(item.id)}
+                        className="px-2.5 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:brightness-105 text-white text-[11px] font-black inline-flex items-center justify-center gap-1 cursor-pointer shadow-xs transition"
+                      >
+                        <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                        <span className="truncate">สมัครสมาชิก</span>
+                      </button>
+                    </div>
+                  )}
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (item.category === 'CLONE' || item.category === 'EXTRA') {
-                        onOpenMatrixForNode(item.rank, item.id, {
-                          kind: item.category,
-                          rank: item.rank,
-                          nodeId: item.id,
-                          mainId: item.mainId,
-                        });
-                      } else {
-                        onOpenMatrixForNode(1, item.id, null);
-                      }
-                    }}
-                    className={`px-2 py-1.5 rounded-xl text-[10.5px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer border transition ${
-                      active
-                        ? 'bg-white/15 hover:bg-white/25 border-white/30 text-white'
-                        : 'bg-white/90 hover:bg-white border-current/20'
-                    }`}
-                  >
-                    <GitBranch className="w-3 h-3 shrink-0" />
-                    <span className="truncate">ผัง Matrix</span>
-                  </button>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.category === 'CLONE' || item.category === 'EXTRA') {
+                          onSelectSubId({
+                            kind: item.category,
+                            rank: item.rank,
+                            nodeId: item.id,
+                            mainId: item.mainId,
+                          });
+                        } else {
+                          onSelectMainId(item.id);
+                        }
+                      }}
+                      className={`px-2 py-1.5 rounded-xl text-[10.5px] font-black inline-flex items-center justify-center gap-1 cursor-pointer transition ${
+                        isDarkActiveCard
+                          ? 'bg-white text-[#0754b9]'
+                          : 'bg-[#087cf4] hover:bg-[#0568d0] text-white'
+                      }`}
+                    >
+                      <ArrowUpRight className="w-3 h-3 shrink-0" />
+                      <span className="truncate">เปิดหน้าหลัก</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (item.category === 'CLONE' || item.category === 'EXTRA') {
-                        onOpenUnilevelForNode(item.id, item.mainId, {
-                          kind: item.category,
-                          rank: item.rank,
-                          nodeId: item.id,
-                          mainId: item.mainId,
-                        });
-                      } else {
-                        onOpenUnilevelForNode(item.id, item.id, null);
-                      }
-                    }}
-                    className={`px-2 py-1.5 rounded-xl text-[10.5px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer border transition ${
-                      active
-                        ? 'bg-white/15 hover:bg-white/25 border-white/30 text-white'
-                        : 'bg-white/90 hover:bg-white border-current/20'
-                    }`}
-                  >
-                    <Layers className="w-3 h-3 shrink-0" />
-                    <span className="truncate">ยูนิ 15 ชั้น</span>
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.category === 'CLONE' || item.category === 'EXTRA') {
+                          onOpenMatrixForNode(item.rank, item.id, {
+                            kind: item.category,
+                            rank: item.rank,
+                            nodeId: item.id,
+                            mainId: item.mainId,
+                          });
+                        } else {
+                          onOpenMatrixForNode(1, item.id, null);
+                        }
+                      }}
+                      className={`px-2 py-1.5 rounded-xl text-[10.5px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer border transition ${
+                        isDarkActiveCard
+                          ? 'bg-white/15 hover:bg-white/25 border-white/30 text-white'
+                          : 'bg-white hover:bg-[#f2f8ff] border-[#b8ddff] text-[#0754b9]'
+                      }`}
+                    >
+                      <GitBranch className="w-3 h-3 shrink-0" />
+                      <span className="truncate">ผัง Matrix</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (item.category === 'CLONE' || item.category === 'EXTRA') {
+                          onOpenUnilevelForNode(item.id, item.mainId, {
+                            kind: item.category,
+                            rank: item.rank,
+                            nodeId: item.id,
+                            mainId: item.mainId,
+                          });
+                        } else {
+                          onOpenUnilevelForNode(item.id, item.id, null);
+                        }
+                      }}
+                      className={`px-2 py-1.5 rounded-xl text-[10.5px] font-bold inline-flex items-center justify-center gap-1 cursor-pointer border transition ${
+                        isDarkActiveCard
+                          ? 'bg-white/15 hover:bg-white/25 border-white/30 text-white'
+                          : 'bg-white hover:bg-[#f2f8ff] border-[#b8ddff] text-[#0754b9]'
+                      }`}
+                    >
+                      <Layers className="w-3 h-3 shrink-0" />
+                      <span className="truncate">ยูนิ 15 ชั้น</span>
+                    </button>
+                  </div>
                 </div>
               </article>
             );

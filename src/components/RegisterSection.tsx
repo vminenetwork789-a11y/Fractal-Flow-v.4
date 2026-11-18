@@ -66,6 +66,7 @@ interface RegisterSectionProps {
   onRegisterSuccess?: (result?: any) => void;
   language: 'th' | 'en';
   compact?: boolean;
+  initialSponsorId?: number | null;
 }
 
 export const RegisterSection: React.FC<RegisterSectionProps> = ({
@@ -85,11 +86,22 @@ export const RegisterSection: React.FC<RegisterSectionProps> = ({
   onRegisterSuccess,
   language,
   compact = false,
+  initialSponsorId = null,
 }) => {
-  const initialRefSponsor = getActiveReferralSponsorId() || 1;
+  const initialRefSponsor =
+    (initialSponsorId && initialSponsorId >= 1
+      ? initialSponsorId
+      : getActiveReferralSponsorId()) || 1;
   // Text input state so user can freely delete, clear, and type multi-digit numbers like "22" or a wallet "0x..."
   const [sponsorInputText, setSponsorInputText] = useState<string>(String(initialRefSponsor));
   const [sponsorNodeId, setSponsorNodeId] = useState<number>(initialRefSponsor);
+
+  useEffect(() => {
+    if (initialSponsorId && initialSponsorId >= 1) {
+      setSponsorInputText(String(initialSponsorId));
+      setSponsorNodeId(initialSponsorId);
+    }
+  }, [initialSponsorId]);
   const [nodeCount, setNodeCount] = useState<number>(1);
   const [placementMode, setPlacementMode] = useState<PlacementMode>('contract_round');
 
