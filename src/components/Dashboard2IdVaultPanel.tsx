@@ -10,7 +10,7 @@ import {
   Copy,
   Layers,
   GitBranch,
-  ArrowUpRight,
+  History,
   X,
 } from 'lucide-react';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
@@ -119,7 +119,7 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
   onOpenUpgradeForMainId,
 }) => {
   const [scope, setScope] = useState<IdVaultScope>(account ? 'MY_WALLET' : 'SYSTEM');
-  const [categoryFilter, setCategoryFilter] = useState<IdVaultCategory>('ALL');
+  const [categoryFilter, setCategoryFilter] = useState<IdVaultCategory>('MAIN');
   const [rankFilter, setRankFilter] = useState<number | 'ALL'>('ALL');
   const [sortBy, setSortBy] = useState<IdVaultSortKey>('id_asc');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -1004,8 +1004,8 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
                           : 'bg-[#087cf4] hover:bg-[#0568d0] text-white'
                       }`}
                     >
-                      <ArrowUpRight className="w-3 h-3 shrink-0" />
-                      <span className="truncate">เปิดหน้าหลัก</span>
+                      <History className="w-3 h-3 shrink-0" />
+                      <span className="truncate">ไปหน้าประวัติ</span>
                     </button>
 
                     <button

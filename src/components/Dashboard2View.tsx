@@ -8,6 +8,11 @@ import {
 } from '../contracts/config';
 import { calculateMainIdVaultPools } from '../utils/vaultPools';
 import { buildReferralLink } from '../utils/referralLink';
+import {
+  peekPostTxViewTarget,
+  POST_TX_VIEW_EVENT,
+  type PostTxViewTarget,
+} from '../utils/postTxNotice';
 import { FractalFlowBrandCard } from './FractalFlowLogo';
 import {
   RefreshCw,
@@ -100,7 +105,10 @@ interface Dashboard2ViewProps {
   refreshTrigger?: any;
 }
 
-type BottomTabKey = 'home' | 'matrix' | 'unilevel' | 'id_vault' | 'history' | 'help';
+type BottomTabKey = 'home' | 'matrix' | 'unilevel' | 'id_vault' | 'history';
+
+const shouldAutoOpenMatrixTarget = (t?: PostTxViewTarget | null): boolean =>
+  Boolean(t && (t.type === 'register' || t.type === 'upgrade' || t.type === 'admin_upgrade'));
 type DetailModalKey =
   | null
   | 'switch_id'
@@ -230,7 +238,10 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   isLoadingTx = false,
   refreshTrigger,
 }) => {
-  const [bottomTab, setBottomTab] = useState<BottomTabKey>('home');
+  const [bottomTab, setBottomTab] = useState<BottomTabKey>(() => {
+    const t = peekPostTxViewTarget();
+    return shouldAutoOpenMatrixTarget(t) ? 'matrix' : 'home';
+  });
   const [activeModal, setActiveModal] = useState<DetailModalKey>(null);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [isClearingCache, setIsClearingCache] = useState<boolean>(false);
@@ -259,8 +270,26 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
   const [vaultDirectionFilter, setVaultDirectionFilter] = useState<'ALL' | 'IN' | 'OUT'>('ALL');
   const [incomeModalFilter, setIncomeModalFilter] = useState<'all' | 'direct' | 'level'>('all');
   const [incomeModalRankFilter, setIncomeModalRankFilter] = useState<'all' | number>('all');
-  const [matrixTargetRank, setMatrixTargetRank] = useState<number | undefined>(undefined);
-  const [matrixTargetRootNodeId, setMatrixTargetRootNodeId] = useState<number | null>(null);
+  const [matrixTargetRank, setMatrixTargetRank] = useState<number | undefined>(() => {
+    const t = peekPostTxViewTarget();
+    if (shouldAutoOpenMatrixTarget(t)) {
+      const r = Number(t?.selectedRank || t?.targetRank || 1);
+      return r >= 1 && r <= 18 ? r : 1;
+    }
+    return undefined;
+  });
+  const [matrixTargetRootNodeId, setMatrixTargetRootNodeId] = useState<number | null>(() => {
+    const t = peekPostTxViewTarget();
+    if (
+      shouldAutoOpenMatrixTarget(t) &&
+      t?.type === 'register' &&
+      t?.focusNodeId &&
+      Number(t.focusNodeId) > 0
+    ) {
+      return Number(t.focusNodeId);
+    }
+    return null;
+  });
   const [matrixFocusVersion, setMatrixFocusVersion] = useState<number>(0);
   const [unilevelTargetRootId, setUnilevelTargetRootId] = useState<number | null>(null);
   const [unilevelFocusVersion, setUnilevelFocusVersion] = useState<number>(0);
@@ -340,6 +369,29 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
     setActiveModal(null);
     setBottomTab('unilevel');
   }, []);
+
+  useEffect(() => {
+    const handlePostTxView = (event: Event) => {
+      const detail = (event as CustomEvent<PostTxViewTarget>).detail;
+      if (!shouldAutoOpenMatrixTarget(detail)) return;
+      const targetRank = Math.max(
+        1,
+        Math.min(18, Number(detail.selectedRank || detail.targetRank || 1))
+      );
+      const targetMain = Number(detail.selectedMainId || detail.mainId || 0);
+      setSelectedSubIdTarget(null);
+      if (targetMain > 0) {
+        onSelectMainId(String(targetMain));
+      }
+      const targetRoot =
+        detail.type === 'register' && detail.focusNodeId && Number(detail.focusNodeId) > 0
+          ? Number(detail.focusNodeId)
+          : null;
+      openDashboard2Matrix(targetRank, targetRoot);
+    };
+    window.addEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
+    return () => window.removeEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
+  }, [onSelectMainId, openDashboard2Matrix]);
 
   const activeIdNum = Math.max(1, Number(selectedMainId || profile?.mainNodeIdRank1 || 1));
 
@@ -2516,7 +2568,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               setMatrixTargetRank(undefined);
               setMatrixFocusVersion((v) => v + 1);
               onSelectMainId(String(mainId));
-              setBottomTab('home');
+              setBottomTab('history');
             }}
             onSelectSubId={(target) => {
               setSelectedSubIdTarget(target);
@@ -2524,7 +2576,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               setMatrixTargetRank(target.rank);
               setMatrixTargetRootNodeId(target.nodeId);
               setMatrixFocusVersion((v) => v + 1);
-              setBottomTab('home');
+              setBottomTab('history');
             }}
             onOpenMatrixForNode={(targetRank, nodeId, subTarget) => {
               if (subTarget) {
@@ -3564,51 +3616,17 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
         )}
 
 
-        {/* TAB: HELP */}
-        {bottomTab === 'help' && (
-          <section className="mx-0.5 sm:mx-1 p-3 sm:p-4 rounded-[24px] bg-gradient-to-br from-white/95 to-[#dff4ff]/95 border-[1.5px] border-[#a9ddff] shadow-[0_8px_22px_rgba(0,72,190,0.23)] space-y-3 text-xs text-[#09265f] min-w-0">
-            <h2 className="text-base sm:text-lg font-black">◉ คู่มือระบบ FRACTAL FLOW MATRIX 18</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <div className="p-3 rounded-2xl bg-white/85 border border-[#b8e5ff] space-y-1">
-                <strong className="text-sm text-[#0754b9] block">1. การจ่ายรายได้ 100% ทุกแรงค์</strong>
-                <p className="text-[#45668f] leading-relaxed">
-                  30% ค่าแนะนำตรง (อ้างอิง Rank 1 เสมอ) + 30% ค่าชั้น 15 ชั้น (ชั้นละ 2%) + 35% กระปุกอัปเกรด (Vault) + 4% กองทุน AllSell + 1% บอทระบบ
-                </p>
-              </div>
-              <div className="p-3 rounded-2xl bg-white/85 border border-[#b8e5ff] space-y-1">
-                <strong className="text-sm text-[#0754b9] block">2. กฎผังไบนารี่ ซ้าย-ขวา</strong>
-                <p className="text-[#45668f] leading-relaxed">
-                  เม็ดซ้ายส่ง 35% เข้ากระปุก Vault ของผู้เป็นอัพไลน์ ส่วนเม็ดขวาจะกระตุ้น Rebirth Clone 100% สลับรอบ 1 (ติดผู้แนะนำ) และรอบ 2 (BFS ผังกลาง)
-                </p>
-              </div>
-              <div className="p-3 rounded-2xl bg-white/85 border border-[#b8e5ff] space-y-1">
-                <strong className="text-sm text-[#0754b9] block">3. ระบบ 3 ถังสะสม (5 Rank ย้อนหลัง)</strong>
-                <p className="text-[#45668f] leading-relaxed">
-                  Upgrade Rank Pool รวมยอด 5 Rank ล่าสุด, New Auto ID Pool รวม Rank 1–3 ที่พ้นกรอบ (ครบ 5 U แตก Auto ID), และ New Extra ID Pool รวม Rank 4–18 ที่พ้นกรอบ
-                </p>
-              </div>
-              <div className="p-3 rounded-2xl bg-white/85 border border-[#b8e5ff] space-y-1">
-                <strong className="text-sm text-[#0754b9] block">4. กองทุน AllSell 4% (4 กอง)</strong>
-                <p className="text-[#45668f] leading-relaxed">
-                  R11 มีตรง 5 ID (R8-11) · R14 มีตรง 2 ID (R12-14) · R16 มีตรง 2 ID (R14-16) · R18 มีตรง 5 ID (R16-18) ตัดรอบโอนทุกวันที่ 1 และ 15
-                </p>
-              </div>
-            </div>
-          </section>
-        )}
-
       </div>
 
       {/* STICKY BOTTOM NAVIGATION BAR (MOBILE FULL DOCK / PC FLOATING PILL) */}
-      <nav className="fixed bottom-0 lg:bottom-3 left-1/2 -translate-x-1/2 w-full lg:w-[min(920px,calc(100%-2rem))] grid grid-cols-6 px-1 sm:px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:py-2 bg-white/[0.97] dark:bg-[#061d56]/[0.97] border-t lg:border border-[#a9ddff] dark:border-[#3898ff]/50 rounded-t-[22px] lg:rounded-[24px] shadow-[0_-6px_22px_rgba(7,85,181,0.18)] lg:shadow-[0_12px_32px_rgba(2,28,88,0.35)] z-40">
+      <nav className="fixed bottom-0 lg:bottom-3 left-1/2 -translate-x-1/2 w-full lg:w-[min(920px,calc(100%-2rem))] grid grid-cols-5 px-1 sm:px-2.5 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] lg:py-2 bg-white/[0.97] dark:bg-[#061d56]/[0.97] border-t lg:border border-[#a9ddff] dark:border-[#3898ff]/50 rounded-t-[22px] lg:rounded-[24px] shadow-[0_-6px_22px_rgba(7,85,181,0.18)] lg:shadow-[0_12px_32px_rgba(2,28,88,0.35)] z-40">
         {(
           [
             { key: 'home', icon: '⌂', label: 'หน้าหลัก' },
             { key: 'id_vault', icon: '◈', label: 'คลังไอดี' },
             { key: 'matrix', icon: '⌘', label: 'Matrix' },
             { key: 'unilevel', icon: '❖', label: 'ยูนิ15ชั้น' },
-            { key: 'history', icon: '▥', label: 'ประวัติ' },
-            { key: 'help', icon: '◉', label: 'ช่วยเหลือ' },
+            { key: 'history', icon: '▥', label: 'ประวัติรายได้' },
           ] as const
         ).map((tab) => {
           const isActive = bottomTab === tab.key;
@@ -4494,8 +4512,12 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                           type="button"
                           disabled={isLoadingTx}
                           onClick={async () => {
-                            await onUpgradeToRank(nextRank, displayId);
-                            setActiveModal(null);
+                            const upgRes = await onUpgradeToRank(nextRank, displayId);
+                            if (upgRes && upgRes.success !== false) {
+                              setActiveModal(null);
+                              setSelectedSubIdTarget(null);
+                              openDashboard2Matrix(nextRank, null);
+                            }
                           }}
                           className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-br from-[#23caff] to-[#0755d7] text-white font-black cursor-pointer disabled:opacity-50 inline-flex items-center justify-center gap-1"
                         >

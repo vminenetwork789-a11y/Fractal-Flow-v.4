@@ -8072,12 +8072,15 @@ async function startApp() {
         const membersInRank: (typeof ranksData)[number]['members'] = [];
         for (const n of rList) {
           if (selfNode && n.id === selfNode.id) continue;
-          const isOwnClone = !isSubNodeScope && Boolean(n.isClone && Number(n.originMainId || 0) === mainIdNum);
-          if (isOwnClone) continue;
-
+          const isOwnClone =
+            !isSubNodeScope && Boolean(n.isClone && Number(n.originMainId || 0) === mainIdNum);
           const sub = subtreeInfo.get(n.id);
           const isDirectNode =
-            !isSubNodeScope && Number(n.directSponsorNodeId || 0) === mainIdNum && n.id !== mainIdNum;
+            !isSubNodeScope &&
+            !isOwnClone &&
+            Number(n.directSponsorNodeId || 0) === mainIdNum &&
+            n.id !== mainIdNum;
+          if (isOwnClone && !sub) continue;
           if (!sub && !isDirectNode) continue;
 
           const origMainId =

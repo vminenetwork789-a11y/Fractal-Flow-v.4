@@ -13,7 +13,12 @@ import { X, LogIn } from 'lucide-react';
 import { TransactionToast } from './components/TransactionToast';
 import { calculateMainIdVaultPools } from './utils/vaultPools';
 import { notifyMatrixNetworkError } from './hooks/useMatrixAutoReconnect';
-import { peekPostTxViewTarget } from './utils/postTxNotice';
+import {
+  peekPostTxViewTarget,
+  consumePostTxViewTarget,
+  POST_TX_VIEW_EVENT,
+  type PostTxViewTarget,
+} from './utils/postTxNotice';
 
 export default function App() {
   const [language, setLanguage] = useState<'th' | 'en'>('th');
@@ -61,6 +66,30 @@ export default function App() {
     const handleOpenSwitcher = () => setIsContractSwitcherOpen(true);
     window.addEventListener('matrix:open-contract-switcher', handleOpenSwitcher);
     return () => window.removeEventListener('matrix:open-contract-switcher', handleOpenSwitcher);
+  }, []);
+
+  useEffect(() => {
+    const handlePostTxView = (event: Event) => {
+      const detail = (event as CustomEvent<PostTxViewTarget>).detail;
+      if (!detail) return;
+      if (detail.type !== 'register' && detail.type !== 'upgrade' && detail.type !== 'admin_upgrade') {
+        return;
+      }
+      const nextRank = Number(detail.selectedRank || detail.targetRank || 0);
+      if (nextRank >= 1 && nextRank <= 18) {
+        setSelectedInspectRank(nextRank);
+      }
+      const nextMain = Number(detail.selectedMainId || detail.mainId || 0);
+      if (nextMain > 0) {
+        setSelectedMainId(String(nextMain));
+      }
+      if (detail.type === 'register') {
+        setIsRegisterModalOpen(false);
+        setRegisterPrefillSponsorId(null);
+      }
+    };
+    window.addEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
+    return () => window.removeEventListener(POST_TX_VIEW_EVENT, handlePostTxView);
   }, []);
 
   useEffect(() => {
@@ -231,8 +260,18 @@ export default function App() {
       } else if (profile.mainNodeIdRank1 && profile.mainNodeIdRank1 !== '0') {
         setSelectedMainId(String(profile.mainNodeIdRank1));
       }
+      if (postTarget && Date.now() - Number(postTarget.createdAtMs || 0) >= 2000) {
+        consumePostTxViewTarget();
+      }
     }
   }, [account, profile]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      consumePostTxViewTarget();
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const [mainIdVaultsOnChain, setMainIdVaultsOnChain] = useState<Record<number, number>>({});
   const [selectedMainIdRankOnChain, setSelectedMainIdRankOnChain] = useState<number | null>(null);
@@ -701,11 +740,16 @@ export default function App() {
               currentStep={txState.step}
               txError={txState.error}
               txSuccess={txState.successMessage}
-              onRegisterSuccess={() => {
-                setTimeout(() => {
-                  setIsRegisterModalOpen(false);
-                  setRegisterPrefillSponsorId(null);
-                }, 1050);
+              onRegisterSuccess={(res) => {
+                setIsRegisterModalOpen(false);
+                setRegisterPrefillSponsorId(null);
+                const firstAssigned = Array.isArray(res?.assignedNodeIds)
+                  ? Number(res.assignedNodeIds[0] || 0)
+                  : 0;
+                if (firstAssigned > 0) {
+                  setSelectedMainId(String(firstAssigned));
+                }
+                setSelectedInspectRank(1);
               }}
               language={language}
               compact={isDashboard2View}

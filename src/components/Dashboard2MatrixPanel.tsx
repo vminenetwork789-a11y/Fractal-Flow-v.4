@@ -1581,7 +1581,15 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
             <span className="font-mono">
               R{matrixRank}: ทั้งระบบ {nodes.length} รหัส
               {isSelectedRankUnlockedForId && activeIdSummary
-                ? ` · ใต้ ID นี้ ${activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0} รหัส`
+                ? ` · ใต้ ID นี้ ${fmtNum(
+                    activeIdNodeInCurrentRank &&
+                      effectiveRootId === Number(activeIdNodeInCurrentRank.id)
+                      ? Math.max(
+                          activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0,
+                          Math.max(0, totalSubtreeCount - 1)
+                        )
+                      : activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0
+                  )} รหัส`
                 : ''}
             </span>
           </div>
@@ -1592,14 +1600,18 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               const isCurrentOfId = r === idEffectiveRank;
               const idRankCnt = activeIdSummary?.idMembersCountByRank?.[r];
               const sysCnt = Number(rankCounts[r] ?? (r === matrixRank ? nodes.length : 0));
-              const displayCnt =
-                idRankCnt !== undefined
-                  ? idRankCnt
-                  : r === matrixRank &&
-                    activeIdNodeInCurrentRank &&
-                    effectiveRootId === Number(activeIdNodeInCurrentRank.id)
+              const liveDownline =
+                r === matrixRank &&
+                activeIdNodeInCurrentRank &&
+                effectiveRootId === Number(activeIdNodeInCurrentRank.id)
                   ? Math.max(0, totalSubtreeCount - 1)
                   : undefined;
+              const displayCnt =
+                idRankCnt !== undefined
+                  ? liveDownline !== undefined
+                    ? Math.max(idRankCnt, liveDownline)
+                    : idRankCnt
+                  : liveDownline;
 
               return (
                 <button
@@ -1750,8 +1762,13 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <div className="text-[13px] sm:text-[15px] font-black font-mono text-[#0758d4] mt-0.5">
                 {isSelectedRankUnlockedForId
                   ? `${fmtNum(
-                      activeIdSummary.idMembersCountByRank?.[matrixRank] ??
-                        (activeIdNodeInCurrentRank ? Math.max(0, totalSubtreeCount - 1) : 0)
+                      activeIdNodeInCurrentRank &&
+                        effectiveRootId === Number(activeIdNodeInCurrentRank.id)
+                        ? Math.max(
+                            activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0,
+                            Math.max(0, totalSubtreeCount - 1)
+                          )
+                        : activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0
                     )} รหัส`
                   : '🔒 ยังไม่ปลดล็อก'}
               </div>
@@ -1814,8 +1831,13 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
             };
             const vRem = activeIdSummary.vaultRemainingByRank?.[matrixRank] ?? 0;
             const memberCnt =
-              activeIdSummary.idMembersCountByRank?.[matrixRank] ??
-              (activeIdNodeInCurrentRank ? Math.max(0, totalSubtreeCount - 1) : 0);
+              activeIdNodeInCurrentRank &&
+              effectiveRootId === Number(activeIdNodeInCurrentRank.id)
+                ? Math.max(
+                    activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0,
+                    Math.max(0, totalSubtreeCount - 1)
+                  )
+                : activeIdSummary.idMembersCountByRank?.[matrixRank] ?? 0;
             const isCurrentHighest = matrixRank === idEffectiveRank;
 
             return (
@@ -1987,11 +2009,13 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <span className="text-[11px] font-mono font-bold text-[#0754b9]">
                 {isSelectedRankUnlockedForId
                   ? `· ใต้ ID นี้ ${fmtNum(
-                      activeIdSummary?.idMembersCountByRank?.[matrixRank] ??
-                        (activeIdNodeInCurrentRank &&
+                      activeIdNodeInCurrentRank &&
                         effectiveRootId === Number(activeIdNodeInCurrentRank.id)
-                          ? Math.max(0, totalSubtreeCount - 1)
-                          : 0)
+                        ? Math.max(
+                            activeIdSummary?.idMembersCountByRank?.[matrixRank] ?? 0,
+                            Math.max(0, totalSubtreeCount - 1)
+                          )
+                        : activeIdSummary?.idMembersCountByRank?.[matrixRank] ?? 0
                     )} รหัส`
                   : `· ทั้งระบบ ${fmtNum(Number(rankCounts[matrixRank] ?? nodes.length))} รหัส`}
               </span>
@@ -2016,14 +2040,18 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                   const isCurrentOfId = r === idEffectiveRank;
                   const idRankCnt = activeIdSummary?.idMembersCountByRank?.[r];
                   const sysCnt = Number(rankCounts[r] ?? (r === matrixRank ? nodes.length : 0));
-                  const displayCnt =
-                    idRankCnt !== undefined
-                      ? idRankCnt
-                      : r === matrixRank &&
-                        activeIdNodeInCurrentRank &&
-                        effectiveRootId === Number(activeIdNodeInCurrentRank.id)
+                  const liveDownline =
+                    r === matrixRank &&
+                    activeIdNodeInCurrentRank &&
+                    effectiveRootId === Number(activeIdNodeInCurrentRank.id)
                       ? Math.max(0, totalSubtreeCount - 1)
                       : undefined;
+                  const displayCnt =
+                    idRankCnt !== undefined
+                      ? liveDownline !== undefined
+                        ? Math.max(idRankCnt, liveDownline)
+                        : idRankCnt
+                      : liveDownline;
 
                   return (
                     <button

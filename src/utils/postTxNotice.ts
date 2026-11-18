@@ -26,6 +26,7 @@ export interface PostTxViewTarget {
 const POST_TX_NOTICE_KEY = 'f27_post_tx_notice';
 const POST_TX_VIEW_KEY = 'f27_post_tx_view';
 const MAX_AGE_MS = 90_000;
+export const POST_TX_VIEW_EVENT = 'matrix:post-tx:view';
 
 let pendingReloadTimer: number | null = null;
 
@@ -67,14 +68,19 @@ export function savePostTxViewTarget(
   target: Omit<PostTxViewTarget, 'createdAtMs'>
 ) {
   if (typeof window === 'undefined') return;
+  const item: PostTxViewTarget = {
+    ...target,
+    createdAtMs: Date.now(),
+  };
   try {
-    const item: PostTxViewTarget = {
-      ...target,
-      createdAtMs: Date.now(),
-    };
     sessionStorage.setItem(POST_TX_VIEW_KEY, JSON.stringify(item));
   } catch {
     // Ignore storage errors
+  }
+  try {
+    window.dispatchEvent(new CustomEvent<PostTxViewTarget>(POST_TX_VIEW_EVENT, { detail: item }));
+  } catch {
+    // Ignore event dispatch errors
   }
 }
 
