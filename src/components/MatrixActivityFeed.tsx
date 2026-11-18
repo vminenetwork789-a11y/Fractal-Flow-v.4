@@ -1105,7 +1105,7 @@ export const MatrixActivityFeed: React.FC<MatrixActivityFeedProps> = ({
                         <>
                           <span>·</span>
                           <a
-                            href={`https://testnet.bscscan.com/tx/${item.txHash}`}
+                            href={`https://bscscan.com/tx/${item.txHash}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-0.5 text-[#2563EB] dark:text-cyan-400 hover:underline"

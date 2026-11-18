@@ -620,7 +620,7 @@ export const Dashboard2IdVaultPanel: React.FC<Dashboard2IdVaultPanelProps> = ({
 
           <div className="text-[11px] font-mono text-cyan-100">
             {account
-              ? `Gas: ${Number(bnbBalance || 0).toFixed(4)} tBNB · กำลังดู: #${displayId}`
+              ? `Gas: ${Number(bnbBalance || 0).toFixed(4)} BNB · กำลังดู: #${displayId}`
               : 'เชื่อมต่อกระเป๋าเพื่อจัดการ ID ของคุณ'}
           </div>
         </div>

@@ -232,11 +232,11 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
                   )}
                 </button>
                 <a
-                  href={`https://testnet.bscscan.com/address/${account}`}
+                  href={`https://bscscan.com/address/${account}`}
                   target="_blank"
                   rel="noreferrer"
                   className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-amber-300 transition"
-                  title="View on BSCScan Testnet"
+                  title="View on BSCScan"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                 </a>
@@ -272,12 +272,12 @@ export const UserProfileCard: React.FC<UserProfileCardProps> = ({
               <span className="text-slate-400">Gas:</span>
             </div>
             <span className="font-mono font-bold text-amber-400 tabular-nums whitespace-nowrap">
-              {bnbBalance} tBNB
+              {bnbBalance} BNB
             </span>
           </div>
 
           <a
-            href={`https://testnet.bscscan.com/token/${USDT_ADDRESS}`}
+            href={`https://bscscan.com/token/${USDT_ADDRESS}`}
             target="_blank"
             rel="noreferrer"
             className="text-[11px] text-slate-400 hover:text-amber-300 font-mono hidden xl:inline-flex items-center gap-1 transition"

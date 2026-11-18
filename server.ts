@@ -296,12 +296,12 @@ const DEFAULT_SYSTEM_CONFIG = {
   contractAddress:
     process.env.OVERRIDE_CONTRACT_ADDRESS ||
     process.env.CONTRACT_ADDRESS ||
-    '0x0c06f88987E56DE8704390D5b390AE48Ecd2Efe8',
-  usdtAddress: process.env.USDT_ADDRESS || '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b',
-  chainId: Number(process.env.CHAIN_ID || 97),
-  networkName: process.env.NETWORK_NAME || 'BNB Smart Chain Testnet',
-  rpcUrl: process.env.RPC_URL || 'https://bsc-testnet-rpc.publicnode.com',
-  blockExplorerUrl: process.env.BLOCK_EXPLORER_URL || 'https://testnet.bscscan.com',
+    '0xcd88382FF8E13E22cF70C35684F675bF11240F1e',
+  usdtAddress: process.env.USDT_ADDRESS || '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48',
+  chainId: Number(process.env.CHAIN_ID || 56),
+  networkName: process.env.NETWORK_NAME || 'BNB Smart Chain',
+  rpcUrl: process.env.RPC_URL || 'https://bsc-rpc.publicnode.com',
+  blockExplorerUrl: process.env.BLOCK_EXPLORER_URL || 'https://bscscan.com',
   updatedAt: new Date().toISOString(),
 };
 
@@ -353,10 +353,12 @@ const SERVER_LEGACY_CONTRACTS = new Set([
   '0x4f47842e535001a43376f65cfdc05469dbf0bb99',
   '0x8d460fb2037831cb2715c301420ca6357994411e',
   '0x6d85e1d8f1628eadf0baf25d3ab6c3c7bc16743f',
+  '0x0c06f88987e56de8704390d5b390ae48ecd2efe8',
 ]);
 
 const SERVER_LEGACY_USDT = new Set([
   '0x95856be9c16afc9c147c034cd6a514d730bd90ba',
+  '0x05f24e1f598df1ae8d0b424ce978f8ea33bb752b',
 ]);
 
 // ==========================================
@@ -618,13 +620,16 @@ async function hydrateAllSellAutoFromPostgres() {
               total_allsell_pool_usdt, total_distributed_usdt, carried_over_usdt,
               qualified_recipients_count, transfers, note_th
        FROM allsell_payout_cycles
+       WHERE LOWER(contract_address) = LOWER($1)
        ORDER BY executed_at DESC
-       LIMIT 200`
+       LIMIT 200`,
+      [CONTRACT_ADDRESS]
     );
 
+    const activeAddrLower = CONTRACT_ADDRESS.toLowerCase();
     const pgCycles: AllSellPayoutCycleRecord[] = cyclesRes.rows.map((row: any) => ({
       id: String(row.id),
-      contractAddress: String(row.contract_address || ''),
+      contractAddress: String(row.contract_address || CONTRACT_ADDRESS),
       cycleKey: String(row.cycle_key || ''),
       cycleLabelTh: String(row.cycle_label_th || ''),
       triggerType: row.trigger_type === 'AUTO_SCHEDULE' ? 'AUTO_SCHEDULE' : 'MANUAL_TRIGGER',
@@ -639,7 +644,9 @@ async function hydrateAllSellAutoFromPostgres() {
 
     const mergedById = new Map<string, AllSellPayoutCycleRecord>();
     for (const c of allSellAutoStore.history || []) {
-      if (c?.id) mergedById.set(c.id, c);
+      if (c?.id && (!c.contractAddress || c.contractAddress.toLowerCase() === activeAddrLower)) {
+        mergedById.set(c.id, c);
+      }
     }
     for (const c of pgCycles) {
       if (c?.id && !mergedById.has(c.id)) {
@@ -1028,9 +1035,26 @@ async function syncAllMatrixDBToPostgres() {
       if (!pgSchemaReady) {
         await ensurePostgresSchema();
       }
+      if ((matrixDB.nodesByRank[1] || []).length === 0) {
+        return;
+      }
       const client = await pgPool!.connect();
       try {
         await client.query('BEGIN');
+
+        // Purge any stale/legacy-contract rows atomically so PostgreSQL strictly mirrors the active Mainnet contract
+        await client.query(`DELETE FROM accounts`);
+        await client.query(`DELETE FROM wallets`);
+        await client.query(`DELETE FROM matrix_nodes`);
+        await client.query(`DELETE FROM income_channels`);
+        await client.query(`DELETE FROM activities`);
+        await client.query(`DELETE FROM allsell_inflows`);
+        await client.query(`DELETE FROM allsell_payout_cycles`);
+        await client.query(`DELETE FROM allsell_payout_transfers`);
+        await client.query(
+          `DELETE FROM matrix_db_snapshots WHERE LOWER(contract_address) <> LOWER($1)`,
+          [CONTRACT_ADDRESS]
+        );
 
         // 1. Sync matrix_levels (Ranks 1..18)
         for (let r = 1; r <= 18; r++) {
@@ -1238,7 +1262,7 @@ async function syncAllMatrixDBToPostgres() {
 
         // 7. Sync AllSell 4% inflows & payout cycles/transfers
         const allSellWalletAddr =
-          matrixDB.systemWallets.allSellWallet || '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710';
+          matrixDB.systemWallets.allSellWallet || '0xE7A09345564FF7BD44b91745398e6EC66D5335EA';
         const contractAddrLower = (matrixDB.contractAddress || CONTRACT_ADDRESS).toLowerCase();
         for (let r = 1; r <= 18; r++) {
           const rNodes = matrixDB.nodesByRank[r] || [];
@@ -1375,10 +1399,14 @@ function readContractConfigFromDB() {
           parsed.usdtAddress = DEFAULT_SYSTEM_CONFIG.usdtAddress;
         }
         if (
-          parsed.rpcUrl === 'https://data-seed-prebsc-1-s1.binance.org:8545/' &&
-          !process.env.RPC_URL
+          Number(parsed.chainId) === 97 ||
+          (typeof parsed.rpcUrl === 'string' &&
+            (parsed.rpcUrl.includes('testnet') || parsed.rpcUrl.includes('prebsc')))
         ) {
-          parsed.rpcUrl = 'https://bsc-testnet-rpc.publicnode.com';
+          parsed.chainId = DEFAULT_SYSTEM_CONFIG.chainId;
+          parsed.networkName = DEFAULT_SYSTEM_CONFIG.networkName;
+          parsed.rpcUrl = DEFAULT_SYSTEM_CONFIG.rpcUrl;
+          parsed.blockExplorerUrl = DEFAULT_SYSTEM_CONFIG.blockExplorerUrl;
         }
         return { ...DEFAULT_SYSTEM_CONFIG, ...parsed };
       }
@@ -1392,7 +1420,7 @@ function readContractConfigFromDB() {
 let activeSystemConfig = readContractConfigFromDB();
 let CONTRACT_ADDRESS = activeSystemConfig.contractAddress;
 let USDT_ADDRESS = activeSystemConfig.usdtAddress;
-const RPC_URL = activeSystemConfig.rpcUrl || process.env.RPC_URL || 'https://bsc-testnet-rpc.publicnode.com';
+const RPC_URL = activeSystemConfig.rpcUrl || process.env.RPC_URL || 'https://bsc-rpc.publicnode.com';
 
 let activeUsdtDecimals = 18;
 async function resolveUsdtDecimals(): Promise<number> {
@@ -1447,11 +1475,11 @@ function updateContractConfigInDB(newConfig: Partial<typeof DEFAULT_SYSTEM_CONFI
 const FALLBACK_RPCS = Array.from(
   new Set([
     RPC_URL,
-    'https://bsc-testnet-rpc.publicnode.com',
-    'https://bsc-testnet.publicnode.com',
-    'https://bsc-testnet.bnbchain.org',
-    'https://data-seed-prebsc-1-s2.binance.org:8545/',
-    'https://data-seed-prebsc-1-s1.binance.org:8545/',
+    'https://bsc-rpc.publicnode.com',
+    'https://bsc-dataseed.binance.org/',
+    'https://bsc-dataseed1.binance.org/',
+    'https://bsc-dataseed1.defibit.io/',
+    'https://bsc-dataseed1.ninicoin.io/',
   ])
 );
 
@@ -1497,8 +1525,8 @@ function getProvider(): ethers.JsonRpcProvider {
     provider = new ethers.JsonRpcProvider(
       fetchReq,
       {
-        chainId: 97,
-        name: 'bnbt',
+        chainId: 56,
+        name: 'bnb',
       },
       {
         staticNetwork: true,
@@ -1663,7 +1691,7 @@ export interface TransactionRecordModel {
   timestamp: string;
 }
 
-export const DEFAULT_BOT_WALLET = '0xB3832D4cc6daE0B24f1e6660d7C85dcc1F005Cd1';
+export const DEFAULT_BOT_WALLET = '0xAE0Fb35f7fc62221821C33f98494935Db8E7aDFC';
 export const LEGACY_BOT_WALLET = '0xbFD03d4D69221085a63Dd372A5d59f952C084a56';
 
 interface PersistentMatrixDatabase {
@@ -1697,11 +1725,11 @@ function createEmptyMatrixDB(contractAddr = CONTRACT_ADDRESS, usdtAddr = USDT_AD
     lastSyncedBlock: 0,
     lastSyncedAt: new Date().toISOString(),
     systemWallets: {
-      allSellWallet: '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710',
+      allSellWallet: '0xE7A09345564FF7BD44b91745398e6EC66D5335EA',
       botWallet: DEFAULT_BOT_WALLET,
       customBotWallet: DEFAULT_BOT_WALLET,
-      familyPool: '0x225DF4b5961f757f54728138F289Eaf49D4F275A',
-      rootOwner: '0x622E20082e63c7220c5AF0A77Cbc437a98505311',
+      familyPool: '0x5FCca533A7AE318cF837BE13ac1A61c33Bd18f2F',
+      rootOwner: '0xF7A8f472A0251a729bb8a06FF26b1303A217eeB1',
     },
     rankCounts: defaultCounts,
     nodesByRank: {},
@@ -2026,7 +2054,7 @@ function recordRealTransactionLog(input: {
     amountUsdt: input.amountUsdt !== undefined ? Number(input.amountUsdt) : undefined,
     blockNumber: input.blockNumber ? Number(input.blockNumber) : undefined,
     source: input.source,
-    explorerUrl: `https://testnet.bscscan.com/tx/${hash}`,
+    explorerUrl: `https://bscscan.com/tx/${hash}`,
     details: input.details,
     timestamp: ts,
   };
@@ -2113,9 +2141,9 @@ function rebuildDatabaseRewardLogsFromNodes() {
   }
 
   const rootOwnerAddr = r1Nodes[0]?.owner || matrixDB.systemWallets.rootOwner;
-  const allSellAddr = matrixDB.systemWallets.allSellWallet || '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710';
+  const allSellAddr = matrixDB.systemWallets.allSellWallet || '0xE7A09345564FF7BD44b91745398e6EC66D5335EA';
   const botAddr = matrixDB.systemWallets.customBotWallet || matrixDB.systemWallets.botWallet || DEFAULT_BOT_WALLET;
-  const familyAddr = matrixDB.systemWallets.familyPool || '0x225DF4b5961f757f54728138F289Eaf49D4F275A';
+  const familyAddr = matrixDB.systemWallets.familyPool || '0x5FCca533A7AE318cF837BE13ac1A61c33Bd18f2F';
 
   const adminFreeKeys = getAdminFreeNodeKeySet();
 
@@ -4464,12 +4492,12 @@ async function simulateFindPlacement(rank: number, sponsorAddress: string, _roun
 // 3. BLOCKCHAIN WEBSOCKET EVENT LISTENER & HYBRID BOT ENGINE (Ethers.js v6)
 // ==========================================
 const WSS_ENDPOINTS = [
-  process.env.WSS_URL || 'wss://bsc-testnet-rpc.publicnode.com',
-  'wss://bsc-testnet.publicnode.com',
+  process.env.WSS_URL || 'wss://bsc-rpc.publicnode.com',
+  'wss://bsc.publicnode.com',
 ].filter(Boolean);
 
 const BOT_HTTP_RPC_URL =
-  process.env.HTTP_RPC_URL || 'https://data-seed-prebsc-1-s1.bnbchain.org:8545';
+  process.env.HTTP_RPC_URL || 'https://bsc-rpc.publicnode.com';
 const BOT_PRIVATE_KEY = (
   process.env.BOT_PRIVATE_KEY ||
   process.env.DEPLOYER_PRIVATE_KEY ||
@@ -4533,7 +4561,7 @@ function getBotHttpProvider(): ethers.JsonRpcProvider {
   fetchReq.timeout = 12000;
   return new ethers.JsonRpcProvider(
     fetchReq,
-    { chainId: 97, name: 'bnbt' },
+    { chainId: 56, name: 'bnb' },
     { staticNetwork: true, polling: false, batchMaxCount: 1 }
   );
 }
@@ -4867,8 +4895,8 @@ async function startEventListener(): Promise<void> {
   const activeWssUrl = WSS_ENDPOINTS[wsEndpointIndex % WSS_ENDPOINTS.length];
   try {
     wsBotProvider = new ethers.WebSocketProvider(activeWssUrl, {
-      chainId: 97,
-      name: 'bnbt',
+      chainId: 56,
+      name: 'bnb',
     });
 
     // Suppress unhandled provider-level errors
@@ -6049,8 +6077,8 @@ async function startApp() {
       },
       contractAddress: CONTRACT_ADDRESS,
       usdtAddress: USDT_ADDRESS,
-      network: activeSystemConfig.networkName || 'BNB Smart Chain Testnet',
-      chainId: activeSystemConfig.chainId || 97,
+      network: activeSystemConfig.networkName || 'BNB Smart Chain',
+      chainId: activeSystemConfig.chainId || 56,
       rpcUrl: FALLBACK_RPCS[currentProviderIndex % FALLBACK_RPCS.length],
       eventListenerActive,
       lastSyncedBlock: matrixDB.lastSyncedBlock,
@@ -6136,11 +6164,11 @@ async function startApp() {
       maxRank: 18,
       maxLevels: 15,
       network: {
-        name: 'BNB Smart Chain Testnet',
-        chainId: 97,
-        currency: 'tBNB',
-        blockExplorer: `https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`,
-        usdtExplorer: `https://testnet.bscscan.com/address/${USDT_ADDRESS}`,
+        name: 'BNB Smart Chain',
+        chainId: 56,
+        currency: 'BNB',
+        blockExplorer: `https://bscscan.com/address/${CONTRACT_ADDRESS}`,
+        usdtExplorer: `https://bscscan.com/address/${USDT_ADDRESS}`,
       },
       rewardDistribution: {
         leftChild: {
@@ -6804,7 +6832,7 @@ async function startApp() {
           ? Math.max(lookbackBlocks, 150000)
           : lookbackBlocks;
         const startBlock = Math.max(0, latestBlock - effectiveLookback);
-        const chunkSize = 4800; // Safe chunk under BSC Testnet 5000-block getLogs limit
+        const chunkSize = 4800; // Safe chunk under BSC public RPC 5000-block getLogs limit
         const blockTimeCache = new Map<number, string>();
 
         const resolveBlockIso = async (bn: number): Promise<string> => {
@@ -8808,9 +8836,9 @@ async function startApp() {
 
       // Compute exact 30% Direct, 30% Level (2% x 15), 35% Upgrade Vault history per ID, AND AllSell (4%) + FamilyPool across Ranks 1..27
       const allSellWalletAddr =
-        matrixDB.systemWallets?.allSellWallet || '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710';
+        matrixDB.systemWallets?.allSellWallet || '0xE7A09345564FF7BD44b91745398e6EC66D5335EA';
       const familyPoolWalletAddr =
-        matrixDB.systemWallets?.familyPool || '0x225DF4b5961f757f54728138F289Eaf49D4F275A';
+        matrixDB.systemWallets?.familyPool || '0x5FCca533A7AE318cF837BE13ac1A61c33Bd18f2F';
       const botWalletAddr =
         matrixDB.systemWallets?.customBotWallet ||
         matrixDB.systemWallets?.botWallet ||
@@ -11978,19 +12006,19 @@ async function startApp() {
   const handleClearCacheRequest = async (_req: Request, res: Response) => {
     try {
       rankSyncTimestamps.clear();
-      for (let r = 1; r <= 18; r++) {
-        matrixDB.nodesByRank[r] = [];
-        matrixDB.rankCounts[r] = 0;
+      if (pgSyncTimer) {
+        clearTimeout(pgSyncTimer);
+        pgSyncTimer = null;
       }
-      matrixDB.rewardLogs = [];
-      matrixDB.upgradeLogs = [];
-      matrixDB.userRankVaults = {};
+      matrixDB = createEmptyMatrixDB(CONTRACT_ADDRESS, USDT_ADDRESS);
       saveMatrixDBToDisk(true);
       await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
+      await syncAllMatrixDBToPostgres();
       res.json({
         success: true,
         contractAddress: CONTRACT_ADDRESS,
         lastSyncedAt: matrixDB.lastSyncedAt,
+        tableCounts: pgTablesCount,
         message: '🧹 ล้างแคชฐานข้อมูลเก่าและดึงข้อมูลสดจาก Smart Contract ใหม่ครบ 18 แรงค์สำเร็จ!',
       });
     } catch (err: any) {
@@ -12398,7 +12426,7 @@ async function startApp() {
       }
       if (pgPool && pgConnected) {
         await pgPool.query(
-          `TRUNCATE TABLE accounts, wallets, matrix_levels, matrix_nodes, income_channels, activities, matrix_db_snapshots, allsell_auto_config, allsell_payout_cycles, allsell_payout_transfers, allsell_inflows`
+          `TRUNCATE TABLE accounts, wallets, matrix_levels, matrix_nodes, income_channels, activities, matrix_db_snapshots, allsell_auto_config, allsell_payout_cycles, allsell_payout_transfers, allsell_inflows RESTART IDENTITY`
         );
         pgTablesCount = {
           accounts: 0,
@@ -12411,10 +12439,12 @@ async function startApp() {
           allsell_payout_cycles: 0,
           allsell_payout_transfers: 0,
           allsell_auto_config: 0,
+          matrix_db_snapshots: 0,
         };
       }
       await syncAllMatrixDatabase(CONTRACT_ADDRESS, true);
       await syncAllMatrixDBToPostgres();
+      await refreshPgTableCounts();
       res.json({
         success: true,
         contractAddress: CONTRACT_ADDRESS,
@@ -13461,16 +13491,17 @@ async function startApp() {
   });
 
   app.post('/api/deploy', async (req: Request, res: Response) => {
-    const { chainId = 97, networkName = 'BNB Smart Chain Testnet', usdtAddress = USDT_ADDRESS } = req.body || {};
+    const { chainId = 56, networkName = 'BNB Smart Chain', usdtAddress = USDT_ADDRESS } = req.body || {};
     
     const explorers: Record<number, string> = {
+      56: 'https://bscscan.com',
       97: 'https://testnet.bscscan.com',
       80002: 'https://amoy.polygonscan.com',
       11155111: 'https://sepolia.etherscan.io',
       421614: 'https://sepolia.arbiscan.io',
       84532: 'https://sepolia.basescan.org',
     };
-    const explorer = explorers[Number(chainId)] || 'https://testnet.bscscan.com';
+    const explorer = explorers[Number(chainId)] || 'https://bscscan.com';
 
     exec(`npx hardhat run scripts/deploy.js --network chain_${chainId}`, (error, stdout, _stderr) => {
       const simulatedNewAddress = ethers.getCreateAddress({

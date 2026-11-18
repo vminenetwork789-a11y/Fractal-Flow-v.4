@@ -1,9 +1,9 @@
 {
-  "contractAddress": "0x0c06f88987E56DE8704390D5b390AE48Ecd2Efe8",
-  "usdtAddress": "0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b",
-  "chainId": 97,
-  "networkName": "BNB Smart Chain Testnet",
-  "rpcUrl": "https://bsc-testnet-rpc.publicnode.com",
-  "blockExplorerUrl": "https://testnet.bscscan.com",
-  "updatedAt": "2026-11-17T05:59:00.000Z"
+  "contractAddress": "0xcd88382FF8E13E22cF70C35684F675bF11240F1e",
+  "usdtAddress": "0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48",
+  "chainId": 56,
+  "networkName": "BNB Smart Chain",
+  "rpcUrl": "https://bsc-rpc.publicnode.com",
+  "blockExplorerUrl": "https://bscscan.com",
+  "updatedAt": "2026-11-18T13:30:00.000Z"
 }

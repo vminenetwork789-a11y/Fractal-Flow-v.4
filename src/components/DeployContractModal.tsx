@@ -41,30 +41,28 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
 }) => {
   // Constructor arguments state matching screenshots
   const [usdtAddressInput, setUsdtAddressInput] = useState<string>(
-    '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b'
+    '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48'
   );
   const [usdtDecimalsInput, setUsdtDecimalsInput] = useState<number>(18);
   const [allSellWalletInput, setAllSellWalletInput] = useState<string>(
-    '0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710'
+    '0xE7A09345564FF7BD44b91745398e6EC66D5335EA'
   );
   const [botWalletInput, setBotWalletInput] = useState<string>(
-    '0xB3832D4cc6daE0B24f1e6660d7C85dcc1F005Cd1'
+    '0xAE0Fb35f7fc62221821C33f98494935Db8E7aDFC'
   );
   const [familyPoolInput, setFamilyPoolInput] = useState<string>(
-    '0x225DF4b5961f757f54728138F289Eaf49D4F275A'
+    '0x5FCca533A7AE318cF837BE13ac1A61c33Bd18f2F'
   );
   const [rootUserInput, setRootUserInput] = useState<string>(
-    '0x622E20082e63c7220c5AF0A77Cbc437a98505311'
+    '0xF7A8f472A0251a729bb8a06FF26b1303A217eeB1'
   );
 
   // Execution channel
-  const [channel, setChannel] = useState<ExecutionChannel>('private_key');
-  const [privateKey, setPrivateKey] = useState<string>(
-    '0xc9c4649effa5eaaab8dc0690b4e392aec7cf84ee49e2251a1800fe89ad3270ca'
-  );
+  const [channel, setChannel] = useState<ExecutionChannel>('web3');
+  const [privateKey, setPrivateKey] = useState<string>('');
   const [showPrivateKey, setShowPrivateKey] = useState<boolean>(false);
   const [rpcEndpoint, setRpcEndpoint] = useState<string>(
-    'https://bsc-testnet-rpc.publicnode.com'
+    'https://bsc-rpc.publicnode.com'
   );
 
   // Deployment status
@@ -109,13 +107,12 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
   };
 
   const handleFillMockAddrs = () => {
-    setUsdtAddressInput('0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b');
+    setUsdtAddressInput('0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48');
     setUsdtDecimalsInput(18);
-    setAllSellWalletInput('0xBeFEB9871a20656aeF7E8d218f751e9C23FAF710');
-    setBotWalletInput('0xB3832D4cc6daE0B24f1e6660d7C85dcc1F005Cd1');
-    setFamilyPoolInput('0x225DF4b5961f757f54728138F289Eaf49D4F275A');
-    setRootUserInput('0x622E20082e63c7220c5AF0A77Cbc437a98505311');
-    setPrivateKey('0xc9c4649effa5eaaab8dc0690b4e392aec7cf84ee49e2251a1800fe89ad3270ca');
+    setAllSellWalletInput('0xE7A09345564FF7BD44b91745398e6EC66D5335EA');
+    setBotWalletInput('0xAE0Fb35f7fc62221821C33f98494935Db8E7aDFC');
+    setFamilyPoolInput('0x5FCca533A7AE318cF837BE13ac1A61c33Bd18f2F');
+    setRootUserInput('0xF7A8f472A0251a729bb8a06FF26b1303A217eeB1');
     setDeployError(null);
   };
 
@@ -213,7 +210,7 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
 
         setDeployStep(
           language === 'th'
-            ? 'กำลังรอยืนยันธุรกรรมบน BNB Testnet...'
+            ? 'กำลังรอยืนยันธุรกรรมบน BNB Smart Chain...'
             : 'Waiting for deployment block confirmation...'
         );
 
@@ -225,14 +222,14 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
         setDeployResult({
           deployedContractAddress: deployedAddress,
           txHash,
-          network: 'BNB Smart Chain Testnet (ChainId: 97)',
+          network: 'BNB Smart Chain (ChainId: 56)',
           usdtTokenConfigured: usdtAddressInput,
           matrixMaxDepth: 3,
           tierBranchFactor: 3,
           maxCycleNodes: 27,
           timestamp: new Date().toISOString(),
-          status: 'Contract deployed via MetaMask and verified on BSC Testnet',
-          explorerUrl: `https://testnet.bscscan.com/tx/${txHash}`,
+          status: 'Contract deployed via MetaMask and verified on BNB Smart Chain',
+          explorerUrl: `https://bscscan.com/tx/${txHash}`,
         });
       } else if (channel === 'private_key') {
         // Deploy via Private Key
@@ -249,8 +246,8 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
             body: JSON.stringify({
-              chainId: 97,
-              networkName: 'BNB Smart Chain Testnet',
+              chainId: 56,
+              networkName: 'BNB Smart Chain',
               usdtAddress: usdtAddressInput.trim(),
             }),
           });
@@ -258,7 +255,7 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
           if (result.success && result.data) {
             setDeployResult({
               ...result.data,
-              explorerUrl: `https://testnet.bscscan.com/tx/${result.data.txHash || '0x...'}`,
+              explorerUrl: `https://bscscan.com/tx/${result.data.txHash || '0x...'}`,
             });
           } else {
             throw new Error(result.error || 'Server deployment failed');
@@ -306,14 +303,14 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
           setDeployResult({
             deployedContractAddress: deployedAddress,
             txHash,
-            network: 'BNB Smart Chain Testnet (ChainId: 97)',
+            network: 'BNB Smart Chain (ChainId: 56)',
             usdtTokenConfigured: usdtAddressInput,
             matrixMaxDepth: 3,
             tierBranchFactor: 3,
             maxCycleNodes: 27,
             timestamp: new Date().toISOString(),
-            status: 'Deployed via Private Key on BNB Smart Chain Testnet',
-            explorerUrl: `https://testnet.bscscan.com/tx/${txHash}`,
+            status: 'Deployed via Private Key on BNB Smart Chain',
+            explorerUrl: `https://bscscan.com/tx/${txHash}`,
           });
         }
       }
@@ -343,7 +340,7 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
                 </span>
               </h3>
               <p className="text-xs text-slate-400">
-                BNB Smart Chain Testnet (Chain ID 97) • Solidity ^0.8.20
+                BNB Smart Chain (Chain ID 56) • Solidity ^0.8.20
               </p>
             </div>
           </div>
@@ -589,7 +586,7 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
                 <span className="font-mono text-cyan-400">{account || 'No wallet connected (MetaMask prompt will trigger)'}</span>
               </div>
               <span className="px-2 py-0.5 rounded bg-cyan-950/40 text-cyan-400 border border-cyan-500/30 font-mono text-[11px]">
-                Network: BSC Testnet 97
+                Network: BNB Smart Chain (56)
               </span>
             </div>
           )}
@@ -637,12 +634,12 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
           <div className="divide-y divide-slate-800/50 text-xs">
             <div className="flex items-center justify-between py-1.5">
               <span className="text-slate-400 font-medium">Target Network</span>
-              <span className="text-slate-200 font-medium">BNB Smart Chain Testnet</span>
+              <span className="text-slate-200 font-medium">BNB Smart Chain</span>
             </div>
 
             <div className="flex items-center justify-between py-1.5">
               <span className="text-slate-400 font-medium">Chain ID</span>
-              <span className="text-cyan-400 font-mono font-semibold">97</span>
+              <span className="text-cyan-400 font-mono font-semibold">56</span>
             </div>
 
             <div className="flex items-center justify-between py-1.5">
@@ -669,7 +666,7 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
               <span className="text-slate-400 font-medium">Deployment Cost</span>
               <div className="flex items-center gap-1 font-mono">
                 <span className="text-emerald-400">~0.0343</span>
-                <span className="text-cyan-400 font-semibold">tBNB</span>
+                <span className="text-cyan-400 font-semibold">BNB</span>
               </div>
             </div>
           </div>
@@ -692,7 +689,7 @@ export const DeployContractModal: React.FC<DeployContractModalProps> = ({
           {isDeploying ? (
             <>
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-              <span>{deployStep || (language === 'th' ? 'กำลังบันทึก Bytecode ลง BNB Testnet...' : 'Deploying bytecode...')}</span>
+              <span>{deployStep || (language === 'th' ? 'กำลังบันทึก Bytecode ลง BNB Smart Chain...' : 'Deploying bytecode...')}</span>
             </>
           ) : (
             <>

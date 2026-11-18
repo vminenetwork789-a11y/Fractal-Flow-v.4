@@ -30,11 +30,11 @@ async function main() {
   const configPath = path.join(ROOT_DIR, 'prisma', 'contract-config.json');
   let configData: any = {
     contractAddress: newContract,
-    usdtAddress: newUsdt || '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b',
-    chainId: 97,
-    networkName: 'BNB Smart Chain Testnet',
-    rpcUrl: 'https://bsc-testnet-rpc.publicnode.com',
-    blockExplorerUrl: 'https://testnet.bscscan.com',
+    usdtAddress: newUsdt || '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48',
+    chainId: 56,
+    networkName: 'BNB Smart Chain',
+    rpcUrl: 'https://bsc-rpc.publicnode.com',
+    blockExplorerUrl: 'https://bscscan.com',
     updatedAt: new Date().toISOString(),
   };
 
@@ -44,7 +44,7 @@ async function main() {
       configData = {
         ...existing,
         contractAddress: newContract,
-        usdtAddress: newUsdt || existing.usdtAddress || '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b',
+        usdtAddress: newUsdt || existing.usdtAddress || '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48',
         updatedAt: new Date().toISOString(),
       };
     } catch {

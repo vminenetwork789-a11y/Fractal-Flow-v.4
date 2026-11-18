@@ -37,7 +37,7 @@ declare global {
 
 const readOnlyBscProvider = new ethers.JsonRpcProvider(
   BSC_TESTNET_RPC,
-  { chainId: BSC_TESTNET_CHAIN_ID, name: 'bnbt' },
+  { chainId: BSC_TESTNET_CHAIN_ID, name: 'bnb' },
   { staticNetwork: true, polling: false, batchMaxCount: 1 }
 );
 readOnlyBscProvider.on('error', () => {});
@@ -168,11 +168,11 @@ export function useWeb3() {
           setChainId(BSC_TESTNET_CHAIN_ID);
           return true;
         } catch (addError) {
-          console.error('Failed to add BSC Testnet to wallet:', addError);
+          console.error('Failed to add BNB Smart Chain to wallet:', addError);
           return false;
         }
       } else {
-        console.error('Failed to switch to BSC Testnet:', switchError);
+        console.error('Failed to switch to BNB Smart Chain:', switchError);
         return false;
       }
     }
@@ -253,7 +253,7 @@ export function useWeb3() {
         return;
       }
 
-      // 2. FALLBACK ONLY (if backend Database API is unreachable): Read from BSC Testnet RPC
+      // 2. FALLBACK ONLY (if backend Database API is unreachable): Read from BNB Smart Chain RPC
       const readProvider: ethers.Provider = readOnlyBscProvider;
       const matrixContract = new ethers.Contract(targetContract, MATRIX_ABI, readProvider);
       const usdtContract = new ethers.Contract(targetUsdt, USDT_ABI, readProvider);
@@ -355,11 +355,11 @@ export function useWeb3() {
       setTxState((prev) => ({
         ...prev,
         isLoading: true,
-        step: 'กำลังสลับเครือข่ายใน MetaMask เป็น BNB Smart Chain Testnet (Chain ID: 97)...',
+        step: 'กำลังสลับเครือข่ายใน MetaMask เป็น BNB Smart Chain (Chain ID: 56)...',
       }));
       const switched = await switchToBscTestnet();
       if (!switched) {
-        throw new Error('กรุณาสลับเครือข่ายในกระเป๋าเป็น BNB Smart Chain Testnet (Chain ID: 97) ก่อนทำรายการ');
+        throw new Error('กรุณาสลับเครือข่ายในกระเป๋าเป็น BNB Smart Chain (Chain ID: 56) ก่อนทำรายการ');
       }
       provider = new ethers.BrowserProvider(window.ethereum);
     }
@@ -750,7 +750,7 @@ export function useWeb3() {
     []
   );
 
-  // Preview Placement via previewPlacement(uint8, address) on BNB Smart Chain Testnet
+  // Preview Placement via previewPlacement(uint8, address) on BNB Smart Chain
   const previewNextPlacement = useCallback(async (rank: number, sponsorAddr: string) => {
     try {
       const matrixContract = new ethers.Contract(contractAddressRef.current, MATRIX_ABI, readOnlyBscProvider);
@@ -769,7 +769,7 @@ export function useWeb3() {
   const handleApproveUsdt = async (_amountUsdt?: number) => {
     setTxState({
       isLoading: true,
-      step: 'กำลังเตรียมอนุมัติวงเงิน USDT แบบไม่จำกัด (Unlimited Max Allowance) บน BNB Smart Chain Testnet...',
+      step: 'กำลังเตรียมอนุมัติวงเงิน USDT แบบไม่จำกัด (Unlimited Max Allowance) บน BNB Smart Chain...',
       txHash: null,
       error: null,
       successMessage: null,
@@ -823,7 +823,7 @@ export function useWeb3() {
 
       setTxState((prev) => ({
         ...prev,
-        step: 'ส่งคำสั่ง Approve USDT แบบไม่จำกัดแล้ว กำลังรอการยืนยันบน BNB Testnet...',
+        step: 'ส่งคำสั่ง Approve USDT แบบไม่จำกัดแล้ว กำลังรอการยืนยันบน BNB Smart Chain...',
         txHash: approveTx.hash,
       }));
 
@@ -871,7 +871,7 @@ export function useWeb3() {
             // continue to error below
           }
         }
-        errorMsg = 'โหนดเครือข่าย BSC Testnet RPC ไม่ตอบสนอง หรือกระเป๋าของคุณขาดเหรียญ tBNB สำหรับจ่ายค่าแก๊ส (แนะนำตรวจสอบ tBNB ในกระเป๋า หรือลองกดใหม่อีกครั้ง)';
+        errorMsg = 'โหนดเครือข่าย BNB Smart Chain RPC ไม่ตอบสนอง หรือกระเป๋าของคุณขาดเหรียญ BNB สำหรับจ่ายค่าแก๊ส (แนะนำตรวจสอบ BNB ในกระเป๋า หรือลองกดใหม่อีกครั้ง)';
       }
 
       setTxState({
@@ -1237,7 +1237,7 @@ export function useWeb3() {
 
       setTxState((prev) => ({
         ...prev,
-        step: 'ส่ง Transaction แล้ว กำลังรอการยืนยันบน BNB Smart Chain Testnet...',
+        step: 'ส่ง Transaction แล้ว กำลังรอการยืนยันบน BNB Smart Chain...',
         txHash: regTx.hash,
       }));
 
@@ -1476,7 +1476,7 @@ export function useWeb3() {
 
       setTxState((prev) => ({
         ...prev,
-        step: 'ส่ง Batch Transaction แล้ว รอการยืนยันบน BNB Testnet...',
+        step: 'ส่ง Batch Transaction แล้ว รอการยืนยันบน BNB Smart Chain...',
         txHash: batchTx.hash,
       }));
 
@@ -1668,7 +1668,7 @@ export function useWeb3() {
     }
 
     try {
-      // Strictly require real Web3 wallet & BSC Testnet — NEVER silently fake-upgrade in DB without USDT payment
+      // Strictly require real Web3 wallet & BNB Smart Chain — NEVER silently fake-upgrade in DB without USDT payment
       const { signer, userAddr } = await ensureWalletAndBscTestnet();
       const currentContract = contractAddressRef.current || CONTRACT_ADDRESS;
       const currentUsdt = usdtAddressRef.current || USDT_ADDRESS;
@@ -1793,7 +1793,7 @@ export function useWeb3() {
           });
           setTxState((prev) => ({
             ...prev,
-            step: `ส่งคำสั่งอนุมัติวงเงินส่วนต่าง (${formattedDiffUsdt} USDT) แล้ว กำลังรอการยืนยันบน BNB Testnet...`,
+            step: `ส่งคำสั่งอนุมัติวงเงินส่วนต่าง (${formattedDiffUsdt} USDT) แล้ว กำลังรอการยืนยันบน BNB Smart Chain...`,
             txHash: approveTx.hash,
           }));
           const approveTimeoutMsg =
@@ -2431,7 +2431,7 @@ export function useWeb3() {
 
       // 1. บังคับทำรายการ On-Chain จริงเท่านั้น (ห้าม Fallback ไปยัง Database จำลองโดยไม่แจ้ง Error)
       if (!window.ethereum || !account) {
-        throw new Error('กรุณาเชื่อมต่อ MetaMask (กระเป๋า Contract Owner) บน BSC Testnet ก่อนสั่ง Admin อัพ Rank ฟรี');
+        throw new Error('กรุณาเชื่อมต่อ MetaMask (กระเป๋า Contract Owner) บน BNB Smart Chain ก่อนสั่ง Admin อัพ Rank ฟรี');
       }
 
       const { signer, userAddr } = await ensureWalletAndBscTestnet();

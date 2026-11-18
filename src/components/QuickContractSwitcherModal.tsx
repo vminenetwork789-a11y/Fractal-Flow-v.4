@@ -140,7 +140,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
     [savedContracts, saveHistoryToStorage, usdtAddress]
   );
 
-  // Verify contract on BSC Testnet
+  // Verify contract on BNB Smart Chain
   const verifyContractOnChain = useCallback(async (targetAddr: string) => {
     const clean = targetAddr.trim();
     if (!ethers.isAddress(clean)) {
@@ -151,7 +151,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
     try {
       const provider = new ethers.JsonRpcProvider(
         BSC_TESTNET_RPC,
-        { chainId: BSC_TESTNET_CHAIN_ID, name: 'bnbt' },
+        { chainId: BSC_TESTNET_CHAIN_ID, name: 'bnb' },
         { staticNetwork: true }
       );
       const code = await provider.getCode(clean);
@@ -162,7 +162,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
           hasBytecode: false,
           rank1TotalNodes: null,
           rootOwner: null,
-          error: 'ไม่พบ Smart Contract Bytecode ที่ Address นี้บนเครือข่าย BSC Testnet (Chain 97)',
+          error: 'ไม่พบ Smart Contract Bytecode ที่ Address นี้บนเครือข่าย BNB Smart Chain (Chain 56)',
         });
         setVerifyingAddr(false);
         return;
@@ -367,7 +367,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
                 {language === 'th' ? 'สัญญาที่ใช้งานอยู่ปัจจุบัน (Active Contract)' : 'Active Contract Address'}
               </span>
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-[#DCFCE7] text-[#15803D] dark:bg-emerald-500/15 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-500/30">
-                BNB Smart Chain Testnet (97)
+                BNB Smart Chain (56)
               </span>
             </div>
 
@@ -398,7 +398,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
                   )}
                 </button>
                 <a
-                  href={`https://testnet.bscscan.com/address/${contractAddress}`}
+                  href={`https://bscscan.com/address/${contractAddress}`}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-[#EFF6FF] hover:bg-blue-100/80 dark:bg-indigo-500/20 dark:hover:bg-indigo-500/30 text-[#2563EB] dark:text-indigo-300 border border-blue-200/80 dark:border-indigo-500/30 transition"
@@ -434,7 +434,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
                 ) : (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 font-semibold border border-rose-200 dark:border-rose-500/30">
                     <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    <span>{chainCheck.error || 'ไม่พบ Bytecode บน BSC Testnet'}</span>
+                    <span>{chainCheck.error || 'ไม่พบ Bytecode บน BNB Smart Chain'}</span>
                   </span>
                 )
               ) : null}
@@ -476,8 +476,8 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
                   onChange={(e) => setInputLabel(e.target.value)}
                   placeholder={
                     language === 'th'
-                      ? 'ตั้งชื่อช่วยจำ (ไม่บังคับ เช่น สัญญาชุดทดสอบใหม่ V2)'
-                      : 'Optional label (e.g. New Testnet Contract V2)'
+                      ? 'ตั้งชื่อช่วยจำ (ไม่บังคับ เช่น สัญญา Mainnet V2)'
+                      : 'Optional label (e.g. Mainnet Contract V2)'
                   }
                   className="flex-1 px-3 py-2 rounded-xl bg-[#F8FAFC] dark:bg-slate-950 border border-slate-200/90 dark:border-slate-800 focus:border-[#2563EB] focus:outline-none text-xs text-[#334155] dark:text-slate-200"
                 />

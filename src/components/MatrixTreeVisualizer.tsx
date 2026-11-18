@@ -1936,7 +1936,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
       try {
         const rpcProvider = new ethers.JsonRpcProvider(
           rpcUrl,
-          { chainId: 97, name: 'bnbt' },
+          { chainId: 56, name: 'bnb' },
           { staticNetwork: true, polling: false, batchMaxCount: 1 }
         );
         rpcProvider.on('error', () => {});
@@ -1950,7 +1950,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
 
     const fallbackProvider = new ethers.JsonRpcProvider(
       BSC_TESTNET_RPC,
-      { chainId: 97, name: 'bnbt' },
+      { chainId: 56, name: 'bnb' },
       { staticNetwork: true, polling: false, batchMaxCount: 1 }
     );
     fallbackProvider.on('error', () => {});
@@ -10127,7 +10127,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
           const toastId = `modal-admin-free-upgrade-${targetMainId}-${rankToUpgrade}-${Date.now()}`;
           try {
             if (!onAdminUpgrade) {
-              throw new Error('กรุณาเชื่อมต่อกระเป๋า Contract Owner บน BSC Testnet ก่อนสั่ง Admin อัพ Rank ฟรี On-Chain');
+              throw new Error('กรุณาเชื่อมต่อกระเป๋า Contract Owner บน BNB Smart Chain ก่อนสั่ง Admin อัพ Rank ฟรี On-Chain');
             }
             let okMsg = `✅ Admin Upgrade สำเร็จ! อัพ Rank รหัส #${targetMainId} ให้ฟรีสู่ Rank ${rankToUpgrade} เรียบร้อยแล้ว (ไม่จ่ายค่าคอมเมื่อวางซ้าย และระบบโคลนนิ่งทำงานปกติเมื่อวางขวา)`;
             const resObj = await onAdminUpgrade(String(targetMainId), rankToUpgrade);
@@ -12763,7 +12763,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                           {copiedText === botWallet ? 'คัดลอกแล้ว' : 'คัดลอก'}
                         </button>
                         <a
-                          href={`https://testnet.bscscan.com/address/${botWallet}`}
+                          href={`https://bscscan.com/address/${botWallet}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="p-1 rounded bg-slate-900 hover:bg-slate-800 text-cyan-300 border border-slate-700"
@@ -13358,7 +13358,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                                   </span>
                                   {tr.txHash && (
                                     <a
-                                      href={`https://testnet.bscscan.com/tx/${tr.txHash}`}
+                                      href={`https://bscscan.com/tx/${tr.txHash}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="text-cyan-300 hover:underline inline-flex items-center gap-0.5"
@@ -13398,7 +13398,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                                   </span>
                                   {item.txHash && /^0x[a-fA-F0-9]{64}$/.test(String(item.txHash)) && (
                                     <a
-                                      href={`https://testnet.bscscan.com/tx/${item.txHash}`}
+                                      href={`https://bscscan.com/tx/${item.txHash}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
                                       className="inline-flex items-center gap-0.5 text-amber-300 hover:underline font-bold"
@@ -13465,7 +13465,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                                 <span>{formatModalRowTime(act.timestamp)}</span>
                                 {act.txHash && /^0x[a-fA-F0-9]{64}$/.test(String(act.txHash)) && (
                                   <a
-                                    href={`https://testnet.bscscan.com/tx/${act.txHash}`}
+                                    href={`https://bscscan.com/tx/${act.txHash}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="text-cyan-300 hover:underline inline-flex items-center gap-0.5"

@@ -980,9 +980,9 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
     if (!displayOwner || displayOwner === ethers.ZeroAddress) return;
 
     const loadOnChainPools = async () => {
-      const rpcList = SUPPORTED_NETWORKS[97]?.rpcUrls || [
-        'https://bsc-testnet-rpc.publicnode.com',
-        'https://data-seed-prebsc-1-s1.binance.org:8545/',
+      const rpcList = SUPPORTED_NETWORKS[56]?.rpcUrls || [
+        'https://bsc-rpc.publicnode.com',
+        'https://bsc-dataseed.binance.org/',
       ];
       for (const rpcUrl of rpcList) {
         try {
@@ -3608,7 +3608,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                         )}
                         {row.txHash && (
                           <a
-                            href={`https://testnet.bscscan.com/tx/${row.txHash}`}
+                            href={`https://bscscan.com/tx/${row.txHash}`}
                             target="_blank"
                             rel="noreferrer"
                             className="text-[10px] text-[#087cf4] hover:underline inline-flex items-center gap-0.5 justify-end"
@@ -4566,7 +4566,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                   <div className="p-3 rounded-xl bg-white border border-[#b8e5ff]">
                     <div className="text-[10px] text-[#55769b]">BNB ค่า Gas</div>
                     <strong className="text-base font-black text-[#0754b9]">
-                      {Number(bnbBalance || 0).toFixed(4)} tBNB
+                      {Number(bnbBalance || 0).toFixed(4)} BNB
                     </strong>
                   </div>
                 </div>
@@ -4809,7 +4809,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                             </strong>
                             {isRealChainTxHash(row.txHash) && (
                               <a
-                                href={`https://testnet.bscscan.com/tx/${row.txHash}`}
+                                href={`https://bscscan.com/tx/${row.txHash}`}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="px-2 py-0.5 rounded-lg bg-[#eff8ff] border border-[#a9d7ff] text-[10px] font-bold text-[#0756bc] hover:underline inline-flex items-center gap-0.5"
@@ -5043,7 +5043,7 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
                                     </button>
                                     {txMatch?.txHash && (
                                       <a
-                                        href={`https://testnet.bscscan.com/tx/${txMatch.txHash}`}
+                                        href={`https://bscscan.com/tx/${txMatch.txHash}`}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="text-[10px] text-[#087cf4] hover:underline inline-flex items-center gap-0.5"

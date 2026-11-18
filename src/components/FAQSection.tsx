@@ -36,8 +36,8 @@ interface FAQItem {
 
 export const FAQSection: React.FC<FAQSectionProps> = ({
   language,
-  contractAddress = '0x0c06f88987E56DE8704390D5b390AE48Ecd2Efe8',
-  usdtAddress = '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b',
+  contractAddress = '0xcd88382FF8E13E22cF70C35684F675bF11240F1e',
+  usdtAddress = '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48',
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
@@ -511,18 +511,18 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
         category: 'contracts',
         questionTh: 'ต้องเตรียมเหรียญอะไรบ้างสำหรับค่าธรรมเนียมเครือข่าย (Gas Fees)?',
         questionEn: 'What currencies are required for blockchain gas fees and transactions?',
-        tagsTh: ['Gas Fee', 'tBNB', 'BSC Testnet', 'USDT'],
-        tagsEn: ['Gas Fee', 'tBNB', 'BSC Testnet', 'USDT'],
+        tagsTh: ['Gas Fee', 'BNB', 'BSC', 'USDT'],
+        tagsEn: ['Gas Fee', 'BNB', 'BSC', 'USDT'],
         answerTh: (
           <div className="space-y-3 text-slate-300 leading-relaxed text-sm">
             <p>
-              ระบบทำงานบนเครือข่าย <strong className="text-amber-400">BNB Smart Chain Testnet (Chain ID 97)</strong> 
+              ระบบทำงานบนเครือข่าย <strong className="text-amber-400">BNB Smart Chain (Chain ID 56)</strong> 
               ท่านต้องมีเหรียญ 2 ชนิดในกระเป๋า:
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               <div className="bg-slate-950/60 p-2.5 rounded-lg border border-amber-500/20">
-                <span className="font-semibold text-amber-400 block">1. tBNB (สำหรับค่า Gas)</span>
-                <span className="text-slate-400">ใช้สำหรับค่าธรรมเนียมธุรกรรมบนเครือข่าย BSC แนะนำให้มีประมาณ 0.01 - 0.05 tBNB (รับฟรีได้จาก BSC Testnet Faucet)</span>
+                <span className="font-semibold text-amber-400 block">1. BNB (สำหรับค่า Gas)</span>
+                <span className="text-slate-400">ใช้สำหรับค่าธรรมเนียมธุรกรรมบนเครือข่าย BSC แนะนำให้มีประมาณ 0.01 - 0.05 BNB สำหรับค่าแก๊ส</span>
               </div>
               <div className="bg-slate-950/60 p-2.5 rounded-lg border border-emerald-500/20">
                 <span className="font-semibold text-emerald-400 block">2. USDT (BEP-20)</span>
@@ -534,13 +534,13 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
         answerEn: (
           <div className="space-y-3 text-slate-300 leading-relaxed text-sm">
             <p>
-              The application runs on the <strong className="text-amber-400">BNB Smart Chain Testnet (Chain ID 97)</strong>. 
+              The application runs on the <strong className="text-amber-400">BNB Smart Chain (Chain ID 56)</strong>. 
               You require two currencies in your Web3 wallet:
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
               <div className="bg-slate-950/60 p-2.5 rounded-lg border border-amber-500/20">
-                <span className="font-semibold text-amber-400 block">1. tBNB (Gas Fees)</span>
-                <span className="text-slate-400">Used for transaction execution on BSC. We recommend keeping 0.01 - 0.05 tBNB (available free via BSC Testnet Faucets).</span>
+                <span className="font-semibold text-amber-400 block">1. BNB (Gas Fees)</span>
+                <span className="text-slate-400">Used for transaction execution on BSC. We recommend keeping 0.01 - 0.05 BNB in your wallet for gas.</span>
               </div>
               <div className="bg-slate-950/60 p-2.5 rounded-lg border border-emerald-500/20">
                 <span className="font-semibold text-emerald-400 block">2. USDT (BEP-20)</span>
@@ -565,13 +565,13 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
                 <strong className="text-white">ยอด USDT Allowance ไม่เพียงพอ:</strong> ให้กดปุ่ม &quot;อนุมัติ USDT&quot; ใหม่อีกครั้งเพื่อเพิ่มวงเงิน
               </li>
               <li>
-                <strong className="text-white">ค่า Gas (tBNB) ไม่พอ:</strong> ตรวจสอบว่ามีเหรียญ tBNB สำหรับชำระค่าธรรมเนียมธุรกรรม
+                <strong className="text-white">ค่า Gas (BNB) ไม่พอ:</strong> ตรวจสอบว่ามีเหรียญ BNB สำหรับชำระค่าธรรมเนียมธุรกรรม
               </li>
               <li>
                 <strong className="text-white">รหัสผู้แนะนำ (Sponsor Node ID) ไม่ถูกต้อง:</strong> ต้องใช้ Node ID ที่มีอยู่จริงและเปิดใช้งานแล้วบนบล็อกเชน (เช่น Node #1)
               </li>
               <li>
-                <strong className="text-white">เครือข่ายกระเป๋าไม่ตรง:</strong> ต้องสลับไปใช้ BNB Smart Chain Testnet (Chain ID 97)
+                <strong className="text-white">เครือข่ายกระเป๋าไม่ตรง:</strong> ต้องสลับไปใช้ BNB Smart Chain (Chain ID 56)
               </li>
             </ol>
           </div>
@@ -584,13 +584,13 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
                 <strong className="text-white">Insufficient USDT Allowance:</strong> Click &quot;Approve USDT&quot; again to refresh on-chain allowance.
               </li>
               <li>
-                <strong className="text-white">Insufficient tBNB for Gas:</strong> Ensure your wallet balance has at least 0.005 tBNB for gas execution.
+                <strong className="text-white">Insufficient BNB for Gas:</strong> Ensure your wallet balance has at least 0.005 BNB for gas execution.
               </li>
               <li>
                 <strong className="text-white">Invalid Sponsor Node ID:</strong> Ensure the target sponsor ID exists and is actively confirmed on-chain (e.g. Node #1).
               </li>
               <li>
-                <strong className="text-white">Mismatched Network:</strong> Ensure your wallet network is set to BNB Smart Chain Testnet (Chain ID 97).
+                <strong className="text-white">Mismatched Network:</strong> Ensure your wallet network is set to BNB Smart Chain (Chain ID 56).
               </li>
             </ol>
           </div>
@@ -629,7 +629,7 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
                   )}
                 </button>
                 <a
-                  href={`https://testnet.bscscan.com/address/${contractAddress}`}
+                  href={`https://bscscan.com/address/${contractAddress}`}
                   target="_blank"
                   rel="noreferrer"
                   className="px-2.5 py-1 text-xs bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 rounded-lg flex items-center gap-1 transition"
@@ -640,13 +640,13 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
               </div>
             </div>
             <p className="text-xs text-slate-400">
-              สัญญา USDT (BEP-20) บน BSC Testnet: <code className="text-slate-300">{usdtAddress}</code>
+              สัญญา USDT (BEP-20) บน BNB Smart Chain: <code className="text-slate-300">{usdtAddress}</code>
             </p>
           </div>
         ),
         answerEn: (
           <div className="space-y-3 text-slate-300 leading-relaxed text-sm">
-            <p>The active smart contract address deployed on BNB Smart Chain Testnet is:</p>
+            <p>The active smart contract address deployed on BNB Smart Chain is:</p>
             <div className="p-3 bg-slate-950/80 rounded-xl border border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <span className="font-mono text-xs text-emerald-400 break-all select-all">
                 {contractAddress}
@@ -670,7 +670,7 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
                   )}
                 </button>
                 <a
-                  href={`https://testnet.bscscan.com/address/${contractAddress}`}
+                  href={`https://bscscan.com/address/${contractAddress}`}
                   target="_blank"
                   rel="noreferrer"
                   className="px-2.5 py-1 text-xs bg-indigo-600/30 hover:bg-indigo-600/50 text-indigo-300 rounded-lg flex items-center gap-1 transition"
@@ -681,7 +681,7 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
               </div>
             </div>
             <p className="text-xs text-slate-400">
-              USDT (BEP-20) on BSC Testnet: <code className="text-slate-300">{usdtAddress}</code>
+              USDT (BEP-20) on BNB Smart Chain: <code className="text-slate-300">{usdtAddress}</code>
             </p>
           </div>
         ),
@@ -939,7 +939,7 @@ export const FAQSection: React.FC<FAQSectionProps> = ({
         </div>
 
         <a
-          href={`https://testnet.bscscan.com/address/${contractAddress}`}
+          href={`https://bscscan.com/address/${contractAddress}`}
           target="_blank"
           rel="noreferrer"
           className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-emerald-300 bg-emerald-950/50 hover:bg-emerald-900/60 border border-emerald-500/40 rounded-xl transition whitespace-nowrap shrink-0 shadow-sm"

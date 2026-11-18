@@ -31,8 +31,8 @@ interface EventLogsSectionProps {
 
 const FALLBACK_RPCS = [
   BSC_TESTNET_RPC,
-  'https://bsc-testnet.publicnode.com',
-  'https://bsc-testnet.bnbchain.org',
+  'https://bsc-dataseed.binance.org/',
+  'https://bsc-dataseed1.binance.org/',
 ];
 
 const cachedEventLogsProviders = new Map<string, ethers.JsonRpcProvider>();
@@ -42,7 +42,7 @@ function createBscReadProvider(rpcUrl = BSC_TESTNET_RPC) {
   if (!provider) {
     provider = new ethers.JsonRpcProvider(
       rpcUrl,
-      { chainId: BSC_TESTNET_CHAIN_ID, name: 'bnbt' },
+      { chainId: BSC_TESTNET_CHAIN_ID, name: 'bnb' },
       { staticNetwork: true, polling: false, batchMaxCount: 1 }
     );
     provider.on('error', () => {});
@@ -931,7 +931,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                 : '🚀 Rank Upgrade History (Rank 2 - 18)'}
             </h3>
             <span className="text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full bg-[#DCFCE7] text-[#15803D] border border-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-500/30">
-              Chain ID: 97 • Local Indexer DB
+              Chain ID: 56 • Local Indexer DB
             </span>
             <button
               type="button"
@@ -969,11 +969,11 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
 
         <div className="flex items-center gap-2">
           <a
-            href={`https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}#events`}
+            href={`https://bscscan.com/address/${CONTRACT_ADDRESS}#events`}
             target="_blank"
             rel="noreferrer"
             className="text-xs bg-slate-50 hover:bg-slate-100 text-[#334155] border border-slate-200/80 dark:bg-slate-950 dark:hover:bg-slate-800 dark:text-indigo-300 dark:border-slate-800 px-3 py-1.5 rounded-xl font-mono transition flex items-center gap-1.5"
-            title="View Contract Events on BSCScan Testnet"
+            title="View Contract Events on BSCScan"
           >
             <span>BSCScan Events</span>
             <ExternalLink className="w-3.5 h-3.5" />
@@ -983,7 +983,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
             onClick={() => fetchOnChainRewardEvents(true)}
             disabled={isRefreshing}
             className="px-3 py-1.5 rounded-xl bg-[#DCFCE7] hover:bg-emerald-100 border border-emerald-200 text-[#15803D] dark:bg-emerald-600/20 dark:hover:bg-emerald-600/30 dark:border-emerald-500/30 dark:text-emerald-300 text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            title="Sync Database from BNB Testnet"
+            title="Sync Database from BNB Smart Chain"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             <span>{isRefreshing ? 'กำลังซิงค์ DB...' : language === 'th' ? 'ซิงค์เชนสด' : 'Sync'}</span>
@@ -1067,7 +1067,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
         <div className="bg-[#F8FAFC] dark:bg-slate-950/90 border border-slate-200/80 dark:border-slate-800/80 rounded-xl p-2.5">
           <span className="text-[#64748B] dark:text-slate-500 block">Contract</span>
           <a
-            href={`https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`}
+            href={`https://bscscan.com/address/${CONTRACT_ADDRESS}`}
             target="_blank"
             rel="noreferrer"
             className="text-[#15803D] dark:text-emerald-400 hover:underline font-bold truncate block"
@@ -1284,7 +1284,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                         <div className="text-[10.5px] text-slate-400 font-mono flex items-center gap-1.5 flex-wrap">
                           <span>กระเป๋าผู้ทำรายการ / ผู้รับ:</span>
                           <a
-                            href={`https://testnet.bscscan.com/address/${tx.userAddress}`}
+                            href={`https://bscscan.com/address/${tx.userAddress}`}
                             target="_blank"
                             rel="noreferrer"
                             className="text-indigo-300 hover:underline font-bold"
@@ -1320,13 +1320,13 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                       <a
                         href={
                           tx.txHash && !tx.txHash.startsWith('0xup')
-                            ? `https://testnet.bscscan.com/tx/${tx.txHash}`
-                            : `https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`
+                            ? `https://bscscan.com/tx/${tx.txHash}`
+                            : `https://bscscan.com/address/${CONTRACT_ADDRESS}`
                         }
                         target="_blank"
                         rel="noreferrer"
                         className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
-                        title="View on BSCScan Testnet"
+                        title="View on BSCScan"
                       >
                         <ArrowUpRight className="w-4 h-4" />
                       </a>
@@ -1486,7 +1486,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                         <span>
                           กระเป๋าเจ้าของ:{' '}
                           <a
-                            href={`https://testnet.bscscan.com/address/${rep.owner}`}
+                            href={`https://bscscan.com/address/${rep.owner}`}
                             target="_blank"
                             rel="noreferrer"
                             className="text-indigo-300 hover:underline"
@@ -1979,7 +1979,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                           </span>
                           <span className="text-slate-600">•</span>
                           <a
-                            href={`https://testnet.bscscan.com/address/${log.recipient}`}
+                            href={`https://bscscan.com/address/${log.recipient}`}
                             target="_blank"
                             rel="noreferrer"
                             className="text-indigo-300 hover:underline"
@@ -2006,13 +2006,13 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                       <a
                         href={
                           log.txHash
-                            ? `https://testnet.bscscan.com/tx/${log.txHash}`
-                            : `https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}#events`
+                            ? `https://bscscan.com/tx/${log.txHash}`
+                            : `https://bscscan.com/address/${CONTRACT_ADDRESS}#events`
                         }
                         target="_blank"
                         rel="noreferrer"
                         className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition"
-                        title="View on BSCScan Testnet"
+                        title="View on BSCScan"
                       >
                         <ArrowUpRight className="w-3.5 h-3.5" />
                       </a>
@@ -2162,7 +2162,7 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                           </span>
                           <span className="text-slate-600">•</span>
                           <a
-                            href={`https://testnet.bscscan.com/address/${up.owner}`}
+                            href={`https://bscscan.com/address/${up.owner}`}
                             target="_blank"
                             rel="noreferrer"
                             className="text-indigo-300 hover:underline"
@@ -2193,13 +2193,13 @@ export const EventLogsSection: React.FC<EventLogsSectionProps> = ({ language, ac
                       <a
                         href={
                           up.txHash && !up.txHash.startsWith('0xup')
-                            ? `https://testnet.bscscan.com/tx/${up.txHash}`
-                            : `https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`
+                            ? `https://bscscan.com/tx/${up.txHash}`
+                            : `https://bscscan.com/address/${CONTRACT_ADDRESS}`
                         }
                         target="_blank"
                         rel="noreferrer"
                         className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-white transition"
-                        title="ดูธุรกรรมบน BSCScan Testnet"
+                        title="ดูธุรกรรมบน BSCScan"
                       >
                         <ArrowUpRight className="w-4 h-4" />
                       </a>

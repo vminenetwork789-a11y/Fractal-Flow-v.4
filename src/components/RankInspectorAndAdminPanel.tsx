@@ -434,7 +434,7 @@ export const RankInspectorAndAdminPanel: React.FC<RankInspectorAndAdminPanelProp
               </button>
               {contractAddress && (
                 <a
-                  href={`https://testnet.bscscan.com/address/${contractAddress}`}
+                  href={`https://bscscan.com/address/${contractAddress}`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-[10px] text-indigo-400 hover:underline flex items-center gap-0.5"

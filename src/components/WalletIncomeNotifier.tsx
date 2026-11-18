@@ -768,7 +768,7 @@ export const WalletIncomeNotifier: React.FC<WalletIncomeNotifierProps> = ({
 
                                   {tx.txHash ? (
                                     <a
-                                      href={`https://testnet.bscscan.com/tx/${tx.txHash}`}
+                                      href={`https://bscscan.com/tx/${tx.txHash}`}
                                       target="_blank"
                                       rel="noreferrer"
                                       className="text-[10px] text-[#2563EB] dark:text-indigo-300 hover:underline inline-flex items-center gap-0.5 mt-0.5"

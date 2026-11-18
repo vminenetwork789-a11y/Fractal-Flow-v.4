@@ -108,7 +108,7 @@ async function getWorkingReadProvider(
     try {
       const p = new ethers.JsonRpcProvider(
         rpcUrl,
-        { chainId: 97, name: 'bnbt' },
+        { chainId: 56, name: 'bnb' },
         { staticNetwork: true, polling: false, batchMaxCount: 1 }
       );
       p.on('error', () => {});
@@ -122,7 +122,7 @@ async function getWorkingReadProvider(
 
   const fallback = new ethers.JsonRpcProvider(
     BSC_TESTNET_RPC,
-    { chainId: 97, name: 'bnbt' },
+    { chainId: 56, name: 'bnb' },
     { staticNetwork: true, polling: false, batchMaxCount: 1 }
   );
   fallback.on('error', () => {});
@@ -1199,7 +1199,7 @@ export async function executeOffChainSimulationAndBatch(
       simResult.isClones
     );
 
-    onProgress('ส่งธุรกรรมสำเร็จ กำลังรอการยืนยันจากบล็อกเชน BNB Testnet...');
+    onProgress('ส่งธุรกรรมสำเร็จ กำลังรอการยืนยันจากบล็อกเชน BNB Smart Chain...');
     const receipt = await tx.wait();
 
     const mainIdSet = new Set<number>();

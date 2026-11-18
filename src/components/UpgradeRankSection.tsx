@@ -791,11 +791,11 @@ export const UpgradeRankSection: React.FC<UpgradeRankSectionProps> = ({
                         </div>
                       </div>
                       <a
-                        href={`https://testnet.bscscan.com/address/${CONTRACT_ADDRESS}`}
+                        href={`https://bscscan.com/address/${CONTRACT_ADDRESS}`}
                         target="_blank"
                         rel="noreferrer"
                         className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition"
-                        title="ดูข้อมูลบน BSCScan Testnet"
+                        title="ดูข้อมูลบน BSCScan"
                       >
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>

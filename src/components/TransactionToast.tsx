@@ -77,7 +77,7 @@ export const TransactionToast: React.FC<TransactionToastProps> = ({
   txState,
   onClear,
   language = 'th',
-  explorerBaseUrl = 'https://testnet.bscscan.com/tx/',
+  explorerBaseUrl = 'https://bscscan.com/tx/',
 }) => {
   const [customToasts, setCustomToasts] = useState<ActiveToastItem[]>([]);
   const [web3ConfirmedAt, setWeb3ConfirmedAt] = useState<string>(() => new Date().toISOString());

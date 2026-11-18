@@ -330,7 +330,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           throw new Error('ไม่พบกระเป๋า Web3 (MetaMask / Bitget) กรุณาเชื่อมต่อกระเป๋าหรือเปลี่ยนเป็นโหมด Server Admin Key');
         }
 
-        // ตรวจสอบและสลับเครือข่ายเป็น BSC Testnet (Chain ID 97) อัตโนมัติ
+        // ตรวจสอบและสลับเครือข่ายเป็น BNB Smart Chain (Chain ID 56) อัตโนมัติ
         const chainHex = await ethereum.request({ method: 'eth_chainId' }).catch(() => null);
         const currentChainId = chainHex ? parseInt(String(chainHex), 16) : 0;
         if (currentChainId !== BSC_TESTNET_CHAIN_ID) {
@@ -346,7 +346,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                 params: [BSC_TESTNET_PARAMS],
               });
             } else {
-              throw new Error('กรุณาสลับเครือข่าย MetaMask เป็น BNB Smart Chain Testnet (Chain ID 97) ก่อนทำรายการ');
+              throw new Error('กรุณาสลับเครือข่าย MetaMask เป็น BNB Smart Chain (Chain ID 56) ก่อนทำรายการ');
             }
           }
         }
@@ -860,7 +860,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
               {actionStatus.txHash && (
                 <div className="pt-1">
                   <a
-                    href={`https://testnet.bscscan.com/tx/${actionStatus.txHash}`}
+                    href={`https://bscscan.com/tx/${actionStatus.txHash}`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1 font-mono text-amber-300 hover:underline"
@@ -948,7 +948,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                         )}
                       </button>
                       <a
-                        href={`https://testnet.bscscan.com/address/${addr}`}
+                        href={`https://bscscan.com/address/${addr}`}
                         target="_blank"
                         rel="noreferrer"
                         className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
@@ -967,7 +967,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                   <span className="text-white font-bold">{item.data?.usdt || '0.00'} U</span>
                 </div>
                 <div className="text-right">
-                  <span className="text-slate-500 text-[10px] block">tBNB Gas</span>
+                  <span className="text-slate-500 text-[10px] block">BNB Gas</span>
                   <span className="text-slate-300">{item.data?.bnb || '0.0000'}</span>
                 </div>
               </div>
@@ -1272,7 +1272,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                     </span>
                     <span className="text-slate-600">·</span>
                     <span className="text-amber-300 font-bold">
-                      {overview?.wallets?.contract?.bnb || '0.0000'} tBNB
+                      {overview?.wallets?.contract?.bnb || '0.0000'} BNB
                     </span>
                   </div>
                 </div>
@@ -2790,7 +2790,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                               {tx.source}
                             </span>
                             <a
-                              href={tx.explorerUrl || `https://testnet.bscscan.com/tx/${tx.txHash}`}
+                              href={tx.explorerUrl || `https://bscscan.com/tx/${tx.txHash}`}
                               target="_blank"
                               rel="noreferrer"
                               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/30 border border-cyan-500/30 text-cyan-300 text-[11px] font-semibold"
@@ -2945,7 +2945,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
                 </button>
                 {(col.type === 'address' || s.length === 66) && (
                   <a
-                    href={`https://testnet.bscscan.com/${bscPath}`}
+                    href={`https://bscscan.com/${bscPath}`}
                     target="_blank"
                     rel="noreferrer"
                     className="text-slate-500 hover:text-cyan-300"

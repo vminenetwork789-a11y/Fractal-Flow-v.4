@@ -62,18 +62,18 @@ const CONTRACT_ADDRESS =
   process.env.OVERRIDE_CONTRACT_ADDRESS ||
   process.env.CONTRACT_ADDRESS ||
   process.env.VITE_CONTRACT_ADDRESS ||
-  '0x0c06f88987E56DE8704390D5b390AE48Ecd2Efe8';
+  '0xcd88382FF8E13E22cF70C35684F675bF11240F1e';
 
 const WSS_ENDPOINTS = [
-  process.env.WSS_URL || 'wss://bsc-testnet-rpc.publicnode.com',
-  'wss://bsc-testnet.publicnode.com',
+  process.env.WSS_URL || 'wss://bsc-rpc.publicnode.com',
+  'wss://bsc.publicnode.com',
 ].filter(Boolean);
 
 const HTTP_RPC_ENDPOINTS = [
-  process.env.HTTP_RPC_URL || 'https://data-seed-prebsc-1-s1.bnbchain.org:8545',
-  process.env.RPC_URL || 'https://bsc-testnet-rpc.publicnode.com',
-  'https://data-seed-prebsc-1-s2.binance.org:8545',
-  'https://bsc-testnet.publicnode.com',
+  process.env.HTTP_RPC_URL || 'https://bsc-rpc.publicnode.com',
+  process.env.RPC_URL || 'https://bsc-dataseed.binance.org/',
+  'https://bsc-dataseed1.binance.org/',
+  'https://bsc.publicnode.com',
 ].filter(Boolean);
 
 const BOT_PRIVATE_KEY = process.env.BOT_PRIVATE_KEY || '';
@@ -134,7 +134,7 @@ function getHttpProvider(): ethers.JsonRpcProvider {
   fetchReq.timeout = 12000;
   return new ethers.JsonRpcProvider(
     fetchReq,
-    { chainId: 97, name: 'bnbt' },
+    { chainId: 56, name: 'bnb' },
     { staticNetwork: true, batchMaxCount: 1 }
   );
 }
@@ -329,8 +329,8 @@ export async function connectWebSocket(): Promise<void> {
 
   try {
     wsProvider = new ethers.WebSocketProvider(wssUrl, {
-      chainId: 97,
-      name: 'bnbt',
+      chainId: 56,
+      name: 'bnb',
     });
 
     // Suppress unhandled provider-level errors

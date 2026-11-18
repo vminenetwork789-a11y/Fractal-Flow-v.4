@@ -1,7 +1,7 @@
 export const DEFAULT_CONTRACT_ADDRESS =
-  import.meta.env?.VITE_CONTRACT_ADDRESS || '0x0c06f88987E56DE8704390D5b390AE48Ecd2Efe8';
+  import.meta.env?.VITE_CONTRACT_ADDRESS || '0xcd88382FF8E13E22cF70C35684F675bF11240F1e';
 export const DEFAULT_USDT_ADDRESS =
-  import.meta.env?.VITE_USDT_ADDRESS || '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b';
+  import.meta.env?.VITE_USDT_ADDRESS || '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48';
 
 const LEGACY_CONTRACT_ADDRESSES = new Set([
   '0x72f6ac64a86b1673ed55ba290ac12f1528ebba67',
@@ -51,13 +51,16 @@ const LEGACY_CONTRACT_ADDRESSES = new Set([
   '0x4f47842e535001a43376f65cfdc05469dbf0bb99',
   '0x8d460fb2037831cb2715c301420ca6357994411e',
   '0x6d85e1d8f1628eadf0baf25d3ab6c3c7bc16743f',
+  '0x0c06f88987e56de8704390d5b390ae48ecd2efe8',
 ]);
 
 const LEGACY_USDT_ADDRESSES = new Set([
   '0x95856be9c16afc9c147c034cd6a514d730bd90ba',
+  '0x05f24e1f598df1ae8d0b424ce978f8ea33bb752b',
 ]);
 
 export const ADMIN_WALLET_ADDRESSES = new Set([
+  '0xf7a8f472a0251a729bb8a06ff26b1303a217eeb1', // Mainnet Contract Owner / Root Node #1
   '0x622e20082e63c7220c5af0a77cbc437a98505311', // Root User / Main ID #1
   '0xbefeb9871a20656aef7e8d218f751e9c23faf710', // Deployer / Contract Owner / AllSell Signer
   '0xbefedbb942a73957f6123ba0b3aa27b4a081f710', // System AllSell Wallet
@@ -86,10 +89,15 @@ export function isAuthorizedAdminWallet(
 
 export const CONTRACT_ADDRESS = DEFAULT_CONTRACT_ADDRESS;
 export const USDT_ADDRESS = DEFAULT_USDT_ADDRESS;
-export const BSC_TESTNET_RPC =
-  import.meta.env?.VITE_BSC_TESTNET_RPC || 'https://bsc-testnet-rpc.publicnode.com';
-export const BSC_TESTNET_CHAIN_ID = Number(import.meta.env?.VITE_CHAIN_ID || 97);
-export const BSC_TESTNET_CHAIN_ID_HEX = '0x61';
+export const BSC_MAINNET_RPC =
+  import.meta.env?.VITE_BSC_RPC ||
+  import.meta.env?.VITE_BSC_TESTNET_RPC ||
+  'https://bsc-rpc.publicnode.com';
+export const BSC_MAINNET_CHAIN_ID = Number(import.meta.env?.VITE_CHAIN_ID || 56);
+export const BSC_MAINNET_CHAIN_ID_HEX = '0x38';
+export const BSC_TESTNET_RPC = BSC_MAINNET_RPC;
+export const BSC_TESTNET_CHAIN_ID = BSC_MAINNET_CHAIN_ID;
+export const BSC_TESTNET_CHAIN_ID_HEX = BSC_MAINNET_CHAIN_ID_HEX;
 
 export function getDynamicContractAddress(): string {
   if (typeof window !== 'undefined') {
@@ -166,22 +174,36 @@ export interface NetworkConfig {
 }
 
 export const SUPPORTED_NETWORKS: Record<number, NetworkConfig> = {
+  56: {
+    chainId: 56,
+    chainIdHex: '0x38',
+    name: 'BNB Smart Chain',
+    currencySymbol: 'BNB',
+    rpcUrl: 'https://bsc-rpc.publicnode.com',
+    rpcUrls: [
+      'https://bsc-rpc.publicnode.com',
+      'https://bsc-dataseed.binance.org/',
+      'https://bsc-dataseed1.binance.org/',
+      'https://bsc-dataseed1.defibit.io/',
+      'https://bsc-dataseed1.ninicoin.io/',
+    ],
+    blockExplorerUrl: 'https://bscscan.com',
+    defaultUsdtAddress: '0x00BeC3bd7D5FFCf31D043bB1af71f0d59867eB48',
+    defaultContractAddress: DEFAULT_CONTRACT_ADDRESS,
+  },
   97: {
     chainId: 97,
     chainIdHex: '0x61',
-    name: 'BNB Smart Chain Testnet',
+    name: 'BNB Smart Chain Testnet (Legacy)',
     currencySymbol: 'tBNB',
     rpcUrl: 'https://bsc-testnet-rpc.publicnode.com',
     rpcUrls: [
       'https://bsc-testnet-rpc.publicnode.com',
       'https://bsc-testnet.publicnode.com',
-      'https://bsc-testnet.bnbchain.org',
-      'https://data-seed-prebsc-1-s2.binance.org:8545/',
       'https://data-seed-prebsc-1-s1.binance.org:8545/',
     ],
     blockExplorerUrl: 'https://testnet.bscscan.com',
     defaultUsdtAddress: '0x05f24E1F598DF1aE8d0B424ce978f8ea33bB752b',
-    defaultContractAddress: DEFAULT_CONTRACT_ADDRESS,
   },
   80002: {
     chainId: 80002,
@@ -225,23 +247,25 @@ export const SUPPORTED_NETWORKS: Record<number, NetworkConfig> = {
   },
 };
 
-export const BSC_TESTNET_PARAMS = {
-  chainId: BSC_TESTNET_CHAIN_ID_HEX,
-  chainName: 'BNB Smart Chain Testnet',
+export const BSC_MAINNET_PARAMS = {
+  chainId: BSC_MAINNET_CHAIN_ID_HEX,
+  chainName: 'BNB Smart Chain',
   nativeCurrency: {
-    name: 'Binance Testnet BNB',
-    symbol: 'tBNB',
+    name: 'BNB',
+    symbol: 'BNB',
     decimals: 18,
   },
   rpcUrls: [
-    'https://bsc-testnet-rpc.publicnode.com',
-    'https://bsc-testnet.publicnode.com',
-    'https://bsc-testnet.bnbchain.org',
-    'https://data-seed-prebsc-1-s2.binance.org:8545/',
-    'https://data-seed-prebsc-1-s1.binance.org:8545/',
+    'https://bsc-rpc.publicnode.com',
+    'https://bsc-dataseed.binance.org/',
+    'https://bsc-dataseed1.binance.org/',
+    'https://bsc-dataseed1.defibit.io/',
+    'https://bsc-dataseed1.ninicoin.io/',
   ],
-  blockExplorerUrls: ['https://testnet.bscscan.com/'],
+  blockExplorerUrls: ['https://bscscan.com/'],
 };
+
+export const BSC_TESTNET_PARAMS = BSC_MAINNET_PARAMS;
 
 export const MATRIX_ABI = [
   // View / Constants

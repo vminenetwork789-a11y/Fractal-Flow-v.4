@@ -1136,8 +1136,8 @@ export const AuthAndOnboardingGate: React.FC<AuthAndOnboardingGateProps> = ({
                 className="w-full py-3.5 px-5 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-sm shadow-sm transition cursor-pointer"
               >
                 {language === 'th'
-                  ? 'สลับเป็นเครือข่าย BNB Smart Chain Testnet'
-                  : 'Switch to BNB Smart Chain Testnet'}
+                  ? 'สลับเป็นเครือข่าย BNB Smart Chain'
+                  : 'Switch to BNB Smart Chain'}
               </button>
             ) : !isApproved ? (
               <div className="space-y-2.5">
