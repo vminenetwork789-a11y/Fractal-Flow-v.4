@@ -1013,13 +1013,64 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       }
     }
 
-    // Numeric ID search: e.g. "3", "#3", "ID 3", "ID #3" -> show ALL data of that ID (Main, Clones, Extra IDs, Auto IDs, Matrix nodes)
-    const idMatch = raw.match(/^(?:#|id\s*#?)?\s*(\d+)$/i);
-    if (idMatch) {
-      const targetId = Number(idMatch[1]);
-      const layerHint = targetId >= 0 && targetId <= 15 ? targetId : null;
+    // Structured ID / Clone sequence / Rank parser:
+    // Supports "#3 ครั้งที่2 rank1", "#3 ครั้งที่ 2", "3 rank 1", "โคลน #3 ครั้งที่2 R1", "ครั้งที่ 2 rank 1", "3", "#3"
+    const hasWalletHex = raw.toLowerCase().includes('0x');
+    let parsedCloneSeq: number | null = null;
+    let parsedRank: number | null = null;
+    let parsedId: number | null = null;
+    let isStructuredMatch = false;
+    const isCloneTargeted = /โคลน|clone/i.test(raw);
 
-      if (targetId === 0) {
+    if (!hasWalletHex) {
+      let remainder = raw
+        .replace(/,/g, ' ')
+        .replace(/โคลนนิ่ง|โคลน|clone|extra|auto|main/gi, ' ')
+        .trim();
+
+      const seqMatch = remainder.match(/(?:ครั้งที่|ครั้ง|seq)\s*[:#-]?\s*(\d+)/i);
+      if (seqMatch) {
+        parsedCloneSeq = Number(seqMatch[1]);
+        remainder = remainder.replace(seqMatch[0], ' ').trim();
+      }
+
+      const rankTokenMatch = remainder.match(/(?:rank|r)\s*[:#-]?\s*(\d{1,2})\b/i);
+      if (rankTokenMatch) {
+        const rNum = Number(rankTokenMatch[1]);
+        if (rNum >= 1 && rNum <= 18) {
+          parsedRank = rNum;
+          remainder = remainder.replace(rankTokenMatch[0], ' ').trim();
+        }
+      }
+
+      const idTokenMatch =
+        remainder.match(/(?:id\s*#?|#)\s*(\d+)\b/i) || remainder.match(/^(\d+)$/);
+      if (idTokenMatch) {
+        parsedId = Number(idTokenMatch[1]);
+        remainder = remainder.replace(idTokenMatch[0], ' ').trim();
+      }
+
+      isStructuredMatch =
+        remainder === '' &&
+        (parsedId !== null || parsedCloneSeq !== null || parsedRank !== null);
+    }
+
+    if (isStructuredMatch) {
+      const targetId = parsedId;
+      const cloneTargeted = isCloneTargeted || parsedCloneSeq !== null;
+
+      // Pure Rank jump query (e.g. "rank 2" or "R2")
+      if (targetId === null && parsedCloneSeq === null && parsedRank !== null) {
+        setMatrixRank(parsedRank);
+        setSelectedLayer(0);
+        setSearchResult({
+          query: raw,
+          message: `เปลี่ยนไปแสดงผัง Rank ${parsedRank} แล้ว`,
+        });
+        return;
+      }
+
+      if (targetId === 0 && parsedCloneSeq === null && parsedRank === null) {
         chooseLayer(0);
         setSearchResult({
           query: raw,
@@ -1034,168 +1085,231 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         return;
       }
 
-      const mainRep = reportByMainId.get(targetId) || null;
-      const mainHits: any[] = mainRep ? [mainRep] : [];
+      const layerHint =
+        targetId !== null && targetId >= 0 && targetId <= 15 && !cloneTargeted && parsedRank === null
+          ? targetId
+          : null;
 
+      const mainHits: any[] = [];
       const cloneMap = new Map<string, any>();
       const extraMap = new Map<string, any>();
       const autoMap = new Map<number, any>();
 
-      // 1) Collect all Clones, Extra IDs, Auto IDs belonging to Main #targetId
-      if (mainRep) {
-        for (const c of mainRep.clonesSpawned || []) {
-          const r = Number(c.rank || 1);
-          const nid = Number(c.id || 0);
-          const d30 = Number(c.direct30TotalUsdt || 0);
-          const l30 = Number(c.level30TotalUsdt || 0);
-          cloneMap.set(`${r}-${nid}`, {
-            id: nid,
-            rank: r,
-            originMainId: targetId,
-            cloneSequence: Number(c.cloneSequence || 1),
-            cloneRound: Number(c.cloneRound || 1),
-            parentId: Number(c.parentId || 0),
-            side: String(c.side || ''),
-            owner: String(c.owner || mainRep.owner || ''),
-            direct30Usdt: d30,
-            level30Usdt: l30,
-            incomeUsdt: Number((d30 + l30).toFixed(2)),
-            vault35Usdt: Number(c.vault35GrossTotalUsdt || 0),
+      // Helper to add clone if matching ID / sequence / rank filters
+      const pushCloneIfMatch = (cItem: {
+        id: number;
+        rank: number;
+        originMainId: number;
+        cloneSequence: number;
+        perRankSeq: number;
+        cloneRound: number;
+        parentId: number;
+        side: string;
+        owner: string;
+        direct30Usdt: number;
+        level30Usdt: number;
+        incomeUsdt: number;
+        vault35Usdt: number;
+      }) => {
+        if (parsedRank !== null && cItem.rank !== parsedRank) return;
+        if (
+          targetId !== null &&
+          cItem.originMainId !== targetId &&
+          cItem.id !== targetId
+        ) {
+          return;
+        }
+        const effectiveSeq = cItem.perRankSeq > 0 ? cItem.perRankSeq : cItem.cloneSequence;
+        if (
+          parsedCloneSeq !== null &&
+          effectiveSeq !== parsedCloneSeq &&
+          cItem.cloneSequence !== parsedCloneSeq
+        ) {
+          return;
+        }
+        const key = `${cItem.rank}-${cItem.id}`;
+        if (!cloneMap.has(key)) {
+          cloneMap.set(key, {
+            ...cItem,
+            cloneSequence: effectiveSeq,
           });
         }
-        for (const ex of mainRep.autoExtraIdsSpawned || []) {
-          const r = Number(ex.rank || 4);
-          const nid = Number(ex.id || 0);
-          const d30 = Number(ex.direct30TotalUsdt || 0);
-          const l30 = Number(ex.level30TotalUsdt || 0);
-          extraMap.set(`${r}-${nid}`, {
-            id: nid,
-            rank: r,
-            originMainId: targetId,
-            parentId: Number(ex.parentId || 0),
-            side: String(ex.side || ''),
-            owner: String(ex.owner || mainRep.owner || ''),
-            direct30Usdt: d30,
-            level30Usdt: l30,
-            incomeUsdt: Number((d30 + l30).toFixed(2)),
-            vault35Usdt: Number(ex.vault35GrossTotalUsdt || 0),
-          });
-        }
-        for (const au of mainRep.autoIdsSpawned || []) {
-          const aid = Number(au.id || 0);
-          const aRep = reportByMainId.get(aid);
-          const aIncome = aRep
-            ? Number((Number(aRep.direct30TotalUsdt || 0) + Number(aRep.level30TotalUsdt || 0)).toFixed(2))
-            : 0;
-          autoMap.set(aid, {
-            id: aid,
-            rank: Number(au.rank || 1),
-            spawnedByMainId: Number(au.spawnedByMainId || targetId),
-            parentId: Number(au.parentId || 0),
-            side: String(au.side || ''),
-            owner: String(au.owner || aRep?.owner || mainRep.owner || ''),
-            currentMaxRank: Number(aRep?.currentMaxRank || 1),
-            incomeUsdt: aIncome,
-            vaultRemainingUsdt: Number(aRep?.vault35RemainingTotalUsdt || 0),
-          });
-        }
-        // If Main #targetId itself is an Auto ID, also list it in Auto IDs tab
-        if (mainRep.isAutoId) {
-          autoMap.set(targetId, {
-            id: targetId,
-            rank: 1,
-            spawnedByMainId: Number(mainRep.directSponsorNodeId || 1),
-            parentId: 0,
-            side: '',
-            owner: String(mainRep.owner || ''),
-            currentMaxRank: Number(mainRep.currentMaxRank || 1),
-            incomeUsdt: Number(
-              (Number(mainRep.direct30TotalUsdt || 0) + Number(mainRep.level30TotalUsdt || 0)).toFixed(2)
-            ),
-            vaultRemainingUsdt: Number(mainRep.vault35RemainingTotalUsdt || 0),
-          });
-        }
-      }
+      };
 
-      // 2) Also check if targetId matches any Clone / Extra / Auto node ID spawned under another Main ID
+      // Scan allReports so Clone #N / Rank R queries work regardless of which Rank is currently viewed
       for (const r of allReports) {
         if (r.isClone || r.isExtraId) continue;
         const parentMainId = Number(r.id || 0);
-        for (const c of r.clonesSpawned || []) {
-          if (Number(c.id) === targetId) {
-            const cr = Number(c.rank || 1);
-            const key = `${cr}-${targetId}`;
-            if (!cloneMap.has(key)) {
-              const d30 = Number(c.direct30TotalUsdt || 0);
-              const l30 = Number(c.level30TotalUsdt || 0);
-              cloneMap.set(key, {
-                id: targetId,
-                rank: cr,
-                originMainId: parentMainId,
-                cloneSequence: Number(c.cloneSequence || 1),
-                cloneRound: Number(c.cloneRound || 1),
-                parentId: Number(c.parentId || 0),
-                side: String(c.side || ''),
-                owner: String(c.owner || r.owner || ''),
-                direct30Usdt: d30,
-                level30Usdt: l30,
-                incomeUsdt: Number((d30 + l30).toFixed(2)),
-                vault35Usdt: Number(c.vault35GrossTotalUsdt || 0),
+
+        if (!cloneTargeted && targetId !== null && parentMainId === targetId) {
+          mainHits.push(r);
+
+          for (const ex of r.autoExtraIdsSpawned || []) {
+            const er = Number(ex.rank || 4);
+            if (parsedRank !== null && er !== parsedRank) continue;
+            const nid = Number(ex.id || 0);
+            const d30 = Number(ex.direct30TotalUsdt || 0);
+            const l30 = Number(ex.level30TotalUsdt || 0);
+            extraMap.set(`${er}-${nid}`, {
+              id: nid,
+              rank: er,
+              originMainId: parentMainId,
+              parentId: Number(ex.parentId || 0),
+              side: String(ex.side || ''),
+              owner: String(ex.owner || r.owner || ''),
+              direct30Usdt: d30,
+              level30Usdt: l30,
+              incomeUsdt: Number((d30 + l30).toFixed(2)),
+              vault35Usdt: Number(ex.vault35GrossTotalUsdt || 0),
+            });
+          }
+
+          if (parsedRank === null || parsedRank === 1) {
+            for (const au of r.autoIdsSpawned || []) {
+              const aid = Number(au.id || 0);
+              const aRep = reportByMainId.get(aid);
+              const aIncome = aRep
+                ? Number((Number(aRep.direct30TotalUsdt || 0) + Number(aRep.level30TotalUsdt || 0)).toFixed(2))
+                : 0;
+              autoMap.set(aid, {
+                id: aid,
+                rank: Number(au.rank || 1),
+                spawnedByMainId: Number(au.spawnedByMainId || parentMainId),
+                parentId: Number(au.parentId || 0),
+                side: String(au.side || ''),
+                owner: String(au.owner || aRep?.owner || r.owner || ''),
+                currentMaxRank: Number(aRep?.currentMaxRank || 1),
+                incomeUsdt: aIncome,
+                vaultRemainingUsdt: Number(aRep?.vault35RemainingTotalUsdt || 0),
+              });
+            }
+            if (r.isAutoId) {
+              autoMap.set(parentMainId, {
+                id: parentMainId,
+                rank: 1,
+                spawnedByMainId: Number(r.directSponsorNodeId || 1),
+                parentId: 0,
+                side: '',
+                owner: String(r.owner || ''),
+                currentMaxRank: Number(r.currentMaxRank || 1),
+                incomeUsdt: Number(
+                  (Number(r.direct30TotalUsdt || 0) + Number(r.level30TotalUsdt || 0)).toFixed(2)
+                ),
+                vaultRemainingUsdt: Number(r.vault35RemainingTotalUsdt || 0),
               });
             }
           }
         }
-        for (const ex of r.autoExtraIdsSpawned || []) {
-          if (Number(ex.id) === targetId) {
-            const er = Number(ex.rank || 4);
-            const key = `${er}-${targetId}`;
-            if (!extraMap.has(key)) {
-              const d30 = Number(ex.direct30TotalUsdt || 0);
-              const l30 = Number(ex.level30TotalUsdt || 0);
-              extraMap.set(key, {
-                id: targetId,
-                rank: er,
-                originMainId: parentMainId,
-                parentId: Number(ex.parentId || 0),
-                side: String(ex.side || ''),
-                owner: String(ex.owner || r.owner || ''),
-                direct30Usdt: d30,
-                level30Usdt: l30,
-                incomeUsdt: Number((d30 + l30).toFixed(2)),
-                vault35Usdt: Number(ex.vault35GrossTotalUsdt || 0),
-              });
+
+        // Extra ID by direct node ID if not targeting clone
+        if (!cloneTargeted && targetId !== null && parentMainId !== targetId) {
+          for (const ex of r.autoExtraIdsSpawned || []) {
+            if (Number(ex.id) === targetId) {
+              const er = Number(ex.rank || 4);
+              if (parsedRank !== null && er !== parsedRank) continue;
+              const key = `${er}-${targetId}`;
+              if (!extraMap.has(key)) {
+                const d30 = Number(ex.direct30TotalUsdt || 0);
+                const l30 = Number(ex.level30TotalUsdt || 0);
+                extraMap.set(key, {
+                  id: targetId,
+                  rank: er,
+                  originMainId: parentMainId,
+                  parentId: Number(ex.parentId || 0),
+                  side: String(ex.side || ''),
+                  owner: String(ex.owner || r.owner || ''),
+                  direct30Usdt: d30,
+                  level30Usdt: l30,
+                  incomeUsdt: Number((d30 + l30).toFixed(2)),
+                  vault35Usdt: Number(ex.vault35GrossTotalUsdt || 0),
+                });
+              }
             }
           }
+        }
+
+        // Clones grouped by Rank to resolve exact per-Rank clone sequence (1, 2, 3...)
+        const clonesByRank = new Map<number, any[]>();
+        for (const c of r.clonesSpawned || []) {
+          const cr = Number(c.rank || 1);
+          const list = clonesByRank.get(cr) || [];
+          list.push(c);
+          clonesByRank.set(cr, list);
+        }
+        for (const [cr, list] of clonesByRank.entries()) {
+          const sortedList = [...list].sort((a, b) => Number(a.id) - Number(b.id));
+          sortedList.forEach((c, idx) => {
+            const nid = Number(c.id || 0);
+            const d30 = Number(c.direct30TotalUsdt || 0);
+            const l30 = Number(c.level30TotalUsdt || 0);
+            pushCloneIfMatch({
+              id: nid,
+              rank: cr,
+              originMainId: parentMainId,
+              cloneSequence: Number(c.cloneSequence || idx + 1),
+              perRankSeq: idx + 1,
+              cloneRound: Number(c.cloneRound || 1),
+              parentId: Number(c.parentId || 0),
+              side: String(c.side || ''),
+              owner: String(c.owner || r.owner || ''),
+              direct30Usdt: d30,
+              level30Usdt: l30,
+              incomeUsdt: Number((d30 + l30).toFixed(2)),
+              vault35Usdt: Number(c.vault35GrossTotalUsdt || 0),
+            });
+          });
         }
       }
 
-      // 3) All matching nodes in current Matrix Rank (node id === targetId or originMainId === targetId)
-      const matchedNodesInCurrentRank = nodes.filter(
-        (n) =>
-          Number(n.id) === targetId ||
-          Number(n.originMainId) === targetId ||
-          Number(n.autoSourceMainId) === targetId
-      );
+      // Matching nodes in current Matrix Rank (only if parsedRank matches matrixRank or no rank specified)
+      const matchedNodesInCurrentRank =
+        parsedRank !== null && parsedRank !== matrixRank
+          ? []
+          : nodes.filter((n) => {
+              const mId = getMainId(n);
+              const nSeq = cloneSeqByNodeId.get(Number(n.id)) || Number(n.cloneSequence || 0);
+              if (cloneTargeted) {
+                if (!isCloneNode(n)) return false;
+                if (targetId !== null && mId !== targetId && Number(n.id) !== targetId) {
+                  return false;
+                }
+                if (
+                  parsedCloneSeq !== null &&
+                  nSeq !== parsedCloneSeq &&
+                  Number(n.cloneSequence || 0) !== parsedCloneSeq
+                ) {
+                  return false;
+                }
+                return true;
+              }
+              return (
+                targetId !== null &&
+                (Number(n.id) === targetId ||
+                  mId === targetId ||
+                  Number(n.autoSourceMainId) === targetId)
+              );
+            });
+
       for (const n of matchedNodesInCurrentRank) {
         if (isCloneNode(n)) {
-          const key = `${matrixRank}-${n.id}`;
-          if (!cloneMap.has(key)) {
-            cloneMap.set(key, {
-              id: Number(n.id),
-              rank: matrixRank,
-              originMainId: getMainId(n),
-              cloneSequence: cloneSeqByNodeId.get(Number(n.id)) || Number(n.cloneSequence || 1),
-              cloneRound: Number(n.cloneRound || 1),
-              parentId: Number(n.parentId || 0),
-              side: n.parentId > 0 ? (n.isLeft ? 'LEFT' : 'RIGHT') : 'ROOT',
-              owner: String(n.owner || ''),
-              direct30Usdt: 0,
-              level30Usdt: 0,
-              incomeUsdt: 0,
-              vault35Usdt: 0,
-            });
-          }
-        } else if (isExtraNode(n)) {
+          const mId = getMainId(n);
+          const nSeq = cloneSeqByNodeId.get(Number(n.id)) || Number(n.cloneSequence || 1);
+          pushCloneIfMatch({
+            id: Number(n.id),
+            rank: matrixRank,
+            originMainId: mId,
+            cloneSequence: Number(n.cloneSequence || nSeq),
+            perRankSeq: nSeq,
+            cloneRound: Number(n.cloneRound || 1),
+            parentId: Number(n.parentId || 0),
+            side: n.parentId > 0 ? (n.isLeft ? 'LEFT' : 'RIGHT') : 'ROOT',
+            owner: String(n.owner || ''),
+            direct30Usdt: 0,
+            level30Usdt: 0,
+            incomeUsdt: 0,
+            vault35Usdt: 0,
+          });
+        } else if (!cloneTargeted && isExtraNode(n)) {
           const key = `${matrixRank}-${n.id}`;
           if (!extraMap.has(key)) {
             extraMap.set(key, {
@@ -1211,7 +1325,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               vault35Usdt: 0,
             });
           }
-        } else if (isAutoNode(n) && !autoMap.has(Number(n.id))) {
+        } else if (!cloneTargeted && isAutoNode(n) && !autoMap.has(Number(n.id))) {
           const aRep = reportByMainId.get(Number(n.id));
           autoMap.set(Number(n.id), {
             id: Number(n.id),
@@ -1245,16 +1359,20 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         setSearchResult({
           query: raw,
           layerJumpHint: layerHint,
-          message: `ไม่พบข้อมูลของ ID #${targetId} ทั้งข้อมูลหลัก โคลน Extra ID และ Auto ID`,
+          message: `ไม่พบข้อมูลที่ตรงกับ "${raw}"`,
           isError: true,
         });
         return;
       }
 
+      const summaryHeader = cloneTargeted
+        ? `พบข้อมูลโคลนนิ่ง "${raw}": โคลน ${cloneHits.length} · ในผัง R${matrixRank} (${matches.length})`
+        : `พบข้อมูล "${raw}": หลัก ${mainHits.length} · โคลน ${cloneHits.length} · Extra ${extraHits.length} · Auto ${autoHits.length} · ในผัง R${matrixRank} (${matches.length})`;
+
       setSearchResult({
         query: raw,
         layerJumpHint: layerHint,
-        message: `พบข้อมูลทั้งหมดของ ID #${targetId}: หลัก ${mainHits.length} · โคลน ${cloneHits.length} · Extra ${extraHits.length} · Auto ${autoHits.length} · ในผัง R${matrixRank} (${matches.length})`,
+        message: summaryHeader,
         mainHits,
         cloneHits,
         extraHits,
@@ -3408,7 +3526,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                     🔎 ค้นหาข้อมูลสมาชิก & รหัสทั้งหมด
                   </h3>
                   <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
-                    พิมพ์เลข ID (เช่น 3) เพื่อดูครบทั้ง Main ID · โคลนนิ่ง · Extra ID · Auto ID และตำแหน่งในผัง
+                    พิมพ์เลข ID (เช่น 3), <span className="font-mono text-[#0754b9]">#3 ครั้งที่2 rank1</span> เพื่อดูครบทั้ง Main ID · โคลนนิ่ง · Extra ID · Auto ID และตำแหน่งในผัง
                   </p>
                 </div>
                 <button
@@ -3432,7 +3550,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') runMatrixSearch();
                     }}
-                    placeholder="กรอกเลข ID (เช่น 3), Wallet (0x...) หรือ ชั้น 5"
+                    placeholder="เช่น 3, #3 ครั้งที่2 rank1, #3 rank1, Wallet (0x...) หรือ ชั้น 5"
                     className="w-full pl-9 pr-3 py-2.5 rounded-[13px] border border-[#9fcfff] bg-[#f7fcff] text-[#09275f] text-xs sm:text-[13px] font-semibold outline-none focus:border-[#087cf4] focus:ring-2 focus:ring-[#087cf4]/20"
                   />
                 </div>
