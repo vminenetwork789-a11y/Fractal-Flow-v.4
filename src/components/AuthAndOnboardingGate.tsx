@@ -503,7 +503,7 @@ export const AuthAndOnboardingGate: React.FC<AuthAndOnboardingGateProps> = ({
           />
 
           {/* Login Card */}
-          <div className="bg-white dark:bg-slate-900 border-2 border-blue-200 dark:border-slate-700 rounded-3xl p-6 sm:p-8 shadow-[0_8px_30px_rgb(15,23,42,0.08)] dark:shadow-2xl text-center space-y-5 ring-4 ring-blue-500/10 dark:ring-emerald-500/10">
+          <div className="bg-white dark:bg-slate-900 border-2 border-blue-200 dark:border-slate-700 rounded-3xl p-4 sm:p-8 shadow-[0_8px_30px_rgb(15,23,42,0.08)] dark:shadow-2xl text-center space-y-5 ring-4 ring-blue-500/10 dark:ring-emerald-500/10">
             <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-[#0F172A] dark:text-white">
               Fractal Flow
             </h1>
@@ -838,16 +838,16 @@ export const AuthAndOnboardingGate: React.FC<AuthAndOnboardingGateProps> = ({
 
                 {/* 2. การกระจายรายได้ขารหัสซ้าย 100% */}
                 <div className="bg-emerald-50/60 dark:bg-emerald-950/20 border border-emerald-200/80 dark:border-emerald-500/20 rounded-2xl p-3.5 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm font-extrabold text-emerald-800 dark:text-emerald-300">
-                      <Coins className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 text-sm font-extrabold text-emerald-800 dark:text-emerald-300 min-w-0">
+                      <Coins className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
                       <span>
                         {language === 'th'
                           ? '2. ขารหัสซ้าย (Left Child) — กระจายรายได้ 100%'
                           : '2. Left Child Node — 100% Revenue Distribution'}
                       </span>
                     </div>
-                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300">
+                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/60 text-emerald-700 dark:text-emerald-300 shrink-0">
                       100% Payout
                     </span>
                   </div>
@@ -909,16 +909,16 @@ export const AuthAndOnboardingGate: React.FC<AuthAndOnboardingGateProps> = ({
 
                 {/* 3. การโคลนนิ่งขารหัสขวา 100% Rebirth */}
                 <div className="bg-purple-50/60 dark:bg-purple-950/20 border border-purple-200/80 dark:border-purple-500/20 rounded-2xl p-3.5 space-y-2.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm font-extrabold text-purple-800 dark:text-purple-300">
-                      <Repeat className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 text-sm font-extrabold text-purple-800 dark:text-purple-300 min-w-0">
+                      <Repeat className="w-4 h-4 text-purple-600 dark:text-purple-400 shrink-0" />
                       <span>
                         {language === 'th'
                           ? '3. ขารหัสขวา (Right Child) — โคลนนิ่ง 100% (Rebirth)'
                           : '3. Right Child Node — 100% Automated Rebirth'}
                       </span>
                     </div>
-                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300">
+                    <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-700 dark:text-purple-300 shrink-0">
                       100% Clone
                     </span>
                   </div>
@@ -1033,7 +1033,7 @@ export const AuthAndOnboardingGate: React.FC<AuthAndOnboardingGateProps> = ({
           language={language}
         />
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-3xl p-6 sm:p-7 shadow-[0_8px_30px_rgb(15,23,42,0.06)] dark:shadow-2xl space-y-5">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 rounded-3xl p-4 sm:p-7 shadow-[0_8px_30px_rgb(15,23,42,0.06)] dark:shadow-2xl space-y-5">
           {/* Header inside Registration Form */}
           <div className="flex items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
             <div className="flex items-center gap-2.5">

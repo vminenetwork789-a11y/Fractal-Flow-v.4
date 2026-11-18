@@ -979,7 +979,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
       {/* Signer Execution Mode & Category Filter Tabs */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
         {/* Category Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 lg:pb-0">
+        <div className="flex items-center gap-1.5 w-full max-w-full min-w-0 matrix-horizontal-scroll-only pb-1 lg:pb-0">
           {[
             { id: 'all', label: 'แสดงทุกฟังก์ชันทั้งหมด (All)' },
             { id: 'owner', label: '1. คำสั่ง onlyOwner บนสัญญา (7)' },
@@ -1765,7 +1765,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
           </div>
 
           {overview?.allSell?.history && overview.allSell.history.length > 0 ? (
-            <div className="overflow-x-auto">
+            <div className="w-full max-w-full min-w-0 matrix-horizontal-scroll-only">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400">
@@ -2198,7 +2198,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
             ))}
           </div>
 
-          <div className="overflow-x-auto">
+          <div className="w-full max-w-full min-w-0 matrix-horizontal-scroll-only">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
                 <tr className="border-b border-slate-800 text-slate-400">
@@ -2643,7 +2643,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
             </div>
 
             {/* Transaction Hashes Table */}
-            <div className="overflow-x-auto">
+            <div className="w-full max-w-full min-w-0 matrix-horizontal-scroll-only">
               <table className="w-full text-left border-collapse text-xs font-mono">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400">
@@ -3123,7 +3123,7 @@ export const AdminControlCenter: React.FC<AdminControlCenterProps> = ({
             )}
 
             {/* Live Table Grid */}
-            <div className="overflow-x-auto border border-slate-800 rounded-xl bg-slate-950/60">
+            <div className="w-full max-w-full min-w-0 matrix-horizontal-scroll-only border border-slate-800 rounded-xl bg-slate-950/60">
               <table className="w-full text-left border-collapse text-xs font-mono">
                 <thead>
                   <tr className="border-b border-slate-800 bg-slate-950 text-slate-400">

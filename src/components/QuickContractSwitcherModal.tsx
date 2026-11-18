@@ -513,7 +513,7 @@ export const QuickContractSwitcherModal: React.FC<QuickContractSwitcherModalProp
                 type="button"
                 disabled={isSaving || !isInputValidAddress}
                 onClick={() => handleSaveNewContract()}
-                className="flex-1 min-w-[200px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-[#2563EB] hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-sm transition cursor-pointer"
+                className="w-full sm:w-auto sm:flex-1 sm:min-w-[200px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold bg-[#2563EB] hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow-sm transition cursor-pointer"
               >
                 {isSaving ? (
                   <>

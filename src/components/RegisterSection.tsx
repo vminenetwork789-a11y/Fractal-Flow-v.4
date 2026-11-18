@@ -786,7 +786,7 @@ export const RegisterSection: React.FC<RegisterSectionProps> = ({
                 </button>
               </div>
             </label>
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <div className="relative flex-1 min-w-0">
                 <input
                   type="text"
@@ -819,7 +819,7 @@ export const RegisterSection: React.FC<RegisterSectionProps> = ({
                   )
                 }
                 disabled={isChecking}
-                className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-xs font-semibold px-3 py-2.5 rounded-xl border border-emerald-500/40 transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+                className="bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-xs font-semibold px-3 py-2.5 rounded-xl border border-emerald-500/40 transition flex items-center justify-center gap-1.5 shrink-0 cursor-pointer"
                 title="ดึงข้อมูล ID ของกระเป๋าและค้นหาตำแหน่งว่างออโต้"
               >
                 <Search

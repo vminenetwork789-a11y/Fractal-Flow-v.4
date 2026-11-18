@@ -1138,7 +1138,7 @@ export const ExtraIdPathCalculator: React.FC<ExtraIdPathCalculatorProps> = ({
   }, [allGeneratedItems, typeFilter, ownerFilter, calculation.sponsorMainId, calculation.targetMainId]);
 
   return (
-    <div className="rounded-xl bg-slate-950/95 border border-slate-800 p-4 sm:p-5 space-y-4 text-slate-100 shadow-xl">
+    <div className="min-w-0 max-w-full overflow-x-clip rounded-xl bg-slate-950/95 border border-slate-800 p-3 sm:p-5 space-y-4 text-slate-100 shadow-xl">
       {/* Header & Description */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-3.5">
         <div className="space-y-1">
@@ -1492,7 +1492,139 @@ export const ExtraIdPathCalculator: React.FC<ExtraIdPathCalculatorProps> = ({
               </div>
             </div>
 
-            <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
+            {/* Mobile Stacked Cards (< md) */}
+            <div className="md:hidden space-y-2.5">
+              {calculation.steps.map((step) => {
+                const autoEvents = step.chainReactions.filter((cr) => cr.type === 'AUTO_ID');
+                const cloneEvents = step.chainReactions.filter((cr) => cr.type === 'CLONE');
+                const vaultGainEvents = step.chainReactions.filter(
+                  (cr) => cr.type === 'VAULT_GAIN' || cr.type === 'EXTRA_LEFT_BONUS'
+                );
+
+                return (
+                  <div
+                    key={`sim-step-mobile-${step.upgradeRank}`}
+                    className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 space-y-2.5 text-xs font-mono"
+                  >
+                    <div className="flex items-start justify-between gap-2 border-b border-slate-800 pb-2">
+                      <div>
+                        <div className="font-bold text-white flex items-center gap-1.5 flex-wrap">
+                          <span>Rank {step.upgradeRank}</span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-amber-300">{step.rankPriceUsdt.toLocaleString()} U</span>
+                        </div>
+                        <div className="text-[10.5px] text-slate-400 mt-0.5">
+                          Main #{step.upgradingMainId} →{' '}
+                          <strong className="text-cyan-300">R{step.upgradeRank}-#{step.newNodeIdInRank}</strong>{' '}
+                          (กรอบ R{step.window5RangeTarget[0]}–R{step.window5RangeTarget[1]})
+                        </div>
+                      </div>
+                      <div className="text-right text-[10.5px] shrink-0">
+                        {step.targetPaidFromVaultUsdt > 0 && (
+                          <div className="text-emerald-400 font-bold">
+                            หัก Vault: -{step.targetPaidFromVaultUsdt.toFixed(2)} U
+                          </div>
+                        )}
+                        <div className="text-slate-300">
+                          Wallet:{' '}
+                          <strong className={step.targetPaidFromWalletUsdt > 0 ? 'text-rose-300' : 'text-emerald-400'}>
+                            {step.targetPaidFromWalletUsdt.toLocaleString(undefined, {
+                              minimumFractionDigits: step.targetPaidFromWalletUsdt % 1 !== 0 ? 2 : 0,
+                              maximumFractionDigits: 2,
+                            })}{' '}
+                            U
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-1.5 text-[11px]">
+                      <div className="flex flex-wrap items-center justify-between gap-1">
+                        <span className="text-slate-400">
+                          ต่อใต้{' '}
+                          <button
+                            type="button"
+                            onClick={() => onSelectRankAndNode?.(step.upgradeRank, step.placedUnderParentId)}
+                            className="font-bold text-indigo-300 underline cursor-pointer"
+                          >
+                            R{step.upgradeRank}-#{step.placedUnderParentId}
+                          </button>{' '}
+                          (Main #{step.placedUnderParentMainId})
+                        </span>
+                        <span className={`font-bold ${step.placedSide === 'LEFT' ? 'text-emerald-400' : 'text-purple-400'}`}>
+                          {step.placedSide === 'LEFT' ? '↙ ซ้าย (35% Vault)' : '↘ ขวา (โคลน 100%)'}
+                        </span>
+                      </div>
+
+                      {step.vaultAddedToParentUsdt > 0 ? (
+                        <div className="text-emerald-400 font-bold">
+                          35% Vault: +{step.vaultAddedToParentUsdt.toFixed(2)} USDT → Main #{step.recipientMainId}
+                        </div>
+                      ) : (
+                        <div className="text-slate-500">35% Vault: 0.00 U (ฝั่งขวาเด้งโคลน)</div>
+                      )}
+                    </div>
+
+                    {(step.extraIdsGenerated.length > 0 || autoEvents.length > 0 || cloneEvents.length > 0 || vaultGainEvents.length > 0) && (
+                      <div className="space-y-1.5 pt-1 border-t border-slate-800/80">
+                        {step.extraIdsGenerated.map((ex, idx) => (
+                          <div key={`m-ex-${step.upgradeRank}-${idx}`} className="rounded-lg bg-slate-950 border border-fuchsia-500/40 p-2 text-[10.5px]">
+                            <div className="flex items-center justify-between gap-2 text-fuchsia-300 font-bold">
+                              <span>⚡ Extra R{ex.spawnedInRank}-#{ex.newNodeId} (Main #{ex.ownerMainId})</span>
+                              <span className="text-rose-300">-{ex.deductedUsdt.toFixed(2)} U</span>
+                            </div>
+                            <div className="text-slate-400 mt-0.5">
+                              วางใต้ R{ex.spawnedInRank}-#{ex.parentId} ({ex.side === 'LEFT' ? '↙ซ้าย' : '↘ขวา'}) · คงเหลือ {ex.poolAfterUsdt.toFixed(2)} U
+                            </div>
+                          </div>
+                        ))}
+                        {autoEvents.map((ae, idx) => (
+                          <div key={`m-au-${step.upgradeRank}-${idx}`} className="rounded-lg bg-slate-950 border border-amber-500/40 p-2 text-[10.5px]">
+                            <div className="flex items-center justify-between gap-2 text-amber-300 font-bold">
+                              <span>🤖 Auto R1-#{ae.nodeId} (Main #{ae.ownerMainId})</span>
+                              <span className="text-rose-300">-{(RANK_PRICES_USDT[0] || 5).toFixed(2)} U</span>
+                            </div>
+                            <div className="text-slate-400 mt-0.5">
+                              วางใต้ R1-#{ae.parentId} ({ae.side === 'LEFT' ? '↙ซ้าย' : '↘ขวา'})
+                            </div>
+                          </div>
+                        ))}
+                        {cloneEvents.map((ce, idx) => (
+                          <div key={`m-cl-${step.upgradeRank}-${idx}`} className="rounded-lg bg-slate-950 border border-emerald-500/40 p-2 text-[10.5px]">
+                            <div className="font-bold text-emerald-400">
+                              ✨ โคลน R{ce.rank}-#{ce.nodeId} (Main #{ce.ownerMainId})
+                            </div>
+                            <div className="text-slate-400 mt-0.5">
+                              วางใต้ R{ce.rank}-#{ce.parentId} ({ce.side === 'LEFT' ? '↙ซ้าย' : '↘ขวา'})
+                            </div>
+                          </div>
+                        ))}
+                        {vaultGainEvents.map((vg, vIdx) => (
+                          <div key={`m-vg-${step.upgradeRank}-${vIdx}`} className="text-[10.5px] text-cyan-300">
+                            💰 {vg.descriptionTh}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-1.5 pt-1 border-t border-slate-800/80 text-[10px]">
+                      <div className="rounded bg-slate-950/90 border border-slate-800 p-1.5">
+                        <div className="text-slate-400 font-bold">Main #{calculation.sponsorMainId} (Sponsor)</div>
+                        <div className="text-cyan-300 font-bold">Up: {step.sponsorUpgradePoolFinalUsdt.toFixed(2)} U</div>
+                        <div className="text-amber-300">Auto: {step.sponsorAutoPoolFinalUsdt.toFixed(2)} · Ex: {step.sponsorExtraPoolFinalUsdt.toFixed(2)}</div>
+                      </div>
+                      <div className="rounded bg-slate-950/90 border border-slate-800 p-1.5">
+                        <div className="text-slate-400 font-bold">Main #{calculation.targetMainId} (Target)</div>
+                        <div className="text-cyan-300 font-bold">Up: {step.targetUpgradePoolFinalUsdt.toFixed(2)} U</div>
+                        <div className="text-amber-300">Auto: {step.targetAutoPoolFinalUsdt.toFixed(2)} · Ex: {step.targetExtraPoolFinalUsdt.toFixed(2)}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="hidden md:block w-full max-w-full min-w-0 matrix-horizontal-scroll-only rounded-xl border border-slate-800 bg-slate-900/40">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-slate-800 bg-slate-900/90 text-slate-300 font-semibold">
@@ -1788,7 +1920,7 @@ export const ExtraIdPathCalculator: React.FC<ExtraIdPathCalculatorProps> = ({
               {/* Interactive Filter Controls: Category & Owner */}
               <div className="flex flex-wrap items-center gap-2">
                 {/* 1. Category Filter */}
-                <div className="flex items-center gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800 max-w-full">
                   {[
                     { key: 'ALL', label: `ทั้งหมด (${allGeneratedItems.length})` },
                     { key: 'EXTRA_ID', label: `⚡ Extra (${extraCount})` },
@@ -1811,7 +1943,7 @@ export const ExtraIdPathCalculator: React.FC<ExtraIdPathCalculatorProps> = ({
                 </div>
 
                 {/* 2. Owner Filter */}
-                <div className="flex items-center gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800">
+                <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-900 rounded-lg border border-slate-800 max-w-full">
                   {[
                     { key: 'ALL', label: `ทุกคน (${allGeneratedItems.length})` },
                     {
@@ -1845,7 +1977,74 @@ export const ExtraIdPathCalculator: React.FC<ExtraIdPathCalculatorProps> = ({
                 ไม่มีรายการรหัสใหม่ (Extra ID / Auto ID / โคลนนิ่ง) ที่เกิดสำหรับตัวกรองนี้ในช่วง Rank {calculation.startSimulatedRank} → {calculation.prospectiveRank}
               </div>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-slate-800 bg-slate-900/40">
+              <>
+              {/* Mobile Cards (< md) */}
+              <div className="md:hidden space-y-2">
+                {filteredItems.map((item, i) => (
+                  <div
+                    key={`summary-item-m-${item.id}`}
+                    className="rounded-xl border border-slate-800 bg-slate-900/70 p-3 space-y-1.5 text-xs font-mono"
+                  >
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-400">#{i + 1}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            item.category === 'EXTRA_ID'
+                              ? 'bg-fuchsia-950/80 border-fuchsia-500/50 text-fuchsia-300'
+                              : item.category === 'AUTO_ID'
+                              ? 'bg-amber-950/80 border-amber-500/50 text-amber-300'
+                              : 'bg-cyan-950/80 border-cyan-500/50 text-cyan-300'
+                          }`}
+                        >
+                          {item.category === 'EXTRA_ID'
+                            ? '⚡ Extra ID'
+                            : item.category === 'AUTO_ID'
+                            ? '🤖 Auto ID'
+                            : '✨ โคลนนิ่ง'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onSelectRankAndNode?.(item.spawnedInRank, item.newNodeId)}
+                        className="font-bold text-cyan-300 hover:underline cursor-pointer"
+                      >
+                        {item.nodeCode}
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                      <span className="text-amber-300 font-bold">
+                        เมื่อ Main #{calculation.targetMainId} ขึ้น R{item.stepRank}
+                      </span>
+                      <span className="text-slate-200 font-bold">
+                        Rank {item.spawnedInRank} ({item.rankPriceUsdt.toLocaleString()} U)
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-1 text-[11px]">
+                      <span className="text-emerald-300 font-bold">
+                        เจ้าของ: Main ID #{item.ownerMainId}
+                      </span>
+                      <span className="text-slate-300">
+                        ใต้{' '}
+                        <button
+                          type="button"
+                          onClick={() => onSelectRankAndNode?.(item.spawnedInRank, item.parentId)}
+                          className="text-indigo-300 underline font-bold cursor-pointer"
+                        >
+                          R{item.spawnedInRank}-#{item.parentId}
+                        </button>{' '}
+                        ({item.side === 'LEFT' ? '↙ ซ้าย' : '↘ ขวา'})
+                      </span>
+                    </div>
+                    <div className="text-[10.5px] text-slate-300 pt-1 border-t border-slate-800/70">
+                      <div className="font-bold">{item.costOrDeduction}</div>
+                      <div className="text-slate-400 font-sans leading-relaxed">{item.descriptionTh}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="hidden md:block w-full max-w-full min-w-0 matrix-horizontal-scroll-only rounded-xl border border-slate-800 bg-slate-900/40">
                 <table className="w-full text-left border-collapse text-xs font-mono">
                   <thead>
                     <tr className="border-b border-slate-800 bg-slate-900/90 text-slate-300 font-sans font-semibold">
@@ -1982,6 +2181,7 @@ export const ExtraIdPathCalculator: React.FC<ExtraIdPathCalculatorProps> = ({
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
         </>

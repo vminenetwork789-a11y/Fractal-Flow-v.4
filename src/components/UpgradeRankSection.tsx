@@ -447,7 +447,7 @@ export const UpgradeRankSection: React.FC<UpgradeRankSectionProps> = ({
               <button
                 type="button"
                 disabled
-                className="w-full sm:w-auto min-w-[190px] bg-slate-900 border border-slate-700 text-slate-500 font-semibold py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-1.5 opacity-60 cursor-not-allowed"
+                className="w-full sm:w-auto sm:min-w-[190px] bg-slate-900 border border-slate-700 text-slate-500 font-semibold py-2.5 px-5 rounded-xl text-xs flex items-center justify-center gap-1.5 opacity-60 cursor-not-allowed"
               >
                 <span>
                   {language === 'th'
@@ -490,7 +490,7 @@ export const UpgradeRankSection: React.FC<UpgradeRankSectionProps> = ({
               <button
                 onClick={handleUpgradeClick}
                 disabled={isLoading}
-                className="w-full sm:w-auto min-w-[190px] bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-2.5 px-5 rounded-xl transition duration-200 text-xs shadow-lg shadow-indigo-950/50 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="w-full sm:w-auto sm:min-w-[190px] bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold py-2.5 px-5 rounded-xl transition duration-200 text-xs shadow-lg shadow-indigo-950/50 flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 {isLoading ? (
                   <>

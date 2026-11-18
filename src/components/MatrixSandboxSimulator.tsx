@@ -1046,9 +1046,9 @@ export const MatrixSandboxSimulator: React.FC<MatrixSandboxSimulatorProps> = ({
             <button
               type="button"
               onClick={handleSimForcePools}
-              className="w-full py-1.5 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold inline-flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer transition"
+              className="w-full py-2 px-3 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold inline-flex items-center justify-center gap-1.5 text-center leading-snug cursor-pointer transition"
             >
-              <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+              <Zap className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
               <span>จำลองเช็กแตก Auto ID / Extra ID ของ #{safeSelectedMainId}</span>
             </button>
           </div>
@@ -1061,7 +1061,7 @@ export const MatrixSandboxSimulator: React.FC<MatrixSandboxSimulatorProps> = ({
               </span>
             </div>
 
-            <div className="flex items-center gap-1 overflow-x-auto pb-1 text-[11px]">
+            <div className="flex items-center gap-1 w-full max-w-full min-w-0 matrix-horizontal-scroll-only pb-1 text-[11px]">
               {[
                 { key: 'ALL' as const, label: `ทั้งหมด (${eventCounts.all})` },
                 { key: 'CLONE' as const, label: `Clone (${eventCounts.clone})` },

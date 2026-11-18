@@ -730,6 +730,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
   const rankButtonRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
   const treeViewportSectionRef = useRef<HTMLDivElement | null>(null);
   const pendingCenterTreeRef = useRef<boolean>(true);
+  const hasUserAdjustedZoomRef = useRef<boolean>(false);
   const hasInitialTreeLoadedRef = useRef<boolean>(false);
   const [switchingRankTarget, setSwitchingRankTarget] = useState<number | null>(null);
   const [postTxBanner, setPostTxBanner] = useState<PostTxViewTarget | null>(() => {
@@ -761,7 +762,9 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
   const [focusRootId, setFocusRootId] = useState<number>(1);
   const [navigationHistory, setNavigationHistory] = useState<number[]>([1]);
   const [searchInput, setSearchInput] = useState<string>('1');
-  const [zoomScale, setZoomScale] = useState<number>(0.55);
+  const [zoomScale, setZoomScale] = useState<number>(() =>
+    typeof window !== 'undefined' && window.innerWidth < 640 ? 0.42 : 0.55
+  );
   const [viewMode, setViewMode] = useState<'onchain' | 'demoCloneTree'>('onchain');
   const [justUpdatedBadge, setJustUpdatedBadge] = useState<boolean>(false);
   // ค่าเริ่มต้นเพดานความลึกของผัง 15 ชั้น และค่าเริ่มต้นการแสดงชั้นแบบขยาย 4 ชั้น
@@ -6207,15 +6210,25 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
     const contentEl = treeContentRef.current;
     if (!viewportEl || !contentEl) return;
 
-    const availableWidth = viewportEl.clientWidth - 24;
+    const availableWidth = Math.max(240, viewportEl.clientWidth - 20);
     const naturalWidth = contentEl.scrollWidth || 1;
     if (naturalWidth <= availableWidth) {
       setZoomScale(1);
     } else {
-      const ratio = Math.max(0.25, Math.min(1.25, Number((availableWidth / naturalWidth).toFixed(2))));
+      const ratio = Math.max(0.22, Math.min(1.25, Number((availableWidth / naturalWidth).toFixed(2))));
       setZoomScale(ratio);
     }
   }, []);
+
+  useEffect(() => {
+    if (isLoadingTree || switchingRankTarget !== null || activeNodesMap.size === 0) return;
+    if (hasUserAdjustedZoomRef.current) return;
+    if (typeof window === 'undefined' || window.innerWidth >= 640) return;
+    const timer = setTimeout(() => {
+      handleAutoFitScreen();
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [isLoadingTree, switchingRankTarget, activeNodesMap.size, selectedRank, handleAutoFitScreen]);
 
   // Precompute descendant counts per node for Collapse/Expand labels
   const descendantCountsMap = useMemo(() => {
@@ -8299,7 +8312,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
             </button>
 
             {isLegendOpen && (
-              <div className="absolute right-0 top-full mt-1.5 z-40 w-80 p-3 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-700 rounded-xl shadow-xl flex flex-col gap-2 text-[11px] animate-in fade-in zoom-in-95">
+              <div className="absolute right-0 top-full mt-1.5 z-40 w-[min(20rem,calc(100vw-2rem))] max-w-[calc(100vw-1.5rem)] p-3 bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-700 rounded-xl shadow-xl flex flex-col gap-2 text-[11px] animate-in fade-in zoom-in-95">
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
                   <div>
                     <span className="font-bold text-[#0F172A] dark:text-white block">
@@ -8601,10 +8614,13 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
             ))}
           </div>
 
-          <div className="flex items-center gap-1 bg-white dark:bg-[#05184a] border border-[#a9d7ff] dark:border-[#3898ff]/45 rounded-xl p-1 shadow-2xs">
+          <div className="flex items-center gap-1 bg-white dark:bg-[#05184a] border border-[#a9d7ff] dark:border-[#3898ff]/45 rounded-xl p-1 shadow-2xs shrink-0">
             <button
               type="button"
-              onClick={() => setZoomScale((z) => Math.max(0.25, Number((z - 0.08).toFixed(2))))}
+              onClick={() => {
+                hasUserAdjustedZoomRef.current = true;
+                setZoomScale((z) => Math.max(0.22, Number((z - 0.08).toFixed(2))));
+              }}
               className="p-1 text-[#0754b9] hover:text-[#09265f] dark:text-[#9bd8ff] dark:hover:text-white transition cursor-pointer"
               title="ย่อผัง (Zoom Out)"
             >
@@ -8612,7 +8628,10 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setZoomScale((z) => (z === 0.55 ? 1 : 0.55))}
+              onClick={() => {
+                hasUserAdjustedZoomRef.current = true;
+                setZoomScale((z) => (z === 0.55 ? 1 : 0.55));
+              }}
               className="text-[10px] font-mono text-[#087cf4] dark:text-[#7af1ff] font-extrabold hover:underline px-1.5 cursor-pointer"
               title="สลับขนาด 55% / 100%"
             >
@@ -8620,7 +8639,10 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => setZoomScale((z) => Math.min(1.5, Number((z + 0.08).toFixed(2))))}
+              onClick={() => {
+                hasUserAdjustedZoomRef.current = true;
+                setZoomScale((z) => Math.min(1.5, Number((z + 0.08).toFixed(2))));
+              }}
               className="p-1 text-[#0754b9] hover:text-[#09265f] dark:text-[#9bd8ff] dark:hover:text-white transition cursor-pointer"
               title="ขยายผัง (Zoom In)"
             >
@@ -8628,7 +8650,10 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
             </button>
             <button
               type="button"
-              onClick={handleAutoFitScreen}
+              onClick={() => {
+                hasUserAdjustedZoomRef.current = false;
+                handleAutoFitScreen();
+              }}
               className="px-2 py-0.5 rounded-lg bg-[#e6f5ff] hover:bg-[#d5eeff] text-[#0754b9] border border-[#9fd4ff] dark:bg-[#082874] dark:hover:bg-[#0b3596] dark:text-[#9bd8ff] dark:border-[#3898ff]/45 text-[10px] font-bold flex items-center gap-1 transition cursor-pointer"
               title="ปรับขนาดให้พอดีหน้าจออัตโนมัติ"
             >
@@ -13250,7 +13275,7 @@ export const MatrixTreeVisualizer: React.FC<MatrixTreeVisualizerProps> = ({
                           value={botWalletEditInput}
                           onChange={(e) => setBotWalletEditInput(e.target.value)}
                           placeholder="0x..."
-                          className="flex-1 min-w-[220px] px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-amber-200 font-mono text-[11px] focus:outline-none focus:border-amber-400"
+                          className="w-full sm:w-auto sm:flex-1 sm:min-w-[220px] min-w-0 px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-amber-200 font-mono text-[11px] focus:outline-none focus:border-amber-400"
                         />
                         <button
                           type="button"

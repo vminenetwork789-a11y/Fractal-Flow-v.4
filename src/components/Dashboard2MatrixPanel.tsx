@@ -97,52 +97,52 @@ const fmtNum = (n: number): string => n.toLocaleString('en-US');
 const MATRIX_ORB_LEGEND_ITEMS = [
   {
     key: 'owner',
-    label: 'เจ้าของผัง / Main / โคลน-Auto-Extra ผู้อื่น',
-    desc: 'รหัสหลักเจ้าของผัง สมาชิกในสายเลือด รวมทั้ง Main ID, Auto ID, Clone ID และ Extra ID ที่ไม่ใช่ของเจ้าของผัง',
+    label: 'เจ้าของผัง / สายเลือดใต้เจ้าของผัง',
+    desc: 'รหัสหลักเจ้าของผัง และสมาชิกในสายเลือดใต้เจ้าของผัง',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border border-[#9cbcd6]/80 shadow-[0_0_5px_rgba(115,175,230,0.28)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_32%,#c9dff0_65%,#7a9bb8_100%)] border border-[#a5c3dc] shadow-[0_0_5px_rgba(115,175,230,0.28)]',
   },
   {
     key: 'clone_owner',
     label: 'Clone ID (เจ้าของผัง)',
-    desc: 'รหัสโคลนนิ่งของเจ้าของผังที่เกิดจากเม็ดขวา 100% (โคลนนิ่งอื่นใช้สีเหมือนเจ้าของผัง)',
+    desc: 'รหัสโคลนนิ่งของเจ้าของผังที่เกิดจากเม็ดขวา 100%',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_28%,#c1e2d0_58%,#55866d_100%)] border border-[#8fc4a9]/80 shadow-[0_0_5px_rgba(80,210,145,0.28)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#e6f9ef_32%,#b5e6cb_65%,#54a47b_100%)] border border-[#7ec9a2] shadow-[0_0_5px_rgba(80,210,145,0.28)]',
   },
   {
     key: 'auto_owner',
     label: 'Auto ID (เจ้าของผัง)',
-    desc: 'รหัสอัตโนมัติของเจ้าของผังที่แตกจาก Auto ID Pool (สีเหลือง/ทอง · Auto ID อื่นใช้สีเหมือนเจ้าของผัง)',
+    desc: 'รหัสอัตโนมัติของเจ้าของผังที่แตกจาก Auto ID Pool',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#fffbe0_0%,#fde047_28%,#eab308_58%,#854d0e_100%)] border border-[#fde047]/85 shadow-[0_0_6px_rgba(250,204,21,0.38)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#fdf8e2_32%,#e8dcb1_65%,#a59256_100%)] border border-[#d6c58b] shadow-[0_0_5px_rgba(220,195,115,0.28)]',
   },
   {
     key: 'extra_owner',
     label: 'Extra ID (เจ้าของผัง)',
-    desc: 'รหัสพิเศษของเจ้าของผังที่แตกจาก Extra ID Pool (สีชมพูทับทิม · Extra ID อื่นใช้สีเหมือนเจ้าของผัง)',
+    desc: 'รหัสพิเศษของเจ้าของผังที่แตกจาก Extra ID Pool',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_28%,#e2c1c7_58%,#8f5661_100%)] border border-[#d4a5ae]/80 shadow-[0_0_5px_rgba(220,125,145,0.28)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#fceef1_32%,#ebcad1_65%,#b1717f_100%)] border border-[#dda7b2] shadow-[0_0_5px_rgba(220,125,145,0.28)]',
+  },
+  {
+    key: 'root_one',
+    label: 'เฉพาะรหัส #1 / โคลน #1',
+    desc: 'รหัสหลัก #1 และรหัสโคลนนิ่งทั้งหมดของ #1',
+    orbClass:
+      'bg-[radial-gradient(circle_at_30%_24%,#f5e8ff_0%,#d49eff_30%,#a855f7_65%,#6b21a8_100%)] border border-[#c084fc] shadow-[0_0_5px_rgba(168,85,247,0.34)]',
   },
   {
     key: 'upline_clone',
-    label: 'Clone ID อัพไลน์ (กรอบเขียว)',
-    desc: 'โคลนนิ่งของอัพไลน์เจ้าของผัง (ลูกแก้วสีเหมือนเจ้าของผัง กรอบสีเขียว)',
+    label: 'โคลนนิ่งอัพไลน์ในสายเลือด',
+    desc: 'โคลนนิ่งของอัพไลน์ที่อยู่ในสายเลือดเดียวกัน',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border-2 border-[#16a34a] shadow-[0_0_5px_rgba(34,197,94,0.38)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#e8f7ff_0%,#8fd3ff_30%,#299bf4_65%,#0369a1_100%)] border border-[#60b9fa] shadow-[0_0_5px_rgba(56,189,248,0.34)]',
   },
   {
-    key: 'upline_auto',
-    label: 'Auto ID อัพไลน์ (กรอบเหลือง/ทอง)',
-    desc: 'Auto ID ของอัพไลน์เจ้าของผัง (ลูกแก้วสีเหมือนเจ้าของผัง กรอบสีเหลือง/ทอง)',
+    key: 'non_bloodline',
+    label: 'รหัสที่ไม่ได้อยู่ในสายเลือด',
+    desc: 'รหัสที่ไม่ได้อยู่ในสายเลือดแนะนำตรงของเจ้าของผัง (Spillover)',
     orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border-2 border-[#eab308] shadow-[0_0_5px_rgba(234,179,8,0.42)]',
-  },
-  {
-    key: 'upline_extra',
-    label: 'Extra ID อัพไลน์ (กรอบชมพู-ทับทิม)',
-    desc: 'Extra ID ของอัพไลน์เจ้าของผัง (ลูกแก้วสีเหมือนเจ้าของผัง กรอบสีมุกชมพู-ทับทิมเงิน)',
-    orbClass:
-      'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c3d9eb_58%,#66849f_100%)] border-2 border-[#c86b7d] shadow-[0_0_5px_rgba(220,125,145,0.40)]',
+      'bg-[radial-gradient(circle_at_30%_24%,#fffbe0_0%,#fde047_30%,#eab308_65%,#a16207_100%)] border border-[#facc15] shadow-[0_0_6px_rgba(250,204,21,0.38)]',
   },
   {
     key: 'empty',
@@ -258,9 +258,9 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   const [searchTab, setSearchTab] = useState<'all' | 'main' | 'clone' | 'extra' | 'auto' | 'tree'>('all');
   const [pendingFocusOriginMainId, setPendingFocusOriginMainId] = useState<number | null>(null);
   const [layerPopupModal, setLayerPopupModal] = useState<number | 'all' | null>(null);
-  const [isLayerSelectorModalOpen, setIsLayerSelectorModalOpen] = useState<boolean>(false);
+  const [isUnifiedControlModalOpen, setIsUnifiedControlModalOpen] = useState<boolean>(false);
+  const [unifiedModalTab, setUnifiedModalTab] = useState<'all' | 'layers' | 'legend'>('all');
   const [incomeSourceModalLayer, setIncomeSourceModalLayer] = useState<number | null>(null);
-  const [isLegendModalOpen, setIsLegendModalOpen] = useState<boolean>(false);
   const [popupTypeFilter, setPopupTypeFilter] = useState<'ALL' | 'MAIN' | 'AUTO' | 'CLONE' | 'EXTRA'>('ALL');
   const [popupSearch, setPopupSearch] = useState<string>('');
   const treeScrollRef = React.useRef<HTMLDivElement | null>(null);
@@ -441,6 +441,17 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
     }
     return { nodeMap: m, cloneIdsByMainId: clonesByMain, cloneSeqByNodeId: seqMap };
   }, [nodes]);
+
+  const mainRankByIdMap = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const r of allReports) {
+      if (!r.isClone && !r.isExtraId && Number(r.id) > 0) {
+        const curR = Number(r.currentMaxRank || 0);
+        if (curR > 0) m.set(Number(r.id), curR);
+      }
+    }
+    return m;
+  }, [allReports]);
 
   const activeIdNodeInCurrentRank = useMemo(() => {
     if (activeIdSummary?.isSubId && activeIdSummary.subRank && activeIdSummary.subNodeId) {
@@ -634,131 +645,108 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         node.autoSourceMainId || node.directSponsorNodeId || sponsorOfMainId.get(nodeMainId) || 0
       );
 
-      // 1. Auto ID: ของเจ้าของผัง -> ทรงกลมสีเหลือง/ทอง · ของอัพไลน์ -> มุกฟ้า-เงิน + กรอบสีเหลือง/ทอง · อื่นๆ -> มุกฟ้า-เงิน
-      if (isAuto) {
-        if (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId) {
-          return {
-            sphereClass:
-              'bg-[radial-gradient(circle_at_30%_24%,#fffbe0_0%,#fde047_26%,#eab308_56%,#b45309_84%,#713f12_100%)] border border-[#fde047]/85 shadow-[0_0_14px_rgba(250,204,21,0.34),0_4px_10px_rgba(113,63,18,0.22),inset_0_-4px_9px_rgba(146,64,14,0.28)]',
-            topTextClass: 'text-[#5c3204]',
-            idTextClass: 'text-[#2e1600]',
-            subTextClass: 'text-[#4a2602]',
-            metaTextClass: 'text-[#633807]',
-            categoryHint: 'Auto ID ของเจ้าของผัง',
-          };
-        }
-        if (uplineMainIds.has(sourceSponsorId) || uplineMainIds.has(nodeMainId)) {
-          return {
-            sphereClass:
-              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border-[3px] border-[#eab308] shadow-[0_0_14px_rgba(234,179,8,0.48),0_4px_10px_rgba(113,63,18,0.20),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
-            topTextClass: 'text-[#315076]',
-            idTextClass: 'text-[#09275f]',
-            subTextClass: 'text-[#24446b]',
-            metaTextClass: 'text-[#3e5e84]',
-            categoryHint: 'Auto ID ของอัพไลน์ (กรอบสีเหลือง/ทอง)',
-          };
-        }
+      // 1. เฉพาะรหัส #1 / โคลน #1 -> ลูกแก้วม่วงมันวาว
+      if (nodeMainId === 1) {
         return {
           sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
+            'bg-[radial-gradient(circle_at_30%_24%,#faf5ff_0%,#e2b8ff_26%,#b46af8_56%,#7e22ce_84%,#581c87_100%)] border border-[#c084fc]/85 shadow-[0_0_15px_rgba(168,85,247,0.34),0_4px_10px_rgba(88,28,135,0.22),inset_0_-4px_9px_rgba(88,28,135,0.26)]',
+          topTextClass: 'text-[#4c1d95]',
+          idTextClass: 'text-[#24064d]',
+          subTextClass: 'text-[#3b0764]',
+          metaTextClass: 'text-[#4c1d95]',
+          categoryHint: 'เฉพาะรหัส #1 / โคลน #1',
+        };
+      }
+
+      // 2. Auto ID (เจ้าของผัง) -> มุกครีม-ทองอ่อน
+      if (isAuto && (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId)) {
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#fdf8e2_28%,#efe3b8_58%,#bfa86a_85%,#7c6835_100%)] border border-[#dccb92]/85 shadow-[0_0_12px_rgba(220,195,115,0.28),0_4px_10px_rgba(95,78,32,0.16),inset_0_-4px_9px_rgba(120,98,42,0.22)]',
+          topTextClass: 'text-[#5b491c]',
+          idTextClass: 'text-[#2d2207]',
+          subTextClass: 'text-[#493a12]',
+          metaTextClass: 'text-[#5b491c]',
+          categoryHint: 'Auto ID (เจ้าของผัง)',
+        };
+      }
+
+      // 3. Clone ID (เจ้าของผัง) -> มุกเขียวมรกตอ่อน
+      if (isClone && nodeMainId === ownerMainId) {
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#e6f9ef_26%,#b5e6cb_56%,#5ea882_84%,#35684d_100%)] border border-[#82cfa6]/85 shadow-[0_0_13px_rgba(80,210,145,0.28),0_4px_10px_rgba(20,55,35,0.18),inset_0_-4px_9px_rgba(35,75,55,0.25)]',
+          topTextClass: 'text-[#245740]',
+          idTextClass: 'text-[#0b3121]',
+          subTextClass: 'text-[#1c4b36]',
+          metaTextClass: 'text-[#2b6149]',
+          categoryHint: 'Clone ID (เจ้าของผัง)',
+        };
+      }
+
+      // 4. Extra ID (เจ้าของผัง) -> มุกชมพูอ่อน
+      if (isExtra && (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId)) {
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#fceef1_26%,#ebcad1_56%,#bc7b88_84%,#7a404c_100%)] border border-[#dda7b2]/80 shadow-[0_0_13px_rgba(220,125,145,0.26),0_4px_10px_rgba(65,25,35,0.18),inset_0_-4px_9px_rgba(85,35,45,0.25)]',
+          topTextClass: 'text-[#612c38]',
+          idTextClass: 'text-[#341119]',
+          subTextClass: 'text-[#562430]',
+          metaTextClass: 'text-[#6a3541]',
+          categoryHint: 'Extra ID (เจ้าของผัง)',
+        };
+      }
+
+      // 5. โคลนนิ่งอัพไลน์ในสายเลือด -> ลูกแก้วสีฟ้าสดใส
+      if (isClone && uplineMainIds.has(nodeMainId)) {
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#eef9ff_0%,#a5dcff_28%,#47aef7_58%,#0b75c9_85%,#064885_100%)] border border-[#60b9fa]/85 shadow-[0_0_13px_rgba(56,189,248,0.32),0_4px_10px_rgba(7,89,133,0.20),inset_0_-4px_9px_rgba(7,89,133,0.25)]',
+          topTextClass: 'text-[#08386b]',
+          idTextClass: 'text-[#041e3d]',
+          subTextClass: 'text-[#072e59]',
+          metaTextClass: 'text-[#0c437d]',
+          categoryHint: 'โคลนนิ่งอัพไลน์ในสายเลือด',
+        };
+      }
+
+      // 6. เจ้าของผัง / สายเลือดใต้เจ้าของผัง -> ทรงกลมมุกขาว-เงินไอซ์
+      const isInBloodline =
+        nodeMainId === ownerMainId ||
+        downlineBloodlineMainIds.has(nodeMainId) ||
+        sourceSponsorId === ownerMainId ||
+        uplineMainIds.has(nodeMainId) ||
+        downlineBloodlineMainIds.has(sourceSponsorId);
+
+      if (isInBloodline) {
+        return {
+          sphereClass:
+            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_28%,#c9dff0_58%,#7d9bb5_85%,#4c677f_100%)] border border-[#9cbcd6]/80 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
           topTextClass: 'text-[#315076]',
           idTextClass: 'text-[#09275f]',
           subTextClass: 'text-[#24446b]',
           metaTextClass: 'text-[#3e5e84]',
-          categoryHint: 'Auto ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
+          categoryHint:
+            nodeMainId === ownerMainId ? 'เจ้าของผัง' : 'สายเลือดใต้เจ้าของผัง',
         };
       }
-      // 2. Clone ID: ของเจ้าของผัง -> มุกเขียวมรกต · ของอัพไลน์ -> มุกฟ้า-เงิน + กรอบสีเขียว · อื่นๆ -> มุกฟ้า-เงิน
-      if (isClone) {
-        if (nodeMainId === ownerMainId) {
-          return {
-            sphereClass:
-              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef9f3_26%,#c1e2d0_56%,#6fa389_84%,#3d6552_100%)] border border-[#8fc4a9]/75 shadow-[0_0_13px_rgba(80,210,145,0.25),0_4px_10px_rgba(20,55,35,0.18),inset_0_-4px_9px_rgba(35,75,55,0.28)]',
-            topTextClass: 'text-[#245740]',
-            idTextClass: 'text-[#0b3121]',
-            subTextClass: 'text-[#1c4b36]',
-            metaTextClass: 'text-[#2b6149]',
-            categoryHint: 'Clone ID ของเจ้าของผัง',
-          };
-        }
-        if (uplineMainIds.has(nodeMainId)) {
-          return {
-            sphereClass:
-              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border-[3px] border-[#16a34a] shadow-[0_0_13px_rgba(34,197,94,0.45),0_4px_10px_rgba(20,55,35,0.18),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
-            topTextClass: 'text-[#315076]',
-            idTextClass: 'text-[#09275f]',
-            subTextClass: 'text-[#24446b]',
-            metaTextClass: 'text-[#3e5e84]',
-            categoryHint: 'Clone ID ของอัพไลน์ (กรอบสีเขียว)',
-          };
-        }
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
-          topTextClass: 'text-[#315076]',
-          idTextClass: 'text-[#09275f]',
-          subTextClass: 'text-[#24446b]',
-          metaTextClass: 'text-[#3e5e84]',
-          categoryHint: 'Clone ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
-        };
-      }
-      // 3. Extra ID: ของเจ้าของผัง -> มุกชมพู-ทับทิมเงิน · ของอัพไลน์ -> มุกฟ้า-เงิน + กรอบสีมุกชมพู-ทับทิมเงิน · อื่นๆ -> มุกฟ้า-เงิน
-      if (isExtra) {
-        if (sourceSponsorId === ownerMainId || nodeMainId === ownerMainId) {
-          return {
-            sphereClass:
-              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#faf0f2_26%,#e2c1c7_56%,#ac717c_84%,#6a3b44_100%)] border border-[#d4a5ae]/75 shadow-[0_0_13px_rgba(220,125,145,0.25),0_4px_10px_rgba(65,25,35,0.18),inset_0_-4px_9px_rgba(85,35,45,0.28)]',
-            topTextClass: 'text-[#612c38]',
-            idTextClass: 'text-[#341119]',
-            subTextClass: 'text-[#562430]',
-            metaTextClass: 'text-[#6a3541]',
-            categoryHint: 'Extra ID ของเจ้าของผัง',
-          };
-        }
-        if (uplineMainIds.has(sourceSponsorId) || uplineMainIds.has(nodeMainId)) {
-          return {
-            sphereClass:
-              'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border-[3px] border-[#c86b7d] shadow-[0_0_13px_rgba(220,125,145,0.45),0_4px_10px_rgba(85,35,45,0.20),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
-            topTextClass: 'text-[#315076]',
-            idTextClass: 'text-[#09275f]',
-            subTextClass: 'text-[#24446b]',
-            metaTextClass: 'text-[#3e5e84]',
-            categoryHint: 'Extra ID ของอัพไลน์ (กรอบสีชมพู-ทับทิมเงิน)',
-          };
-        }
-        return {
-          sphereClass:
-            'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
-          topTextClass: 'text-[#315076]',
-          idTextClass: 'text-[#09275f]',
-          subTextClass: 'text-[#24446b]',
-          metaTextClass: 'text-[#3e5e84]',
-          categoryHint: 'Extra ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
-        };
-      }
-      // 4. รหัสหลักเจ้าของผัง สายเลือด และ Main ID ที่ไม่ใช่ของเจ้าของผัง -> ทรงกลมมุกฟ้า-เงิน (สีเหมือนเจ้าของผัง)
-      const isBloodlineMember =
-        downlineBloodlineMainIds.has(nodeMainId) || sourceSponsorId === ownerMainId;
+
+      // 7. รหัสที่ไม่ได้อยู่ในสายเลือด -> ลูกแก้วสีเหลืองทอง
       return {
         sphereClass:
-          'bg-[radial-gradient(circle_at_30%_24%,#ffffff_0%,#eef6fc_26%,#c3d9eb_56%,#7d9bb5_84%,#4c677f_100%)] border border-[#9cbcd6]/75 shadow-[0_0_13px_rgba(115,175,230,0.25),0_4px_10px_rgba(20,45,80,0.16),inset_0_-4px_9px_rgba(45,70,100,0.25)]',
-        topTextClass: 'text-[#315076]',
-        idTextClass: 'text-[#09275f]',
-        subTextClass: 'text-[#24446b]',
-        metaTextClass: 'text-[#3e5e84]',
-        categoryHint:
-          nodeMainId === ownerMainId
-            ? 'เจ้าของผัง'
-            : isBloodlineMember
-            ? 'สายเลือดใต้เจ้าของผัง'
-            : 'Main ID ที่ไม่ใช่ของเจ้าของผัง (สีเหมือนเจ้าของผัง)',
+          'bg-[radial-gradient(circle_at_30%_24%,#fffbe0_0%,#fde047_26%,#eab308_56%,#b45309_84%,#713f12_100%)] border border-[#fde047]/85 shadow-[0_0_14px_rgba(250,204,21,0.34),0_4px_10px_rgba(113,63,18,0.22),inset_0_-4px_9px_rgba(146,64,14,0.28)]',
+        topTextClass: 'text-[#5c3204]',
+        idTextClass: 'text-[#2e1600]',
+        subTextClass: 'text-[#4a2602]',
+        metaTextClass: 'text-[#633807]',
+        categoryHint: 'รหัสที่ไม่ได้อยู่ในสายเลือด',
       };
     },
     [bloodlineContext]
   );
 
   const TREE_CONTENT_WIDTH = 1184;
-  const TREE_CANVAS_WIDTH = 1216;
+  const TREE_CANVAS_WIDTH = 1224;
   const TREE_CANVAS_HEIGHT = 548;
 
   useEffect(() => {
@@ -769,18 +757,27 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       if (w > 0) setContainerInnerWidth(w);
     };
     updateWidth();
+    const rafId = requestAnimationFrame(updateWidth);
     if (typeof ResizeObserver !== 'undefined') {
       const ro = new ResizeObserver(() => updateWidth());
       ro.observe(el);
-      return () => ro.disconnect();
+      window.addEventListener('resize', updateWidth);
+      return () => {
+        cancelAnimationFrame(rafId);
+        ro.disconnect();
+        window.removeEventListener('resize', updateWidth);
+      };
     }
     window.addEventListener('resize', updateWidth);
-    return () => window.removeEventListener('resize', updateWidth);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', updateWidth);
+    };
   }, []);
 
   const treeScale = useMemo(() => {
     if (!autoFitSize || containerInnerWidth <= 0) return 1;
-    return Math.min(1, containerInnerWidth / TREE_CANVAS_WIDTH);
+    return Math.max(0.2, Math.min(1, containerInnerWidth / TREE_CANVAS_WIDTH));
   }, [autoFitSize, containerInnerWidth]);
 
   const centerTreeViewport = useCallback(() => {
@@ -902,9 +899,9 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         type="button"
         onClick={() => {
           chooseLayer(n);
-          setIsLayerSelectorModalOpen(false);
+          setIsUnifiedControlModalOpen(false);
         }}
-        className={`p-2.5 rounded-[14px] border text-left transition active:scale-[0.98] cursor-pointer ${
+        className={`min-h-[56px] p-2.5 rounded-[14px] border text-left transition active:scale-[0.98] cursor-pointer ${
           selected
             ? 'bg-gradient-to-br from-[#087cf4] to-[#0648b2] text-white border-[#57d8ff] shadow-md'
             : 'bg-gradient-to-br from-white to-[#e3f4ff] text-[#09275f] border-[#b2dafa] hover:border-[#087cf4]'
@@ -1397,19 +1394,19 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
   };
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-3 sm:space-y-3.5 min-w-0 max-w-full">
       {/* HEADER BAR MATCHING MATRIX 15 LAYERS TEMPLATE */}
-      <section className="mx-1 p-4 sm:p-5 text-white rounded-[24px] bg-[radial-gradient(ellipse_at_85%_90%,rgba(71,225,255,0.42),transparent_40%),linear-gradient(120deg,#031c5c,#075ed0_65%,#031d61)] shadow-[0_8px_24px_rgba(0,60,155,0.4)] border border-[#42bfff]/60">
-        <div className="flex items-center justify-between gap-2.5 flex-wrap">
+      <section className="mx-0.5 sm:mx-1 p-3 sm:p-5 text-white rounded-[22px] sm:rounded-[24px] bg-[radial-gradient(ellipse_at_85%_90%,rgba(71,225,255,0.42),transparent_40%),linear-gradient(120deg,#031c5c,#075ed0_65%,#031d61)] shadow-[0_8px_24px_rgba(0,60,155,0.4)] border border-[#42bfff]/60 min-w-0 overflow-hidden">
+        <div className="flex items-center justify-between gap-2 sm:gap-2.5 flex-wrap min-w-0">
           <div className="min-w-0">
             <FractalFlowBrandCard size="md" />
           </div>
 
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="px-2.5 py-1 rounded-full bg-[#ffdf6d] text-[#09265f] text-[11px] font-black whitespace-nowrap">
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0 max-w-full">
+            <span className="px-2.5 py-1 rounded-full bg-[#ffdf6d] text-[#09265f] text-[10.5px] sm:text-[11px] font-black whitespace-nowrap">
               ผัง MATRIX 15 ชั้น · Rank {matrixRank}
             </span>
-            <span className="px-3 py-1.5 rounded-full bg-white/15 border border-[#9eeaff] text-xs font-bold whitespace-nowrap">
+            <span className="px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-full bg-white/15 border border-[#9eeaff] text-[11px] sm:text-xs font-bold max-w-full break-words sm:whitespace-nowrap">
               👤 {activeIdSummary ? `${activeIdSummary.label} (R${idEffectiveRank})` : `ID #${displayId} (R${idEffectiveRank})`}
               {!isSelectedRankUnlockedForId && ' · 🔒 ยังไม่ปลดล็อก R' + matrixRank}
             </span>
@@ -1464,9 +1461,9 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         </div>
 
         {/* RANK 1–18 SWITCHER (PER-ID RANK STATUS) */}
-        <div className="mt-3 pt-3 border-t border-white/15">
+        <div className="mt-3 pt-3 border-t border-white/15 min-w-0">
           <div className="flex items-center justify-between gap-2 flex-wrap text-[10.5px] text-cyan-100 mb-1.5">
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap min-w-0">
               <span className="font-bold">
                 สถานะ Rank ของ {activeIdSummary?.label || `ID #${displayId}`}:
               </span>
@@ -1481,7 +1478,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 : ''}
             </span>
           </div>
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+          <div className="flex items-center gap-1.5 w-full max-w-full min-w-0 matrix-horizontal-scroll-only pb-1">
             {Array.from({ length: 18 }, (_, i) => i + 1).map((r) => {
               const active = matrixRank === r;
               const unlocked = isIdUnlockedInRank(r);
@@ -1543,16 +1540,16 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       </section>
 
       {loadError && (
-        <div className="mx-1 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
+        <div className="mx-0.5 sm:mx-1 p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
           {loadError}
         </div>
       )}
 
       {/* SELECTED ID STATUS & LIVE INFO CARD */}
       {activeIdSummary && (
-        <section className="mx-1 p-3.5 sm:p-4 rounded-[21px] bg-gradient-to-br from-white to-[#e3f4ff] border border-[#9fd6ff] shadow-[0_6px_18px_rgba(7,85,181,0.14)] space-y-3">
-          <div className="flex items-start sm:items-center justify-between gap-2.5 flex-wrap">
-            <div className="flex items-center gap-2 flex-wrap min-w-0">
+        <section className="mx-0.5 sm:mx-1 p-3 sm:p-4 rounded-[21px] bg-gradient-to-br from-white to-[#e3f4ff] border border-[#9fd6ff] shadow-[0_6px_18px_rgba(7,85,181,0.14)] space-y-3 min-w-0">
+          <div className="flex items-start sm:items-center justify-between gap-2.5 flex-wrap min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap min-w-0 max-w-full">
               <span
                 className={`px-2 py-0.5 rounded-full text-[10px] font-black text-white ${
                   activeIdSummary.typeBadge === 'CLONE ID'
@@ -1575,13 +1572,13 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                   : `Rank ปัจจุบัน: R${idEffectiveRank} / 18`}
               </span>
               {isSelectedRankUnlockedForId ? (
-                <span className="px-2 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-[10.5px] font-extrabold">
+                <span className="px-2 py-0.5 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-800 text-[10.5px] font-extrabold max-w-full leading-snug">
                   {activeIdNodeInCurrentRank
                     ? `✓ อยู่ในผัง R${matrixRank} (Node #${activeIdNodeInCurrentRank.id})`
                     : `✓ ปลดล็อก R${matrixRank} แล้ว`}
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10.5px] font-extrabold">
+                <span className="px-2 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-900 text-[10.5px] font-extrabold max-w-full leading-snug">
                   🔒 ยังไม่ปลดล็อก R{matrixRank} (แสดงผังอ้างอิงจาก ROOT #{effectiveRootId})
                 </span>
               )}
@@ -1621,7 +1618,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-            <div className="p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
+            <div className="min-w-0 p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
               <small className="block text-[10px] font-bold text-[#5a78a1]">ข้อมูล ID & ผู้แนะนำ</small>
               <div className="text-[12px] sm:text-[13px] font-black text-[#09265f] mt-0.5 truncate">
                 {activeIdSummary.isSubId
@@ -1639,7 +1636,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               </div>
             </div>
 
-            <div className="p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
+            <div className="min-w-0 p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
               <small className="block text-[10px] font-bold text-[#5a78a1]">
                 สมาชิกใต้ ID นี้ (R{matrixRank})
               </small>
@@ -1656,7 +1653,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               </div>
             </div>
 
-            <div className="p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
+            <div className="min-w-0 p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
               <small className="block text-[10px] font-bold text-[#5a78a1]">รายได้รวมของ ID นี้</small>
               <div className="text-[13px] sm:text-[15px] font-black font-mono text-emerald-700 mt-0.5">
                 {activeIdSummary.totalIncomeUsdt.toLocaleString(undefined, {
@@ -1677,7 +1674,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               )}
             </div>
 
-            <div className="p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
+            <div className="min-w-0 p-2.5 rounded-[14px] bg-white border border-[#bde2ff]">
               <small className="block text-[10px] font-bold text-[#5a78a1]">
                 {activeIdSummary.isSubId ? '35% Vault ที่สร้างได้' : 'Vault คงเหลือของ ID นี้'}
               </small>
@@ -1777,13 +1774,13 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       )}
 
       {!activeIdSummary && !activeIdNodeInCurrentRank && nodes.length > 0 && effectiveRootId !== displayId && (
-        <div className="mx-1 px-3.5 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold">
+        <div className="mx-0.5 sm:mx-1 px-3.5 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-semibold">
           ID #{displayId} ยังไม่ได้ปลดล็อก Rank {matrixRank} — แสดงผังเริ่มต้นจาก ROOT #{effectiveRootId}
         </div>
       )}
 
       {/* 2. COMPACT SEARCH POPUP TRIGGER BAR */}
-      <section className="mx-1 p-3 sm:p-3.5 rounded-[20px] bg-white/95 border border-[#b8e1ff] shadow-[0_6px_18px_rgba(7,85,181,0.14)]">
+      <section className="mx-0.5 sm:mx-1 p-3 sm:p-3.5 rounded-[20px] bg-white/95 border border-[#b8e1ff] shadow-[0_6px_18px_rgba(7,85,181,0.14)] min-w-0">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div className="flex items-center gap-2 min-w-0">
             <span className="w-8 h-8 rounded-xl bg-[#e6f5ff] border border-[#b5ddff] text-[#087cf4] flex items-center justify-center shrink-0">
@@ -1815,7 +1812,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       </section>
 
       {/* 3. MATRIX VISUAL TREE + LAYER FOCUS */}
-      <section className="mx-1 p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)]">
+      <section className="mx-0.5 sm:mx-1 p-3 sm:p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)] min-w-0">
         <div className="flex items-center justify-between gap-2 mb-2.5 flex-wrap">
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
@@ -1980,49 +1977,62 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           )}
         </div>
 
-        {/* Unified Up/Reset, Consolidated Legend Button & Auto-Size Navigation */}
+        {/* Compact Single-Row Control Bar: Unified Layer (0–15) & Orb Color Legend + Navigation + Auto-Size */}
         <div className="mt-2.5 flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0 max-w-full">
+            <button
+              type="button"
+              onClick={() => {
+                setUnifiedModalTab('all');
+                setIsUnifiedControlModalOpen(true);
+              }}
+              title="เปิดดูและเลือกชั้นเริ่มต้น–15 พร้อมคำอธิบายสีลูกแก้วทั้ง 8 ประเภท"
+              className="min-h-[44px] px-3 py-2 rounded-xl bg-gradient-to-r from-[#eff8ff] to-[#dff1ff] hover:brightness-98 border border-[#84c8ff] text-[#0754b9] text-[11.5px] sm:text-xs font-extrabold inline-flex items-center gap-2 cursor-pointer shadow-2xs transition active:scale-[0.98] max-w-full"
+            >
+              <span className="inline-flex items-center -space-x-1 shrink-0" aria-hidden="true">
+                {[0, 1, 2, 4, 5].map((idx) => {
+                  const item = MATRIX_ORB_LEGEND_ITEMS[idx];
+                  return (
+                    <i
+                      key={`unified-mini-orb-${item.key}`}
+                      className={`inline-block w-3 h-3 rounded-full ${item.orbClass}`}
+                    />
+                  );
+                })}
+              </span>
+              <span className="truncate tabular-nums">
+                {selectedLayer === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${selectedLayer}`} ({currentLayerEntries.length}) · ชั้น & สีลูกแก้ว
+              </span>
+              <ChevronDown className="w-4 h-4 shrink-0 text-[#0754b9]" />
+            </button>
+
             {rootNode && rootNode.parentId > 0 && nodeMap.has(Number(rootNode.parentId)) && (
               <button
                 type="button"
                 onClick={() => focusNodeAsRoot(Number(rootNode.parentId))}
-                className="px-2.5 py-1.5 rounded-lg bg-[#eff8ff] border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                className="min-h-[44px] px-2.5 py-1.5 rounded-xl bg-[#eff8ff] border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] inline-flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
               >
-                <ArrowUp className="w-3 h-3" /> ขึ้นไปอัพไลน์ #{rootNode.parentId}
+                <ArrowUp className="w-3.5 h-3.5" /> อัพไลน์ #{rootNode.parentId}
               </button>
             )}
             {effectiveRootId !== defaultRootId && (
               <button
                 type="button"
                 onClick={() => focusNodeAsRoot(defaultRootId)}
-                className="px-2.5 py-1.5 rounded-lg bg-white border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] cursor-pointer whitespace-nowrap shrink-0"
+                className="min-h-[44px] px-2.5 py-1.5 rounded-xl bg-white border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] cursor-pointer whitespace-nowrap shrink-0"
               >
-                ↺ กลับไป ROOT #{defaultRootId}
+                ↺ ROOT #{defaultRootId}
               </button>
             )}
           </div>
+
           <div className="flex items-center gap-1.5 ml-auto flex-wrap">
             <button
               type="button"
-              onClick={() => setIsLegendModalOpen(true)}
-              className="px-2.5 py-1.5 rounded-lg bg-[#f4faff] hover:bg-[#e5f3ff] border border-[#a5d6ff] text-[10.5px] font-bold text-[#0754b9] cursor-pointer inline-flex items-center gap-1.5 whitespace-nowrap shrink-0 transition"
-              title={`เปิดดูความหมายสีลูกแก้วทั้ง ${MATRIX_ORB_LEGEND_ITEMS.length} ประเภท`}
-            >
-              <span className="inline-flex items-center -space-x-1" aria-hidden="true">
-                {MATRIX_ORB_LEGEND_ITEMS.slice(0, MATRIX_ORB_LEGEND_ITEMS.length - 1).map((item) => (
-                  <i key={`mini-orb-${item.key}`} className={`inline-block w-2.5 h-2.5 rounded-full ${item.orbClass}`} />
-                ))}
-                <i className="inline-block w-2.5 h-2.5 rounded-full bg-[#f4f8fd] border border-dashed border-[#6d98c4]" />
-              </span>
-              <span>คำอธิบายสี ({MATRIX_ORB_LEGEND_ITEMS.length})</span>
-            </button>
-            <button
-              type="button"
               onClick={() => setAutoFitSize((prev) => !prev)}
-              className={`px-2.5 py-1.5 rounded-lg border text-[10.5px] font-bold cursor-pointer transition whitespace-nowrap shrink-0 ${
+              className={`min-h-[44px] px-3.5 py-2 rounded-xl border text-[11px] sm:text-xs font-extrabold cursor-pointer transition whitespace-nowrap shrink-0 ${
                 autoFitSize
-                  ? 'bg-[#087cf4] text-white border-[#087cf4] shadow-xs'
+                  ? 'bg-gradient-to-b from-[#2ca4ff] to-[#087cf4] text-white border-[#3da9ff] shadow-[0_3px_10px_rgba(8,124,244,0.28)]'
                   : 'bg-[#eff8ff] hover:bg-[#dff1ff] text-[#0754b9] border-[#a5d6ff]'
               }`}
             >
@@ -2032,7 +2042,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               <button
                 type="button"
                 onClick={centerTreeViewport}
-                className="px-2.5 py-1.5 rounded-lg bg-[#eff8ff] hover:bg-[#dff1ff] border border-[#a5d6ff] text-[10.5px] font-bold text-[#0754b9] cursor-pointer whitespace-nowrap shrink-0"
+                className="min-h-[44px] px-2.5 py-1.5 rounded-xl bg-[#eff8ff] hover:bg-[#dff1ff] border border-[#a5d6ff] text-[11px] font-bold text-[#0754b9] cursor-pointer whitespace-nowrap shrink-0"
               >
                 🎯 จัดกึ่งกลางผัง
               </button>
@@ -2043,18 +2053,19 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         {/* 5-Layer Circular Binary Tree (Layer 0 -> Layer 4: 1 -> 2 -> 4 -> 8 -> 16 = 31 slots) */}
         <div
           ref={treeScrollRef}
-          className={`mt-3 rounded-[18px] bg-[#ebf3fb] border border-[#c6dff6] p-2.5 sm:p-4 ${
+          className={`mt-2.5 w-full max-w-full min-w-0 rounded-[18px] bg-[#ebf3fb] border border-[#c6dff6] p-2 sm:p-4 ${
             autoFitSize ? 'overflow-hidden' : 'overflow-x-auto matrix-scroll-container'
           }`}
         >
-          <div ref={treeMeasureRef} className="w-full">
+          <div ref={treeMeasureRef} className="w-full min-w-0">
             <div
-              className="mx-auto relative"
+              className={`mx-auto relative ${autoFitSize ? 'overflow-hidden' : ''}`}
               style={
                 autoFitSize
                   ? {
-                      width: `${Math.round(TREE_CANVAS_WIDTH * treeScale)}px`,
-                      height: `${Math.round(TREE_CANVAS_HEIGHT * treeScale)}px`,
+                      width: `${Math.ceil(TREE_CANVAS_WIDTH * treeScale)}px`,
+                      maxWidth: '100%',
+                      height: `${Math.ceil(TREE_CANVAS_HEIGHT * treeScale)}px`,
                     }
                   : {
                       width: `${TREE_CANVAS_WIDTH}px`,
@@ -2063,7 +2074,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               }
             >
               <div
-                className="px-4 py-[14px] select-none"
+                className="px-5 py-[14px] select-none"
                 style={{
                   width: `${TREE_CANVAS_WIDTH}px`,
                   height: `${TREE_CANVAS_HEIGHT}px`,
@@ -2137,19 +2148,24 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                           }
 
                           const mainId = getMainId(node, effectiveRootId);
-                          const cloneSeq = cloneSeqByNodeId.get(Number(node.id)) || 0;
-                          const statusTxt =
-                            layerIdx <= 1
-                              ? getDisplayStatusText(node, cloneSeq)
-                              : isCloneNode(node)
-                              ? cloneSeq > 0
-                                ? `โคลน #${cloneSeq}`
-                                : 'โคลนนิ่ง'
-                              : isExtraNode(node)
-                              ? 'Extra'
-                              : isAutoNode(node)
-                              ? 'Auto'
-                              : 'Main';
+                          const isClone = isCloneNode(node);
+                          const cloneSeq =
+                            cloneSeqByNodeId.get(Number(node.id)) ||
+                            Number(node.cloneSequence || 0);
+                          const nodeDisplayRank = isExtraNode(node)
+                            ? Math.max(1, Number(node.rank || matrixRank || 1))
+                            : Math.max(
+                                1,
+                                Number(
+                                  mainRankByIdMap.get(mainId) ||
+                                    (activeIdSummary?.mainId === mainId
+                                      ? activeIdSummary.currentRank
+                                      : 0) ||
+                                    node.rank ||
+                                    matrixRank ||
+                                    1
+                                )
+                              );
                           const appearance = getCardAppearance(node);
 
                           return (
@@ -2161,7 +2177,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                               <button
                                 type="button"
                                 onClick={() => !isRoot && focusNodeAsRoot(Number(node.id))}
-                                title={`ID #${mainId} · ${getNodeTypeLabel(
+                                title={`ID #${mainId} · Rank ${nodeDisplayRank} · ${getNodeTypeLabel(
                                   node,
                                   cloneSeq,
                                   (cloneIdsByMainId.get(mainId) || []).length
@@ -2180,52 +2196,87 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                                   aria-hidden="true"
                                   className="pointer-events-none absolute top-[6%] left-[14%] w-[44%] h-[28%] rounded-full bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.68)_0%,rgba(255,255,255,0)_75%)] -rotate-18"
                                 />
-                                <span
-                                  className={`relative z-10 ${
-                                    layerIdx >= 4
-                                      ? 'text-[6.5px]'
-                                      : layerIdx === 3
-                                      ? 'text-[7px]'
-                                      : 'text-[8px]'
-                                  } font-extrabold uppercase tracking-wide ${appearance.topTextClass} leading-none`}
-                                >
-                                  {isRoot ? 'ROOT' : layerIdx === 1 ? `ชั้น 1 · ${sideLabel}` : sideLabel}
-                                </span>
-                                <b
-                                  className={`relative z-10 ${
-                                    layerIdx === 0
-                                      ? 'text-[17px]'
-                                      : layerIdx === 1
-                                      ? 'text-[15px]'
-                                      : layerIdx === 2
-                                      ? 'text-[13px]'
-                                      : layerIdx === 3
-                                      ? 'text-[12px]'
-                                      : 'text-[11px]'
-                                  } font-black font-mono leading-tight ${appearance.idTextClass} mt-0.5`}
-                                >
-                                  #{mainId}
-                                </b>
-                                <span
-                                  className={`relative z-10 ${
-                                    layerIdx >= 4
-                                      ? 'text-[6.8px] max-w-[48px]'
-                                      : layerIdx === 3
-                                      ? 'text-[7.5px] max-w-[54px]'
-                                      : 'text-[8.5px] max-w-[68px]'
-                                  } font-bold ${appearance.subTextClass} leading-tight truncate`}
-                                >
-                                  {statusTxt}
-                                </span>
-                                {layerIdx <= 2 && Number(node.id) !== mainId && (
-                                  <span className={`relative z-10 text-[7px] font-mono ${appearance.metaTextClass} leading-none mt-0.5`}>
-                                    โหนด#{node.id}
-                                  </span>
-                                )}
-                                {layerIdx <= 1 && Number(node.id) === mainId && (
-                                  <span className={`relative z-10 text-[7px] font-mono ${appearance.metaTextClass} leading-none mt-0.5`}>
-                                    แนะนำ#{node.directSponsorNodeId || '-'}
-                                  </span>
+                                {isClone ? (
+                                  <>
+                                    <b
+                                      className={`relative z-10 ${
+                                        layerIdx === 0
+                                          ? 'text-[18px]'
+                                          : layerIdx === 1
+                                          ? 'text-[16px]'
+                                          : layerIdx === 2
+                                          ? 'text-[14px]'
+                                          : layerIdx === 3
+                                          ? 'text-[12.5px]'
+                                          : 'text-[11px]'
+                                      } font-black font-mono leading-none ${appearance.idTextClass}`}
+                                    >
+                                      {mainId}
+                                    </b>
+                                    <span
+                                      className={`relative z-10 mt-0.5 ${
+                                        layerIdx === 0
+                                          ? 'text-[10.5px]'
+                                          : layerIdx === 1
+                                          ? 'text-[9.5px]'
+                                          : layerIdx === 2
+                                          ? 'text-[8.5px]'
+                                          : layerIdx === 3
+                                          ? 'text-[8px]'
+                                          : 'text-[7.2px]'
+                                      } font-extrabold leading-tight ${appearance.subTextClass} whitespace-nowrap`}
+                                    >
+                                      {cloneSeq > 0 ? `ครั้งที่ ${cloneSeq}` : 'โคลนนิ่ง'}
+                                    </span>
+                                    <span
+                                      className={`relative z-10 mt-0.5 ${
+                                        layerIdx === 0
+                                          ? 'text-[10px]'
+                                          : layerIdx === 1
+                                          ? 'text-[9px]'
+                                          : layerIdx === 2
+                                          ? 'text-[8.5px]'
+                                          : layerIdx === 3
+                                          ? 'text-[8px]'
+                                          : 'text-[7.2px]'
+                                      } font-extrabold font-mono leading-none ${appearance.metaTextClass} whitespace-nowrap`}
+                                    >
+                                      Rank {nodeDisplayRank}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <b
+                                      className={`relative z-10 ${
+                                        layerIdx === 0
+                                          ? 'text-[20px]'
+                                          : layerIdx === 1
+                                          ? 'text-[18px]'
+                                          : layerIdx === 2
+                                          ? 'text-[16px]'
+                                          : layerIdx === 3
+                                          ? 'text-[14px]'
+                                          : 'text-[12.5px]'
+                                      } font-black font-mono leading-none ${appearance.idTextClass}`}
+                                    >
+                                      {mainId}
+                                    </b>
+                                    <span
+                                      className={`relative z-10 mt-1 ${
+                                        layerIdx === 0
+                                          ? 'text-[11.5px]'
+                                          : layerIdx === 1
+                                          ? 'text-[10.5px]'
+                                          : layerIdx === 2
+                                          ? 'text-[9.5px]'
+                                          : layerIdx === 3
+                                          ? 'text-[9px]'
+                                          : 'text-[8px]'
+                                      } font-extrabold font-mono leading-none ${appearance.subTextClass} whitespace-nowrap`}
+                                    >
+                                      Rank {nodeDisplayRank}
+                                    </span>
+                                  </>
                                 )}
                               </button>
                             </div>
@@ -2308,6 +2359,11 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           </div>
         </div>
 
+        {/* 5-Layer Capacity Summary Caption Below Tree */}
+        <p className="mt-2.5 text-center text-[11px] sm:text-xs font-semibold text-[#5678a0] leading-relaxed font-sans tabular-nums">
+          แสดงผัง <strong className="font-mono font-black text-[#0754b9]">#{effectiveRootId}</strong> (ชั้นเริ่มต้น = 1 · ชั้น 1 = 2 · ชั้น 2 = 4 · ชั้น 3 = 8 · ชั้น 4 = 16 · รวม 31 ตำแหน่ง)
+        </p>
+
         {/* Selected Layer Detail Panel */}
         <div className="flex items-center justify-between gap-2 mt-5 mb-2 flex-wrap">
           <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
@@ -2350,21 +2406,21 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           </p>
 
           {selectedLayer === 0 ? (
-            <div className="relative flex justify-center gap-4 mx-auto mt-5 max-w-[430px]">
+            <div className="relative flex justify-center gap-2.5 sm:gap-4 mx-auto mt-5 max-w-[430px] min-w-0">
               <div className="absolute -top-[12px] left-1/4 right-1/4 h-[1px] bg-[#4c9fe5]" />
               <div
                 onClick={() => leftChildNode && focusNodeAsRoot(Number(leftChildNode.id))}
-                className={`relative flex-1 max-w-[180px] text-center p-2.5 rounded-[14px] ${
+                className={`relative flex-1 min-w-0 max-w-[180px] text-center p-2 sm:p-2.5 rounded-[14px] ${
                   leftChildNode
                     ? 'bg-white border border-[#9fd5ff] border-b-4 border-b-[#16a9ff] cursor-pointer hover:bg-[#eff9ff]'
                     : 'bg-[#f6fbff] border border-dashed border-[#b8d9f5] text-[#7692b6]'
                 }`}
               >
                 <span className="absolute -top-[13px] left-1/2 w-[1px] h-[13px] bg-[#4c9fe5]" />
-                <b className="block text-xs font-black">
+                <b className="block text-[11px] sm:text-xs font-black truncate">
                   {leftChildNode ? `LEFT CHILD · ID #${getMainId(leftChildNode)}` : 'LEFT CHILD'}
                 </b>
-                <small className="block text-[10px] mt-0.5 text-[#5a78a1]">
+                <small className="block text-[10px] mt-0.5 text-[#5a78a1] leading-snug">
                   {leftChildNode
                     ? getNodeTypeLabel(
                         leftChildNode,
@@ -2377,17 +2433,17 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
 
               <div
                 onClick={() => rightChildNode && focusNodeAsRoot(Number(rightChildNode.id))}
-                className={`relative flex-1 max-w-[180px] text-center p-2.5 rounded-[14px] ${
+                className={`relative flex-1 min-w-0 max-w-[180px] text-center p-2 sm:p-2.5 rounded-[14px] ${
                   rightChildNode
                     ? 'bg-white border border-[#c6b5ff] border-b-4 border-b-[#8c62e9] cursor-pointer hover:bg-[#f8f5ff]'
                     : 'bg-[#f6fbff] border border-dashed border-[#b8d9f5] text-[#7692b6]'
                 }`}
               >
                 <span className="absolute -top-[13px] left-1/2 w-[1px] h-[13px] bg-[#4c9fe5]" />
-                <b className="block text-xs font-black">
+                <b className="block text-[11px] sm:text-xs font-black truncate">
                   {rightChildNode ? `RIGHT CHILD · ID #${getMainId(rightChildNode)}` : 'RIGHT CHILD'}
                 </b>
-                <small className="block text-[10px] mt-0.5 text-[#5a78a1]">
+                <small className="block text-[10px] mt-0.5 text-[#5a78a1] leading-snug">
                   {rightChildNode
                     ? getNodeTypeLabel(
                         rightChildNode,
@@ -2399,16 +2455,16 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               </div>
             </div>
           ) : currentLayerEntries.length === 0 ? (
-            <div className="relative flex justify-center gap-4 mx-auto mt-5 max-w-[430px]">
+            <div className="relative flex justify-center gap-2.5 sm:gap-4 mx-auto mt-5 max-w-[430px] min-w-0">
               <div className="absolute -top-[12px] left-1/4 right-1/4 h-[1px] bg-[#4c9fe5]" />
-              <div className="relative flex-1 max-w-[180px] text-center p-2.5 rounded-[14px] bg-[#f6fbff] border border-dashed border-[#b8d9f5] text-[#7692b6]">
+              <div className="relative flex-1 min-w-0 max-w-[180px] text-center p-2 sm:p-2.5 rounded-[14px] bg-[#f6fbff] border border-dashed border-[#b8d9f5] text-[#7692b6]">
                 <span className="absolute -top-[13px] left-1/2 w-[1px] h-[13px] bg-[#4c9fe5]" />
-                <b className="block text-xs font-black">LEFT CHILD</b>
+                <b className="block text-[11px] sm:text-xs font-black">LEFT CHILD</b>
                 <small className="block text-[10px] mt-0.5">รอสมาชิกในชั้นที่ {selectedLayer}</small>
               </div>
-              <div className="relative flex-1 max-w-[180px] text-center p-2.5 rounded-[14px] bg-[#f6fbff] border border-dashed border-[#b8d9f5] text-[#7692b6]">
+              <div className="relative flex-1 min-w-0 max-w-[180px] text-center p-2 sm:p-2.5 rounded-[14px] bg-[#f6fbff] border border-dashed border-[#b8d9f5] text-[#7692b6]">
                 <span className="absolute -top-[13px] left-1/2 w-[1px] h-[13px] bg-[#4c9fe5]" />
-                <b className="block text-xs font-black">RIGHT CHILD</b>
+                <b className="block text-[11px] sm:text-xs font-black">RIGHT CHILD</b>
                 <small className="block text-[10px] mt-0.5">รอสมาชิกในชั้นที่ {selectedLayer}</small>
               </div>
             </div>
@@ -2471,72 +2527,11 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         </div>
       </section>
 
-      {/* 4. 15-LAYER SELECTOR GRID (MOBILE SUMMARY + POPUP / TABLET & PC INLINE GRID) */}
-      <section className="mx-1 p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)]">
-        <div className="flex items-center justify-between gap-2 mb-3">
-          <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
-            📚 เลือกดูชั้นเริ่มต้น–15 (Root → ชั้น 15)
-          </h3>
-          <small className="text-[10.5px] font-semibold text-[#5a78a1]">
-            <span className="sm:hidden">ชั้นที่เลือกอยู่</span>
-            <span className="hidden sm:inline">แตะชั้นที่ต้องการ</span>
-          </small>
-        </div>
-
-        {/* MOBILE (< 640px): ACTIVE LAYER SUMMARY CARD + POPUP TRIGGER */}
-        <div className="sm:hidden space-y-2.5">
-          <div className="p-3.5 rounded-[16px] bg-gradient-to-br from-[#087cf4] to-[#0648b2] border border-[#57d8ff] text-white shadow-md">
-            <div className="flex items-center justify-between gap-2 mb-1.5">
-              <div className="flex items-center gap-2 min-w-0">
-                <b className="text-[15px] font-black truncate">
-                  {selectedLayer === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${selectedLayer}`}
-                </b>
-                <span className="px-2 py-0.5 rounded-[10px] bg-[#ffdf6d] text-[#173b77] text-[10px] font-extrabold shrink-0">
-                  กำลังดู
-                </span>
-              </div>
-              {currentLayerEntries.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPopupTypeFilter('ALL');
-                    setPopupSearch('');
-                    setLayerPopupModal(selectedLayer);
-                  }}
-                  className="px-2 py-1 rounded-lg bg-white/20 hover:bg-white/30 text-white text-[10.5px] font-bold inline-flex items-center gap-1 shrink-0 cursor-pointer"
-                >
-                  <Users className="w-3 h-3" />
-                  <span>ดูรายชื่อ</span>
-                </button>
-              )}
-            </div>
-            <div className="flex items-center justify-between gap-2 text-[11.5px] font-mono tabular-nums text-[#e2f8ff]">
-              <span>ความจุ: {fmtNum(theoreticalCapacity)} จำนวนไอดี</span>
-              <strong className="text-[#ffdf6d]">พบจริง {currentLayerEntries.length} รหัส</strong>
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setIsLayerSelectorModalOpen(true)}
-            className="w-full min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-[#23caff] via-[#087cf4] to-[#0755d7] text-white text-[13px] font-black shadow-[0_6px_16px_rgba(7,85,215,0.3)] hover:brightness-105 active:scale-[0.99] transition flex items-center justify-center gap-2 cursor-pointer"
-          >
-            <span>เปิดดูและเลือกชั้นเริ่มต้น–15 (16 ชั้น)</span>
-            <span className="text-base leading-none">›</span>
-          </button>
-        </div>
-
-        {/* TABLET & DESKTOP (>= 640px): FULL INLINE 16-LAYER GRID */}
-        <div className="hidden sm:grid sm:grid-cols-4 gap-2">
-          {Array.from({ length: 16 }, (_, idx) => idx).map((n) => renderLayerCard(n, 'inline'))}
-        </div>
-      </section>
-
-      {/* 5. 15-LAYER SUMMARY TABLE */}
-      <section className="mx-1 p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)]">
-        <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
-          <div>
-            <h3 className="text-[15px] sm:text-[16px] font-black text-[#09275f]">
+      {/* 4. 15-LAYER SUMMARY TABLE */}
+      <section className="mx-0.5 sm:mx-1 p-2.5 sm:p-4 rounded-[21px] bg-white/90 border border-[#b8e1ff] shadow-[0_8px_22px_rgba(7,85,181,0.17)] min-w-0">
+        <div className="flex items-center justify-between gap-2 mb-2.5 sm:mb-3 flex-wrap px-0.5">
+          <div className="min-w-0">
+            <h3 className="text-[14.5px] sm:text-[16px] font-black text-[#09275f]">
               📋 สรุปโครงสร้างแต่ละชั้น
             </h3>
             <small className="text-[10.5px] font-semibold text-[#5a78a1]">
@@ -2551,22 +2546,34 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                 setPopupSearch('');
                 setLayerPopupModal('all');
               }}
-              className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#22caff] to-[#0758d4] text-white text-[11px] font-bold inline-flex items-center gap-1.5 shadow-sm cursor-pointer hover:brightness-105 transition"
+              className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-[#22caff] to-[#0758d4] text-white text-[10.5px] sm:text-[11px] font-bold inline-flex items-center gap-1.5 shadow-sm cursor-pointer hover:brightness-105 transition"
             >
-              <Users className="w-3.5 h-3.5" />
+              <Users className="w-3.5 h-3.5 shrink-0" />
               <span>ดูสมาชิกจริงทั้งหมด ({totalSubtreeCount} รหัส)</span>
             </button>
           )}
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full border-separate border-spacing-y-1.5 min-w-[480px] text-xs">
+        <div className="w-full overflow-x-clip">
+          <table className="w-full table-fixed sm:table-auto border-separate border-spacing-x-0 border-spacing-y-1.5 text-[10.5px] sm:text-xs">
+            <colgroup>
+              <col className="w-[19%] sm:w-auto" />
+              <col className="w-[17%] sm:w-auto" />
+              <col className="w-[27%] sm:w-auto" />
+              <col className="w-[37%] sm:w-auto" />
+            </colgroup>
             <thead>
-              <tr className="text-left text-[#54749b]">
-                <th className="px-2 py-1.5">ชั้น</th>
-                <th className="px-2 py-1.5">จำนวนไอดี</th>
-                <th className="px-2 py-1.5">รายได้ค่าชั้นฝั่งซ้าย</th>
-                <th className="px-2 py-1.5">ข้อมูลสมาชิกจริง (ใต้ #{effectiveRootId})</th>
+              <tr className="text-left text-[#54749b] align-bottom">
+                <th className="px-1.5 py-1.5 sm:px-2 text-[10px] sm:text-xs font-extrabold">ชั้น</th>
+                <th className="px-1 py-1.5 sm:px-2 text-[10px] sm:text-xs font-extrabold text-center sm:text-left leading-tight">
+                  จำนวนไอดี
+                </th>
+                <th className="px-1.5 py-1.5 sm:px-2 text-[10px] sm:text-xs font-extrabold leading-tight">
+                  รายได้ค่าชั้นฝั่งซ้าย
+                </th>
+                <th className="px-1.5 py-1.5 sm:px-2 text-[10px] sm:text-xs font-extrabold leading-tight">
+                  ข้อมูลสมาชิกจริง (ใต้ #{effectiveRootId})
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -2592,7 +2599,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                     }`}
                   >
                     <td
-                      className={`px-2.5 py-2.5 rounded-l-[10px] font-bold ${
+                      className={`px-1.5 py-2 sm:px-2.5 sm:py-2.5 rounded-l-[10px] font-bold text-[10px] sm:text-xs whitespace-nowrap align-middle ${
                         isRowSelected
                           ? 'bg-[#087cf4] text-white'
                           : 'bg-[#edf7ff] text-[#0757b8]'
@@ -2601,19 +2608,19 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                       {n === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${n}`}
                     </td>
                     <td
-                      className={`px-2.5 py-2.5 font-mono tabular-nums ${
+                      className={`px-1 py-2 sm:px-2.5 sm:py-2.5 font-mono tabular-nums text-[9.5px] sm:text-xs text-center sm:text-left whitespace-nowrap align-middle ${
                         isRowSelected ? 'bg-[#dff2ff]' : 'bg-[#edf7ff]'
                       }`}
                     >
                       {fmtNum(2 ** n)}
                     </td>
                     <td
-                      className={`px-2.5 py-2.5 font-mono tabular-nums ${
+                      className={`px-1 py-1.5 sm:px-2.5 sm:py-2.5 font-mono tabular-nums align-middle ${
                         isRowSelected ? 'bg-[#dff2ff]' : 'bg-[#edf7ff]'
                       }`}
                     >
                       {n === 0 ? (
-                        <span className="text-[#6d8aad]">—</span>
+                        <span className="text-[#6d8aad] px-1">—</span>
                       ) : (
                         <button
                           type="button"
@@ -2623,27 +2630,27 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                             setIncomeSourceModalLayer(n);
                           }}
                           title={`กดเพื่อดูที่มารายได้ค่าชั้นฝั่งซ้าย ชั้น ${n}`}
-                          className={`w-full text-left px-2 py-1 -mx-1 rounded-lg border transition cursor-pointer group ${
+                          className={`w-full min-w-0 text-left px-1.5 py-1 sm:px-2 sm:py-1 rounded-lg border transition cursor-pointer group ${
                             earnedTierUsdt > 0
                               ? 'bg-emerald-50/90 hover:bg-emerald-100 border-emerald-200'
                               : 'bg-white/75 hover:bg-white border-[#c6e3ff]'
                           }`}
                         >
-                          <div className="leading-tight flex items-center justify-between gap-1">
-                            <div>
+                          <div className="leading-tight flex flex-col items-start gap-1 sm:flex-row sm:items-center sm:justify-between sm:gap-1 min-w-0">
+                            <div className="min-w-0 w-full sm:w-auto">
                               <span
-                                className={`font-bold block ${
+                                className={`font-bold block text-[10px] sm:text-xs whitespace-nowrap ${
                                   earnedTierUsdt > 0 ? 'text-emerald-700' : 'text-[#5a78a1]'
                                 }`}
                               >
                                 {earnedTierUsdt > 0 ? `+${earnedTierUsdt.toFixed(2)} U` : '0.00 U'}
                               </span>
-                              <span className="text-[9.5px] text-[#6d8aad] block">
-                                เต็ม +{fmtNum(maxTierUsdt)} U
+                              <span className="text-[8.5px] sm:text-[9.5px] text-[#6d8aad] block leading-tight">
+                                เต็ม <span className="whitespace-nowrap">+{fmtNum(maxTierUsdt)} U</span>
                               </span>
                             </div>
                             <span
-                              className={`text-[9.5px] font-sans font-bold px-1.5 py-0.5 rounded-md shrink-0 ${
+                              className={`text-[9px] sm:text-[9.5px] font-sans font-bold px-1.5 py-0.5 rounded-md shrink-0 whitespace-nowrap self-stretch sm:self-auto text-center ${
                                 earnedTierUsdt > 0
                                   ? 'bg-emerald-600 text-white group-hover:bg-emerald-700'
                                   : 'bg-[#e3f2ff] text-[#0754b9] group-hover:bg-[#cde8ff]'
@@ -2656,19 +2663,21 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                       )}
                     </td>
                     <td
-                      className={`px-2.5 py-2.5 rounded-r-[10px] ${
+                      className={`px-1.5 py-2 sm:px-2.5 sm:py-2.5 rounded-r-[10px] min-w-0 align-middle ${
                         isRowSelected ? 'bg-[#dff2ff]' : 'bg-[#edf7ff]'
                       }`}
                     >
                       {realEntries.length > 0 ? (
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className="font-bold text-emerald-700">
-                            {realEntries.length} รหัส{' '}
-                            <span className="font-mono text-[#09275f] font-normal">
+                        <div className="flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2 min-w-0">
+                          <div className="min-w-0 w-full sm:w-auto leading-snug break-words">
+                            <span className="font-bold text-emerald-700 text-[10px] sm:text-xs whitespace-nowrap">
+                              {realEntries.length} รหัส
+                            </span>{' '}
+                            <span className="font-mono text-[9.5px] sm:text-xs text-[#09275f] font-normal break-words">
                               ({previewIds}
                               {extraMore})
                             </span>
-                          </span>
+                          </div>
                           <button
                             type="button"
                             onClick={(e) => {
@@ -2678,14 +2687,14 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                               setPopupSearch('');
                               setLayerPopupModal(n);
                             }}
-                            className="px-2.5 py-1 rounded-lg bg-[#087cf4] hover:bg-[#0568d0] text-white text-[10.5px] font-bold inline-flex items-center gap-1 whitespace-nowrap cursor-pointer shadow-xs"
+                            className="w-full sm:w-auto justify-center px-2 py-1 sm:px-2.5 sm:py-1 rounded-lg bg-[#087cf4] hover:bg-[#0568d0] text-white text-[9.5px] sm:text-[10.5px] font-bold inline-flex items-center gap-1 whitespace-nowrap cursor-pointer shadow-xs shrink-0"
                           >
-                            <Users className="w-3 h-3" />
+                            <Users className="w-2.5 h-2.5 sm:w-3 sm:h-3 shrink-0" />
                             <span>ดูข้อมูลสมาชิก</span>
                           </button>
                         </div>
                       ) : (
-                        <span className="text-[#6d8aad]">ว่าง (0 รหัส)</span>
+                        <span className="text-[#6d8aad] text-[10px] sm:text-xs">ว่าง (0 รหัส)</span>
                       )}
                     </td>
                   </tr>
@@ -2695,7 +2704,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
           </table>
         </div>
 
-        <p className="text-[11px] text-[#58769d] leading-relaxed mt-2">
+        <p className="text-[10.5px] sm:text-[11px] text-[#58769d] leading-relaxed mt-2 px-0.5">
           กดที่ช่อง <strong className="text-emerald-700">รายได้ค่าชั้นฝั่งซ้าย</strong> เพื่อดูป๊อปอัพที่มารายได้ หรือกดปุ่ม{' '}
           <strong className="text-[#0754b9]">ดูข้อมูลสมาชิก</strong> เพื่อเปิดดูรายละเอียด ID, สถานะไอดี และผู้แนะนำของแต่ละรหัส
         </p>
@@ -2746,22 +2755,22 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
 
         return (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+            className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
             onClick={() => setLayerPopupModal(null)}
           >
             <div
-              className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
+              className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[22px] sm:rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-3 sm:p-5 text-[#09265f] space-y-3"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
               <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
-                <div>
-                  <h3 className="text-base sm:text-lg font-black text-[#09265f]">
+                <div className="min-w-0">
+                  <h3 className="text-sm sm:text-lg font-black text-[#09265f]">
                     {layerPopupModal === 'all'
                       ? `👥 ข้อมูลสมาชิกจริง (ชั้นเริ่มต้น–15 · Rank ${matrixRank} · ใต้ #${effectiveRootId})`
                       : `👥 ข้อมูลสมาชิกจริง — ${layerPopupModal === 0 ? 'ชั้นเริ่มต้น' : `ชั้นที่ ${layerPopupModal}`} (Rank ${matrixRank} · ใต้ #${effectiveRootId})`}
                   </h3>
-                  <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
+                  <p className="text-[10.5px] sm:text-[11px] font-semibold text-[#45668f] mt-0.5">
                     แสดง ID · สถานะไอดี (Main / Auto / Clone / Extra) · ผู้แนะนำตรง
                   </p>
                 </div>
@@ -2776,11 +2785,11 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               </div>
 
               {/* Layer Quick Selector inside Modal */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
                 <button
                   type="button"
                   onClick={() => setLayerPopupModal('all')}
-                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer ${
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer shrink-0 ${
                     layerPopupModal === 'all'
                       ? 'bg-[#087cf4] text-white border-[#087cf4]'
                       : 'bg-white text-[#0756bc] border-[#b8e5ff]'
@@ -2797,7 +2806,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                       key={`pop-l-${layerNum}`}
                       type="button"
                       onClick={() => setLayerPopupModal(layerNum)}
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer ${
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer shrink-0 ${
                         active
                           ? 'bg-[#087cf4] text-white border-[#087cf4]'
                           : 'bg-white text-[#0756bc] border-[#b8e5ff]'
@@ -2907,7 +2916,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                     return (
                       <div
                         key={`pop-member-${entry.layer}-${n.id}`}
-                        className="p-3 rounded-xl bg-white border border-[#b8e5ff] flex items-center justify-between gap-2.5 text-xs shadow-2xs"
+                        className="p-2.5 sm:p-3 rounded-xl bg-white border border-[#b8e5ff] flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs shadow-2xs"
                       >
                         <div className="min-w-0 space-y-1 flex-1">
                           {/* Row 1: Main ID + Status (+ Total Clones) + Layer */}
@@ -2934,7 +2943,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] bg-[#f5fbff] px-2.5 py-1.5 rounded-lg border border-[#d7edff]">
                             <div>
                               <span className="text-[#5a78a1] font-semibold">สถานะไอดี: </span>
-                              <strong className="text-[#09265f]">{detailStatusLabel}</strong>
+                              <strong className="text-[#09265f] break-words">{detailStatusLabel}</strong>
                             </div>
                             <div>
                               <span className="text-[#5a78a1] font-semibold">ผู้แนะนำ: </span>
@@ -2955,14 +2964,14 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                           </div>
                         </div>
 
-                        <div className="flex flex-col gap-1 shrink-0">
+                        <div className="flex flex-row sm:flex-col gap-1.5 sm:gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => {
                               focusNodeAsRoot(Number(n.id));
                               setLayerPopupModal(null);
                             }}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#087cf4] hover:bg-[#0568d0] text-white text-[10.5px] font-bold cursor-pointer whitespace-nowrap"
+                            className="flex-1 sm:flex-none px-2.5 py-1.5 rounded-lg bg-[#087cf4] hover:bg-[#0568d0] text-white text-[10.5px] font-bold cursor-pointer whitespace-nowrap"
                           >
                             เปิดผัง #{n.id}
                           </button>
@@ -2973,7 +2982,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                                 onSelectMainId(String(mainIdNum));
                                 setLayerPopupModal(null);
                               }}
-                              className="px-2.5 py-1 rounded-lg bg-[#e6f5ff] hover:bg-[#d5eeff] border border-[#a5d6ff] text-[#0754b9] text-[10.5px] font-bold cursor-pointer whitespace-nowrap"
+                              className="flex-1 sm:flex-none px-2.5 py-1 rounded-lg bg-[#e6f5ff] hover:bg-[#d5eeff] border border-[#a5d6ff] text-[#0754b9] text-[10.5px] font-bold cursor-pointer whitespace-nowrap"
                             >
                               สลับดู ID
                             </button>
@@ -3021,23 +3030,23 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
 
         return (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+            className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
             onClick={() => setIncomeSourceModalLayer(null)}
           >
             <div
-              className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
+              className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[22px] sm:rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-3 sm:p-5 text-[#09265f] space-y-3"
               onClick={(e) => e.stopPropagation()}
             >
               {/* Modal Header */}
               <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
-                <div>
-                  <h3 className="text-base sm:text-lg font-black text-[#09265f] flex items-center gap-1.5">
-                    <Coins className="w-5 h-5 text-emerald-600 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="text-sm sm:text-lg font-black text-[#09265f] flex items-center gap-1.5">
+                    <Coins className="w-4 h-4 sm:w-5 sm:h-5 text-emerald-600 shrink-0" />
                     <span>
                       ที่มารายได้ค่าชั้นฝั่งซ้าย — ชั้นที่ {layerNum} (Rank {matrixRank})
                     </span>
                   </h3>
-                  <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
+                  <p className="text-[10.5px] sm:text-[11px] font-semibold text-[#45668f] mt-0.5">
                     ใต้ ID #{effectiveRootId} · ค่าชั้น 2% ของราคา Rank {matrixRank} ({fmtNum(rankUnitPrice)} U) = +{levelRateUsdt.toFixed(2)} U / รหัสฝั่งซ้าย
                   </p>
                 </div>
@@ -3052,7 +3061,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               </div>
 
               {/* Quick Layer Switcher (Layers 1–15) */}
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
                 {Array.from({ length: 15 }, (_, idx) => idx + 1).map((lNum) => {
                   const lEntries = layersMap[lNum] || [];
                   const lLeftCount = lEntries.filter((e) => e.side === 'LEFT').length;
@@ -3066,7 +3075,7 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
                         chooseLayer(lNum);
                         setIncomeSourceModalLayer(lNum);
                       }}
-                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer ${
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-bold whitespace-nowrap border cursor-pointer shrink-0 ${
                         active
                           ? 'bg-emerald-600 text-white border-emerald-600'
                           : 'bg-white text-[#0756bc] border-[#b8e5ff] hover:bg-[#eef8ff]'
@@ -3079,27 +3088,27 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
               </div>
 
               {/* Summary Strip */}
-              <div className="grid grid-cols-3 gap-2 text-center text-xs">
-                <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
-                  <div className="text-[10px] text-[#55769b]">รายได้ชั้นที่ {layerNum}</div>
-                  <strong className="text-base font-black text-emerald-700 font-mono">
+              <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center text-xs">
+                <div className="min-w-0 p-2 sm:p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                  <div className="text-[9.5px] sm:text-[10px] text-[#55769b] truncate">รายได้ชั้นที่ {layerNum}</div>
+                  <strong className="text-xs sm:text-base font-black text-emerald-700 font-mono block break-words">
                     +{earnedTierUsdt.toFixed(2)} U
                   </strong>
-                  <div className="text-[10px] text-[#5a78a1]">เต็ม +{fmtNum(maxTierUsdt)} U</div>
+                  <div className="text-[9.5px] sm:text-[10px] text-[#5a78a1] truncate">เต็ม +{fmtNum(maxTierUsdt)} U</div>
                 </div>
-                <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
-                  <div className="text-[10px] text-[#55769b]">ฝั่งซ้าย (จ่าย 2%)</div>
-                  <strong className="text-base font-black text-[#0754b9] font-mono">
+                <div className="min-w-0 p-2 sm:p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                  <div className="text-[9.5px] sm:text-[10px] text-[#55769b] truncate">ฝั่งซ้าย (จ่าย 2%)</div>
+                  <strong className="text-xs sm:text-base font-black text-[#0754b9] font-mono block">
                     {leftEntries.length} รหัส
                   </strong>
-                  <div className="text-[10px] text-[#5a78a1]">+{levelRateUsdt.toFixed(2)} U/รหัส</div>
+                  <div className="text-[9.5px] sm:text-[10px] text-[#5a78a1] truncate">+{levelRateUsdt.toFixed(2)} U/รหัส</div>
                 </div>
-                <div className="p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
-                  <div className="text-[10px] text-[#55769b]">ฝั่งขวา (Rebirth/ระบบ)</div>
-                  <strong className="text-base font-black text-[#35567e] font-mono">
+                <div className="min-w-0 p-2 sm:p-2.5 rounded-xl bg-white border border-[#b8e5ff]">
+                  <div className="text-[9.5px] sm:text-[10px] text-[#55769b] truncate">ฝั่งขวา (Rebirth)</div>
+                  <strong className="text-xs sm:text-base font-black text-[#35567e] font-mono block">
                     {rightEntries.length} รหัส
                   </strong>
-                  <div className="text-[10px] text-[#5a78a1]">ไม่คิดเป็นค่าชั้น 2%</div>
+                  <div className="text-[9.5px] sm:text-[10px] text-[#5a78a1] truncate">ไม่คิดค่าชั้น 2%</div>
                 </div>
               </div>
 
@@ -3257,64 +3266,147 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         );
       })()}
 
-      {/* POPUP MODAL: MATRIX SPHERICAL ORB COLOR LEGEND */}
-      {isLegendModalOpen && (
+      {/* UNIFIED POPUP MODAL: LAYER SELECTOR (0–15) & SPHERICAL ORB COLOR LEGEND (8) */}
+      {isUnifiedControlModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
-          onClick={() => setIsLegendModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
+          onClick={() => setIsUnifiedControlModalOpen(false)}
         >
           <div
-            className="w-full max-w-lg max-h-[86vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e8f5ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
+            className="w-full max-w-2xl max-h-[88vh] flex flex-col rounded-[22px] sm:rounded-[24px] bg-gradient-to-br from-white to-[#e6f4ff] border-2 border-[#a9ddff] shadow-2xl text-[#09265f] overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
-              <div>
-                <h3 className="text-base font-black text-[#09265f]">
-                  ความหมายสีลูกแก้วในผัง Matrix ({MATRIX_ORB_LEGEND_ITEMS.length} ประเภท)
-                </h3>
-                <p className="text-[11px] font-semibold text-[#45668f] mt-0.5">
-                  ใช้แยกสถานะของแต่ละรหัสและสายเลือดบนโครงสร้าง Matrix
-                </p>
+            {/* Modal Header */}
+            <div className="p-3 sm:p-5 pb-2.5 border-b border-[#b8e5ff] bg-white/90 space-y-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="text-sm sm:text-lg font-black text-[#09265f]">
+                    📚 ชั้น (0–15) & 🎨 สีลูกแก้วในผัง Matrix
+                  </h3>
+                  <p className="text-[10.5px] sm:text-[11px] font-semibold text-[#45668f] mt-0.5 tabular-nums">
+                    กำลังดู: {selectedLayer === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${selectedLayer}`} · พบจริง {currentLayerEntries.length} รหัส · รวมทั้งสาย {totalSubtreeCount} รหัส
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsUnifiedControlModalOpen(false)}
+                  className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
+                  aria-label="ปิดหน้าต่าง"
+                >
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsLegendModalOpen(false)}
-                className="p-1.5 rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
-                aria-label="ปิดหน้าต่างคำอธิบายสี"
-              >
-                <X className="w-4 h-4" />
-              </button>
+
+              {/* Tab Switcher inside Single Modal */}
+              <div className="grid grid-cols-3 gap-1.5 p-1 rounded-xl bg-[#e3f2ff] border border-[#b8e5ff]">
+                {(
+                  [
+                    { key: 'all', label: 'ทั้งหมด' },
+                    { key: 'layers', label: 'เลือกชั้น (16)' },
+                    { key: 'legend', label: `สีลูกแก้ว (${MATRIX_ORB_LEGEND_ITEMS.length})` },
+                  ] as const
+                ).map((tab) => {
+                  const active = unifiedModalTab === tab.key;
+                  return (
+                    <button
+                      key={`unified-tab-${tab.key}`}
+                      type="button"
+                      onClick={() => setUnifiedModalTab(tab.key)}
+                      className={`min-h-[38px] px-2 py-1.5 rounded-lg text-[11px] sm:text-xs font-extrabold cursor-pointer transition ${
+                        active
+                          ? 'bg-gradient-to-b from-[#2ca4ff] to-[#087cf4] text-white shadow-xs'
+                          : 'text-[#0754b9] hover:bg-white/70'
+                      }`}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {MATRIX_ORB_LEGEND_ITEMS.map((item) => (
-                <div
-                  key={`legend-modal-${item.key}`}
-                  className="p-2.5 rounded-xl bg-white border border-[#cde7ff] flex items-start gap-2.5"
-                >
-                  <i
-                    className={`inline-block w-6 h-6 rounded-full shrink-0 mt-0.5 ${item.orbClass}`}
-                    aria-hidden="true"
-                  />
-                  <div className="min-w-0">
-                    <div className="text-xs font-extrabold text-[#09265f] leading-snug">
-                      {item.label}
+            {/* Scrollable Body */}
+            <div className="p-3 sm:p-5 overflow-y-auto space-y-4 flex-1">
+              {(unifiedModalTab === 'all' || unifiedModalTab === 'layers') && (
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <h4 className="text-xs sm:text-sm font-black text-[#09265f]">
+                        เลือกดูชั้นเริ่มต้น–15 (Root → ชั้น 15)
+                      </h4>
+                      <small className="text-[10.5px] font-semibold text-[#5a78a1]">
+                        แตะชั้นที่ต้องการเพื่อสลับรายละเอียดทันที
+                      </small>
                     </div>
-                    <p className="text-[11px] text-[#4f7097] leading-snug mt-0.5">
-                      {item.desc}
-                    </p>
+                    {currentLayerEntries.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsUnifiedControlModalOpen(false);
+                          setPopupTypeFilter('ALL');
+                          setPopupSearch('');
+                          setLayerPopupModal(selectedLayer);
+                        }}
+                        className="min-h-[36px] px-3 py-1 rounded-full bg-[#087cf4] hover:bg-[#0568d0] text-white text-[11px] font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        <span>ดูรายชื่อ{selectedLayer === 0 ? 'ชั้นเริ่มต้น' : `ชั้น ${selectedLayer}`}</span>
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {Array.from({ length: 16 }, (_, idx) => idx).map((n) => renderLayerCard(n, 'modal'))}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {(unifiedModalTab === 'all' || unifiedModalTab === 'legend') && (
+                <div className={`space-y-2.5 ${unifiedModalTab === 'all' ? 'pt-3 border-t border-[#cbe6ff]' : ''}`}>
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-[#09265f]">
+                      ความหมายสีลูกแก้ว ({MATRIX_ORB_LEGEND_ITEMS.length} ประเภท)
+                    </h4>
+                    <small className="text-[10.5px] font-semibold text-[#5a78a1]">
+                      ใช้แยกสถานะของแต่ละรหัสและสายเลือดบนโครงสร้าง Matrix
+                    </small>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {MATRIX_ORB_LEGEND_ITEMS.map((item) => (
+                      <div
+                        key={`legend-modal-${item.key}`}
+                        className="p-2.5 rounded-xl bg-white border border-[#cde7ff] flex items-start gap-2.5"
+                      >
+                        <i
+                          className={`inline-block w-6 h-6 rounded-full shrink-0 mt-0.5 ${item.orbClass}`}
+                          aria-hidden="true"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-extrabold text-[#09265f] leading-snug">
+                            {item.label}
+                          </div>
+                          <p className="text-[11px] text-[#4f7097] leading-snug mt-0.5">
+                            {item.desc}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
-            <button
-              type="button"
-              onClick={() => setIsLegendModalOpen(false)}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-[#22caff] to-[#0758d4] text-white text-xs font-bold cursor-pointer hover:brightness-105"
-            >
-              ปิดหน้าต่าง
-            </button>
+            {/* Footer */}
+            <div className="p-3 sm:px-5 sm:py-3.5 border-t border-[#b8e5ff] bg-white/90">
+              <button
+                type="button"
+                onClick={() => setIsUnifiedControlModalOpen(false)}
+                className="w-full min-h-[44px] py-2.5 rounded-xl bg-gradient-to-r from-[#22caff] to-[#0758d4] text-white text-xs font-extrabold cursor-pointer hover:brightness-105"
+              >
+                ปิดหน้าต่าง
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3322,15 +3414,15 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
       {/* SEARCH POPUP MODAL (MAIN / CLONE / EXTRA / AUTO / MATRIX NODES) */}
       {isSearchModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60"
+          className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-slate-900/60"
           onClick={() => setIsSearchModalOpen(false)}
         >
           <div
-            className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl text-[#09265f] overflow-hidden"
+            className="w-full max-w-3xl max-h-[88vh] flex flex-col rounded-[22px] sm:rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl text-[#09265f] overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Sticky Header + Input */}
-            <div className="p-4 sm:p-5 border-b border-[#b8e5ff] space-y-3 bg-white/95">
+            <div className="p-3 sm:p-5 border-b border-[#b8e5ff] space-y-2.5 sm:space-y-3 bg-white/95">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-[#09265f]">
@@ -3881,49 +3973,6 @@ export const Dashboard2MatrixPanel: React.FC<Dashboard2MatrixPanelProps> = ({
         </div>
       )}
 
-      {/* POPUP MODAL: LAYER SELECTOR (ROOT -> 15) */}
-      {isLayerSelectorModalOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs"
-          onClick={() => setIsLayerSelectorModalOpen(false)}
-        >
-          <div
-            className="w-full max-w-2xl max-h-[88vh] overflow-y-auto rounded-[24px] bg-gradient-to-br from-white to-[#e3f4ff] border-2 border-[#a9ddff] shadow-2xl p-4 sm:p-5 text-[#09265f] space-y-3"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-2 border-b border-[#b8e5ff] pb-2.5">
-              <div>
-                <h3 className="text-base sm:text-lg font-black text-[#09265f]">
-                  📚 เลือกดูชั้นเริ่มต้น–15 (Root → ชั้น 15)
-                </h3>
-                <p className="text-[11px] font-semibold text-[#45668f] mt-0.5 tabular-nums">
-                  กำลังเลือก: {selectedLayer === 0 ? 'ชั้นเริ่มต้น (Root)' : `ชั้นที่ ${selectedLayer}`} · พบสมาชิกในสายงานรวม {totalSubtreeCount} รหัส · แตะชั้นที่ต้องการ
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsLayerSelectorModalOpen(false)}
-                className="min-w-[40px] min-h-[40px] flex items-center justify-center rounded-xl bg-white hover:bg-blue-50 border border-[#b8e5ff] text-[#0756bc] cursor-pointer shrink-0"
-                aria-label="ปิดหน้าต่าง"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-              {Array.from({ length: 16 }, (_, idx) => idx).map((n) => renderLayerCard(n, 'modal'))}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setIsLayerSelectorModalOpen(false)}
-              className="w-full min-h-[44px] rounded-xl bg-white hover:bg-blue-50 border border-[#9fd4ff] text-[#0756bc] font-bold text-xs cursor-pointer"
-            >
-              ปิดหน้าต่าง
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
