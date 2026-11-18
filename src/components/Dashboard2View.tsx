@@ -3240,6 +3240,109 @@ export const Dashboard2View: React.FC<Dashboard2ViewProps> = ({
               </div>
             </div>
 
+            {/* 3 Vault Pools Breakdown (อัพ Rank Pool / Auto ID Pool / Extra ID Pool) */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2 px-0.5 flex-wrap">
+                <span className="text-[11px] font-black text-[#09265f] flex items-center gap-1.5">
+                  <span>🏦 ยอดถังสะสม 35% Vault คงเหลือ (ID #{displayId})</span>
+                </span>
+                <span className="text-[11px] font-mono font-black text-[#0754b9]">
+                  รวมคงเหลือ {vaultPools.totalRemaining.toFixed(2)} U
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => openVaultModal('upgrade')}
+                  className="p-2.5 rounded-xl text-left bg-gradient-to-br from-[#f4fcff] to-[#d9eeff] border border-[#9fd4ff] hover:brightness-[0.99] transition cursor-pointer flex flex-col justify-between gap-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2 w-full">
+                    <div>
+                      <div className="text-[11px] font-black text-[#09265f]">
+                        🚀 อัพ Rank Pool
+                      </div>
+                      <div className="text-[10px] font-semibold text-[#3f6493]">
+                        {currentRank >= 18
+                          ? 'ถึง Rank สูงสุด (R18)'
+                          : `เป้า R${nextRank}: ${nextRankPrice} U`}
+                      </div>
+                    </div>
+                    <div className="text-right font-mono shrink-0">
+                      <strong className="text-sm font-black text-[#0754b9] block">
+                        {vaultPools.upgradeRankPool.toFixed(2)} U
+                      </strong>
+                      <span className="text-[9.5px] font-bold text-rose-600 block">
+                        ใช้ไป {vaultPools.upgradesDeductedUsdt.toFixed(2)} U
+                      </span>
+                    </div>
+                  </div>
+                  <SvgProgressBar percent={upgradePoolPct} variant="sky" heightClass="h-1.5" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openVaultModal('auto_id')}
+                  className="p-2.5 rounded-xl text-left bg-gradient-to-br from-[#ecfff5] to-[#ccf7e2] border border-[#92e6bf] hover:brightness-[0.99] transition cursor-pointer flex flex-col justify-between gap-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2 w-full">
+                    <div>
+                      <div className="text-[11px] font-black text-[#064e3b]">
+                        👤 Auto ID Pool
+                      </div>
+                      <div className="text-[10px] font-semibold text-[#0f6b47]">
+                        สร้างแล้ว {totalAutoIds} รหัส (ครบ 5 U/ใบ)
+                      </div>
+                    </div>
+                    <div className="text-right font-mono shrink-0">
+                      <strong className="text-sm font-black text-emerald-700 block">
+                        {vaultPools.newAutoIdPool.toFixed(2)} U
+                      </strong>
+                      <span className="text-[9.5px] font-bold text-[#0f6b47] block">
+                        ใช้ไป {vaultPools.autoIdsDeductedUsdt.toFixed(2)} U
+                      </span>
+                    </div>
+                  </div>
+                  <SvgProgressBar
+                    percent={autoPoolPct}
+                    variant="emerald"
+                    heightClass="h-1.5"
+                    trackClass="bg-[#a7e6c9]"
+                  />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openVaultModal('extra_id')}
+                  className="p-2.5 rounded-xl text-left bg-gradient-to-br from-[#faf5ff] to-[#e8d9ff] border border-[#cbaef9] hover:brightness-[0.99] transition cursor-pointer flex flex-col justify-between gap-1.5"
+                >
+                  <div className="flex items-start justify-between gap-2 w-full">
+                    <div>
+                      <div className="text-[11px] font-black text-[#4c1d95]">
+                        ✦ Extra ID Pool
+                      </div>
+                      <div className="text-[10px] font-semibold text-[#5b21b6]">
+                        สร้างแล้ว {totalExtraIds} รหัส (รวม {vaultPools.newExtraIdPoolGross.toFixed(2)} U)
+                      </div>
+                    </div>
+                    <div className="text-right font-mono shrink-0">
+                      <strong className="text-sm font-black text-violet-800 block">
+                        {vaultPools.newExtraIdPool.toFixed(2)} U
+                      </strong>
+                      <span className="text-[9.5px] font-bold text-[#5b21b6] block">
+                        ใช้ไป {vaultPools.extraIdsDeductedUsdt.toFixed(2)} U
+                      </span>
+                    </div>
+                  </div>
+                  <SvgProgressBar
+                    percent={extraPoolPct}
+                    variant="purple"
+                    heightClass="h-1.5"
+                    trackClass="bg-[#ccb3f7]"
+                  />
+                </button>
+              </div>
+            </div>
+
             {/* Category Filter Chips */}
             <div className="flex items-center gap-1.5 flex-wrap">
               {(
